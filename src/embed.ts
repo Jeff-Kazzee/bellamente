@@ -64,10 +64,9 @@ async function getLocalPipe() {
   if (!pipePromise) {
     pipePromise = (async () => {
       const { pipeline, env } = await import("@huggingface/transformers");
-      const { homedir } = await import("node:os");
-      const { join } = await import("node:path");
-      // Explicit, writable model cache dir (the default resolves wrong inside a compiled binary).
-      env.cacheDir = process.env.EUNOIA_MODEL_DIR ?? join(homedir(), ".eunoia", "models");
+      const { modelsDir } = await import("./paths");
+      // Safe, writable model cache under the per-user app-data dir (see src/paths.ts).
+      env.cacheDir = process.env.EUNOIA_MODEL_DIR ?? modelsDir();
       return (await pipeline("feature-extraction", LOCAL_MODEL, { dtype: LOCAL_DTYPE })) as any;
     })();
   }
