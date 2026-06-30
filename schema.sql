@@ -105,5 +105,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_entry_embedding_hnsw
 CREATE INDEX IF NOT EXISTS idx_chunk_embedding_hnsw
   ON chunk USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_chunk_document ON chunk (document_id);
+-- full-text leg for hybrid search; 'simple' = language-neutral (multilingual default)
 CREATE INDEX IF NOT EXISTS idx_chunk_content
-  ON chunk USING gin (to_tsvector('english', content));
+  ON chunk USING gin (to_tsvector('simple', content));
