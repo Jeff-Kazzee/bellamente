@@ -1,27 +1,46 @@
 // embed.ts - the single embedding singleton (Spec 02).
-// Default provider = "local": Qwen3-Embedding-0.6B via transformers.js (in-process, no server,
-// no cloud). Instruction-aware + Matryoshka, truncated to EMBED_DIM (768) so the schema is
-// unchanged. Provider "openai" remains as a dev fallback.
+// Default = local, in-process (no cloud/server): bge-base-en-v1.5 (MIT, 768-d). Chosen by A/B
+// (`bun run bench`): ties Qwen3-0.6B on English retrieval at ~7x the speed / ~5.5x smaller.
+// Per-model profiles (pooling + prompt) keep us model-agnostic; Qwen3 stays a one-line opt-in.
 export type TaskType = "QUESTION_ANSWERING" | "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
 export const EMBED_DIM = Number(process.env.EMBED_DIM ?? 768);
 const MAX_PAYLOAD_CHARS = 36000;
 
 const PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
-const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? "onnx-community/Qwen3-Embedding-0.6B-ONNX";
-const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8";
-// Qwen3 retrieval instruction (queries only). Documents are embedded raw.
-const QUERY_INSTRUCTION =
-  process.env.EMBED_QUERY_INSTRUCTION ??
-  "Given a search query, retrieve relevant memories and passages that answer the query";
+const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? "Xenova/bge-base-en-v1.5";
+const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
 
 export type Embed = (args: { values: string[]; taskType: TaskType }) => Promise<number[][]>;
 
-export function embedModelName(): string {
-  return PROVIDER === "openai"
-    ? (process.env.OPENAI_EMBED_MODEL ?? "text-embedding-3-small")
-    : LOCAL_MODEL;
-}
+// --- per-model profiles (pooling + query/doc prompt formatting) ------------
+type Pooling = "last_token" | "mean" | "cls";
+type ModelProfile = { pooling: Pooling; query: (t: string) => string; doc: (t: string) => string };
+const raw = (t: string) => t;
+const bge: ModelProfile = {
+  pooling: "cls",
+  query: (t) => `Represent this sentence for searching relevant passages: ${t}`,
+  doc: raw,
+};
+const PROFILES: Record<string, ModelProfile> = {
+  "Xenova/bge-base-en-v1.5": bge,
+  "Xenova/bge-small-en-v1.5": bge,
+  "onnx-community/Qwen3-Embedding-0.6B-ONNX": {
+    pooling: "last_token",
+    query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`,
+    doc: raw,
+  },
+  "onnx-community/Qwen3-Embedding-4B-ONNX": {
+    pooling: "last_token",
+    query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`,
+    doc: raw,
+  },
+};
+// Sensible generic fallback for any other transformers.js model.
+const profile: ModelProfile = PROFILES[LOCAL_MODEL] ?? { pooling: "mean", query: raw, doc: raw };
 
+export function embedModelName(): string {
+  return PROVIDER === "openai" ? (process.env.OPENAI_EMBED_MODEL ?? "text-embedding-3-small") : LOCAL_MODEL;
+}
 export function isValidVector(v: number[]): boolean {
   return v.length === EMBED_DIM && v.every((x) => Number.isFinite(x));
 }
@@ -32,23 +51,17 @@ function truncatePayload(values: string[]): string[] {
   const per = Math.floor(MAX_PAYLOAD_CHARS / 2 / Math.max(values.length, 1));
   return values.map((v) => (v.length > per ? v.slice(0, per) : v));
 }
-
-// Qwen3 query format. Documents get no instruction (improves asymmetric retrieval).
 function formatForTask(text: string, taskType: TaskType): string {
-  if (taskType === "RETRIEVAL_DOCUMENT") return text;
-  return `Instruct: ${QUERY_INSTRUCTION}\nQuery:${text}`;
+  return taskType === "RETRIEVAL_DOCUMENT" ? profile.doc(text) : profile.query(text);
 }
-
-// Matryoshka: slice to dim, then L2-normalize.
 function mrl(vec: number[], dim: number): number[] {
-  const slice = vec.length > dim ? vec.slice(0, dim) : vec;
+  const s = vec.length > dim ? vec.slice(0, dim) : vec; // Matryoshka truncation (no-op if native==dim)
   let n = 0;
-  for (const x of slice) n += x * x;
+  for (const x of s) n += x * x;
   n = Math.sqrt(n) || 1;
-  return slice.map((x) => x / n);
+  return s.map((x) => x / n);
 }
 
-// Lazy, cached transformers.js pipeline (prewarmed at boot).
 let pipePromise: Promise<(input: string[], opts: any) => Promise<{ tolist: () => number[][] }>> | null = null;
 async function getLocalPipe() {
   if (!pipePromise) {
@@ -66,11 +79,7 @@ async function embedOpenAI(input: string[]): Promise<number[][]> {
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: process.env.OPENAI_EMBED_MODEL ?? "text-embedding-3-small",
-      input,
-      dimensions: EMBED_DIM,
-    }),
+    body: JSON.stringify({ model: process.env.OPENAI_EMBED_MODEL ?? "text-embedding-3-small", input, dimensions: EMBED_DIM }),
   });
   if (!res.ok) throw new Error(`OpenAI embeddings HTTP ${res.status}: ${await res.text()}`);
   const json = (await res.json()) as { data: { index: number; embedding: number[] }[] };
@@ -79,7 +88,7 @@ async function embedOpenAI(input: string[]): Promise<number[][]> {
 
 async function embedLocal(input: string[]): Promise<number[][]> {
   const pipe = await getLocalPipe();
-  const out = await pipe(input, { pooling: "last_token", normalize: false });
+  const out = await pipe(input, { pooling: profile.pooling, normalize: false });
   return out.tolist().map((v) => mrl(v, EMBED_DIM));
 }
 
@@ -90,14 +99,13 @@ export function makeEmbed(): Embed {
   };
 }
 
-// Prewarm the local model at boot (Spec 02). No-op for openai / when skipped.
 export async function prewarmEmbed(embed: Embed): Promise<void> {
   if (PROVIDER === "openai") return;
   if (process.env.MINIMEM_SKIP_EMBEDDING_PREWARM === "1" || process.env.MINIMEM_SKIP_EMBEDDING_PREWARM === "true") {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }
-  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, dim=${EMBED_DIM})...`);
+  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, pooling=${profile.pooling}, dim=${EMBED_DIM})...`);
   const t = Date.now();
   await embed({ values: ["warmup"], taskType: "RETRIEVAL_DOCUMENT" });
   console.log(`[embeddings] ready in ${Date.now() - t}ms`);

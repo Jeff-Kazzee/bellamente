@@ -9,60 +9,52 @@ The single embed() used by writes, ingestion, and search.
 - EMBED_DIM = 768 (port of kd0())
 
 ## Rules (verbatim from source)
-- Query side: QUESTION_ANSWERING (v4) / RETRIEVAL_QUERY (v3).
-- Document/memory side: RETRIEVAL_DOCUMENT.
+- Query side: QUESTION_ANSWERING (v4) / RETRIEVAL_QUERY (v3). Document side: RETRIEVAL_DOCUMENT.
 - Truncate input when len*2 > 36000 chars -> cut to 36000/2.
 - Validate every vector: length === EMBED_DIM AND all finite; skip otherwise (matches $V2).
 - Prewarm at boot unless MINIMEM_SKIP_EMBEDDING_PREWARM=1 (verbatim env behavior).
 
-## Default provider: local, in-process (no cloud, no server)
-Model: Qwen3-Embedding-0.6B via transformers.js (@huggingface/transformers v4),
-ONNX build onnx-community/Qwen3-Embedding-0.6B-ONNX.
+## Default model (chosen by A/B, `bun run bench`)
+bge-base-en-v1.5 (Xenova/bge-base-en-v1.5) via transformers.js (ONNX), in-process.
+- MIT licensed, 109M params, 768-d native (no truncation), CLS pooling.
+- This is also the model the original Supermemory shipped (mP0 = "Xenova/bge-base-en-v1.5"),
+  but it was selected here on merit, not fidelity - it WON the head-to-head.
 
-Why this model (selected June 2026, replaces the earlier EmbeddingGemma idea):
-- Small sibling of the current #1 MTEB family (Qwen3-Embedding 8B).
-- Instruction-aware -> maps cleanly to our taskType.
-- Matryoshka (MRL) supports any dim 32..1024 -> we truncate to 768, so schema is unchanged.
-- ONNX + transformers.js -> runs in the Bun process; no Ollama/no server.
+A/B results (14 memories, 12 English queries, q8, CPU):
+| Model | params | dim | ctx | license | Recall@1 | Recall@3 | MRR | ms/embed |
+|-------|--------|-----|-----|---------|----------|----------|-----|----------|
+| bge-base-en-v1.5 (DEFAULT) | 109M | 768 | 512 | MIT | 83.3% | 91.7% | 0.889 | 15 |
+| Qwen3-Embedding-0.6B | 600M | 768 | 32K | Apache-2.0 | 83.3% | 91.7% | 0.896 | 105 |
+| bge-small-en-v1.5 | 33M | 384 | 512 | MIT | 83.3% | 83.3% | 0.861 | 6 |
+bge-base ties Qwen3 on quality at ~7x the speed / ~5.5x smaller -> best quality-per-resource.
 
-Mechanics (verified working under Bun + onnxruntime-node):
-- pipeline("feature-extraction", LOCAL_EMBED_MODEL, { dtype }) ; dtype in fp32|fp16|q8 (default q8).
-- pooling: "last_token", normalize: false (we do MRL truncate + L2-normalize ourselves).
-- Query format (Qwen3): `Instruct: ${EMBED_QUERY_INSTRUCTION}\nQuery:${text}`.
-- Document format: raw text (asymmetric retrieval).
-- MRL: slice vector to EMBED_DIM, then L2-normalize.
-- First run downloads the model (~600MB at q8) to the HF cache; prewarmed at boot.
+## Per-model profiles (src/embed.ts)
+Each model needs its own pooling + prompt format; PROFILES maps model id -> { pooling, query, doc }:
+- bge-*: pooling "cls"; query prefix "Represent this sentence for searching relevant passages: "; doc raw.
+- Qwen3: pooling "last_token"; query "Instruct: ...\nQuery:{t}"; doc raw.
+- fallback: pooling "mean", raw prompts.
+taskType RETRIEVAL_DOCUMENT -> doc(); QUESTION_ANSWERING/RETRIEVAL_QUERY -> query().
+Matryoshka: slice to EMBED_DIM then L2-normalize (no-op when native == EMBED_DIM).
 
-Verified: query "what color theme does John like" ranks "John prefers dark mode" (cos ~0.51)
-well above unrelated memories, which fall under the 0.4 threshold.
+## Opt-ins
+- Multilingual / 32K context (heavier ~5x): LOCAL_EMBED_MODEL=onnx-community/Qwen3-Embedding-0.6B-ONNX (keep EMBED_DIM=768).
+- Ultralight 33M / 384-d: LOCAL_EMBED_MODEL=Xenova/bge-small-en-v1.5 (set EMBED_DIM=384 + schema vector(384)).
+- Long-context Apache alt: nomic-embed-text-v1.5 (8192 ctx, 768-d, mean pooling, search_query/search_document
+  prefixes) - add a profile + a valid transformers.js ONNX repo id.
 
-## Swappable
-- LOCAL_EMBED_MODEL: any transformers.js feature-extraction model (e.g. nomic-embed-text-v2,
-  bge-m3, granite-embedding, or Qwen3-Embedding-4B for more quality). If a model is not MRL or
-  has a different native dim, set EMBED_DIM to match and update schema.sql vector(N).
-- LOCAL_EMBED_DTYPE: fp32 | fp16 | q8 (size/speed/quality trade-off).
+## Context length note
+512 tokens (~2000 chars) is ample for short + multi-sentence memories and 1075-char chunks. It is
+NOT a memory cap - it is max text per embedding call. Only embedding long passages un-chunked or
+multilingual needs Qwen3's 32K.
 
 ## Dev fallback provider: openai
-EMBEDDING_PROVIDER=openai -> text-embedding-3-small with dimensions:768 (taskType ignored).
-Requires OPENAI_API_KEY. Only for quick cloud-based dev; not needed for normal operation.
+EMBEDDING_PROVIDER=openai -> text-embedding-3-small with dimensions:768. Requires OPENAI_API_KEY.
 
 ## M2 (single binary)
-Bundle the ONNX weights (or download-on-first-run to a data dir) so `bun build --compile`
-yields a binary that embeds locally with no network.
+Bundle the ONNX weights (or download-on-first-run to a data dir) so `bun build --compile` embeds
+locally with no network.
 
 ## Acceptance
 - embed() returns EMBED_DIM-length finite vectors for both task sides.
-- Relevant query/document pairs out-rank irrelevant ones.
-- Dim mismatch is rejected before insert.
-
-## Model size guidance (Qwen3-Embedding)
-| Model | Params | Native dim | q8 download | ~RAM | CPU speed | Use when |
-|-------|--------|-----------|-------------|------|-----------|----------|
-| Qwen3-Embedding-0.6B (DEFAULT) | 0.6B | 1024 | ~600MB | ~1-1.5GB | fast | in-process, single binary, low resources |
-| Qwen3-Embedding-4B | 4B | 2560 | ~4GB | ~4-6GB | slow (wants GPU) | max quality, have RAM/GPU |
-| Qwen3-Embedding-8B | 8B | 4096 | ~8GB | ~8-10GB | very slow on CPU | server-grade only |
-
-Recommendation: keep 0.6B as the default. The 4B is a ~7x jump in params/RAM for a few MTEB
-points and is slow on CPU - not worth it for an in-process single binary. All three are
-instruction-aware and MRL-truncate to EMBED_DIM=768, so switching is just LOCAL_EMBED_MODEL
-(no schema change). Use LOCAL_EMBED_DTYPE=q4 to roughly halve memory again at some quality cost.
+- Relevant query/document pairs out-rank irrelevant ones (verified: query->dark-mode 0.58 vs paris 0.31).
+- Dim mismatch rejected before insert.
