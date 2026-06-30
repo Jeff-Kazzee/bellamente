@@ -73,7 +73,11 @@ function makeLocalWorkerEmbed(): Embed {
     };
     w.onerror = (ev: ErrorEvent) => {
       if (w !== worker) return; // ignore late errors from a replaced worker
-      recycle(new Error("embed worker crashed: " + (ev?.message ?? "unknown")));
+      const msg = ev?.message ?? "unknown";
+      const hint = /memory|out of memory|abort|backend/i.test(msg)
+        ? " (the local embedding engine may be out of memory — close other apps to free RAM, or tune EUNOIA_EMBED_WASM_MAX_MB; it stays fully local)"
+        : "";
+      recycle(new Error("embed worker crashed: " + msg + hint));
     };
     worker = w;
     return w;
@@ -106,6 +110,17 @@ export async function prewarmEmbed(embed: Embed): Promise<void> {
   }
   console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, pooling=${profile.pooling}, dim=${EMBED_DIM}) in worker...`);
   const t = Date.now();
-  await embed({ values: ["warmup"], taskType: "RETRIEVAL_DOCUMENT" });
-  console.log(`[embeddings] ready in ${Date.now() - t}ms`);
+  // Non-fatal: a transient init failure (e.g. low memory) must not crash boot. The server still starts
+  // so /health + `eunoia doctor` work and the user sees actionable guidance; the embedder self-heals on
+  // the next request (the session promise is cleared on rejection). It never falls back to the cloud.
+  try {
+    await embed({ values: ["warmup"], taskType: "RETRIEVAL_DOCUMENT" });
+    console.log(`[embeddings] ready in ${Date.now() - t}ms`);
+  } catch (e: any) {
+    console.warn(
+      "[embeddings] WARNING: local embedding engine did not start; the server will run but writing " +
+        "and searching memories will fail until this is resolved (it retries on the next request). " +
+        "Run `eunoia doctor` for details. Cause: " + String(e?.message ?? e),
+    );
+  }
 }

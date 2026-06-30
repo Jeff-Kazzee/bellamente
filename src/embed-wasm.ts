@@ -6,7 +6,7 @@
 import * as ort from "onnxruntime-web";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { statSync, renameSync, rmSync } from "node:fs";
+import { statSync, renameSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, ONNX_FILE, onnxRelPath, profile, formatForTask, truncatePayload, mrl, type TaskType } from "./embed-common";
 import wasmFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm" with { type: "file" };
 import glueFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs" with { type: "file" };
@@ -19,6 +19,43 @@ if (!MODEL_RE.test(LOCAL_MODEL)) {
 }
 
 const MODEL_DOWNLOAD_TIMEOUT_MS = Number(process.env.EUNOIA_MODEL_DOWNLOAD_TIMEOUT_MS ?? 300_000);
+
+// The threaded emscripten glue creates a SHARED WebAssembly.Memory with `maximum: 65536` pages (4 GB).
+// A *shared* memory pre-reserves its entire maximum up front (it can't be remapped on growth), so on a
+// machine with little free RAM that init fails with "out of memory". We force numThreads=1 (no extra
+// threads are spawned), so the 4 GB ceiling is unnecessary. We lower it to EUNOIA_EMBED_WASM_MAX_MB
+// (default 512 MB) when extracting the glue. The module's memory import only requires {min: 256 pages,
+// max <= 65536}, so any cap in [256 pages, 65536] is a valid import. 1 wasm page = 64 KiB. Raise the env
+// only if you run a larger opt-in model and have the RAM. Everything stays 100% local — no cloud.
+const WASM_MAX_MB = Number(process.env.EUNOIA_EMBED_WASM_MAX_MB ?? 512);
+const WASM_MAX_PAGES = Math.min(65536, Math.max(256, Math.ceil((WASM_MAX_MB * 1024 * 1024) / 65536)));
+let gluePatchWarned = false;
+function patchGlueMemory(src: string): string {
+  // Target only the main heap allocation ({initial:256,maximum:65536}); leave the {initial:0,maximum:0}
+  // SharedArrayBuffer polyfill untouched.
+  const out = src.replace(
+    /(new WebAssembly\.Memory\(\{initial:256,maximum:)65536(,shared:!0\}\))/,
+    `$1${WASM_MAX_PAGES}$2`,
+  );
+  if (out === src && !gluePatchWarned) {
+    gluePatchWarned = true;
+    console.warn("[embed] could not lower the WASM memory ceiling (glue format changed); the 4 GB default may OOM on low-RAM machines");
+  }
+  return out;
+}
+
+// A low-memory failure during WASM init/inference surfaces as an opaque RangeError / "no available
+// backend" / emscripten abort. Turn it into a clear, actionable, fully-local message (never suggest cloud).
+const LOW_MEM_RE = /out of memory|no available backend|cannot enlarge memory|memory access out of bounds|rangeerror|\babort\b/i;
+function asLowMemError(cause: unknown): Error | null {
+  if (!LOW_MEM_RE.test(String((cause as any)?.message ?? cause))) return null;
+  return new Error(
+    "local embedding engine failed to initialize — most likely not enough free memory. It runs " +
+      `fully on your machine (no cloud) and reserves up to ${WASM_MAX_MB} MB of RAM ` +
+      "(set EUNOIA_EMBED_WASM_MAX_MB to tune). Close other apps to free memory and retry. " +
+      `(cause: ${String((cause as any)?.message ?? cause)})`,
+  );
+}
 
 let sessionP: Promise<ort.InferenceSession> | null = null;
 let tokP: Promise<any> | null = null;
@@ -79,22 +116,31 @@ function getSession(): Promise<ort.InferenceSession> {
   sessionP = memo(async () => {
     const { runtimeDir } = await import("./paths");
     const dir = runtimeDir();
-    for (const [name, src] of [
-      ["ort-wasm-simd-threaded.wasm", wasmFile],
-      ["ort-wasm-simd-threaded.mjs", glueFile],
-    ] as const) {
-      const d = join(dir, name);
+    // The wasm binary is large + unmodified — skip the rewrite if it's already the right size.
+    {
+      const d = join(dir, "ort-wasm-simd-threaded.wasm");
       let have = false;
-      try {
-        have = statSync(d).size === (await Bun.file(src).size);
-      } catch {}
-      if (!have) await Bun.write(d, Bun.file(src));
+      try { have = statSync(d).size === (await Bun.file(wasmFile).size); } catch {}
+      if (!have) await Bun.write(d, Bun.file(wasmFile));
+    }
+    // The glue is small + patched (memory ceiling). Rewrite whenever the on-disk copy doesn't match the
+    // patched text (e.g. first run, or EUNOIA_EMBED_WASM_MAX_MB changed since last boot).
+    {
+      const d = join(dir, "ort-wasm-simd-threaded.mjs");
+      const patched = patchGlueMemory(await Bun.file(glueFile).text());
+      let cur: string | null = null;
+      try { cur = readFileSync(d, "utf8"); } catch {}
+      if (cur !== patched) writeFileSync(d, patched);
     }
     ort.env.wasm.numThreads = 1; // MUST be 1 — multi-thread WASM hangs in Bun (Atomics.wait on main thread)
     ort.env.wasm.proxy = false;
     ort.env.wasm.wasmPaths = pathToFileURL(dir).href + "/";
     const modelPath = await ensureModelFile();
-    return ort.InferenceSession.create(modelPath, { executionProviders: ["wasm"] });
+    try {
+      return await ort.InferenceSession.create(modelPath, { executionProviders: ["wasm"] });
+    } catch (e) {
+      throw asLowMemError(e) ?? e;
+    }
   }, "session");
   return sessionP;
 }
@@ -150,7 +196,12 @@ export async function embedWasm(values: string[], taskType: TaskType): Promise<n
     feeds.token_type_ids = new ort.Tensor("int64", new BigInt64Array(N! * L!), [N!, L!]);
   }
 
-  const out: any = await session.run(feeds);
+  let out: any;
+  try {
+    out = await session.run(feeds);
+  } catch (e) {
+    throw asLowMemError(e) ?? e;
+  }
   const lhs = out[session.outputNames[0]!];
   if (lhs.type !== "float32") {
     throw new Error(`unexpected model output dtype '${lhs.type}'; only float32 last_hidden_state is supported`);
