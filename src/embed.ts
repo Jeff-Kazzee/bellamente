@@ -47,12 +47,13 @@ function makeLocalWorkerEmbed(): Embed {
 
   const ensureWorker = (): Worker => {
     if (worker) return worker;
-    // The worker is bundled as a separate entrypoint (see build.ts). In a --compile binary it is
-    // emitted as embed-worker.js next to the entry; in dev (`bun run`) the real file is .ts. Reference
-    // the right extension per environment (Bun does not map .ts->.js for absolute /$bunfs paths).
-    const compiled = !!(globalThis as any).Bun?.embeddedFiles?.length;
-    const workerUrl = new URL(compiled ? "./embed-worker.js" : "./embed-worker.ts", import.meta.url).href;
-    const w = new Worker(workerUrl, { type: "module" });
+    // The worker is a separate --compile entrypoint (build.ts). Reference form differs by environment
+    // (empirically verified Win+Linux compiled + dev; Bun #16869/#15981): a BARE source specifier in a
+    // standalone binary, a URL-relative specifier in dev. Detect standalone via import.meta.url.
+    const standalone = import.meta.url.includes("$bunfs") || /%7ebun|~bun/i.test(import.meta.url);
+    const w = standalone
+      ? new Worker("./embed-worker.ts", { type: "module" })
+      : new Worker(new URL("./embed-worker.ts", import.meta.url), { type: "module" });
     w.onmessage = (ev: MessageEvent<WorkerOut>) => {
       const m = ev.data;
       const p = pending.get(m.id);
