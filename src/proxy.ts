@@ -1,11 +1,13 @@
 // proxy.ts - OpenAI-compatible interceptor (Spec 06, port of Cs6).
+// M1: injects the tool + profile. Upstream forward + tool-call interception = M3 (TODO).
 import { Hono } from "hono";
-import type { Db } from "./db";
+import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { searchMemories, Q } from "./search";
-import { formatProfile, profileContextBlock, type Profile } from "./profile";
+import { formatProfile, profileContextBlock, loadProfile } from "./profile";
+import { DEFAULT_CONTAINER_TAG } from "./util";
 
-type Ctx = { db: Db; embed: Embed };
+type Ctx = { sql: DB; embed: Embed };
 
 export const SUPERMEMORY_TOOL_NAME = "supermemoryToolSearch";
 export const MIN_QUERIES_PER_CALL = 1;
@@ -34,26 +36,39 @@ export function toolDescription() {
   };
 }
 
+// Run up to MAX_QUERIES_PER_CALL searches, merge by id keep max similarity, cap MAX_COMBINED_RESULTS.
+export async function runToolSearch(ctx: Ctx, queries: string[]) {
+  const capped = queries.slice(0, MAX_QUERIES_PER_CALL);
+  const batches = await Promise.all(capped.map((q) => searchMemories(ctx, { q })));
+  const merged = new Map<string, { id: string; memory: string; similarity: number }>();
+  for (const batch of batches) {
+    for (const r of batch) {
+      const prev = merged.get(r.id);
+      if (!prev || r.similarity > prev.similarity) merged.set(r.id, r);
+    }
+  }
+  return Array.from(merged.values())
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, Q.MAX_COMBINED_RESULTS);
+}
+
 export function proxyRoutes(ctx: Ctx) {
   const app = new Hono();
 
   // POST /v1/chat/completions
   app.post("/chat/completions", async (c) => {
     const userId =
-      c.req.header("x-sm-user-id") ||
-      new URL(c.req.url).searchParams.get("userId") ||
-      undefined;
-    const body = await c.req.json();
+      c.req.header("x-sm-user-id") || new URL(c.req.url).searchParams.get("userId") || undefined;
+    const body = await c.req.json().catch(() => ({}));
 
     // 1. passthrough if request already carries tool_result content
-    const hasToolResults = (body.messages ?? []).some((m: any) =>
-      Array.isArray(m.content) && m.content.some((p: any) => p.type === "tool_result"),
+    const hasToolResults = (body.messages ?? []).some(
+      (m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === "tool_result"),
     );
     if (hasToolResults) {
       c.header("x-supermemory-tool-passthrough", "true");
       c.header("x-supermemory-context-modified", "false");
-      // TODO: forward upstream unmodified, return its response.
-      return c.json({ note: "passthrough (not wired)" });
+      return c.json({ note: "passthrough mode (upstream forward not wired - M3)" });
     }
 
     // 2. inject tool
@@ -62,18 +77,18 @@ export function proxyRoutes(ctx: Ctx) {
       body.tools.unshift(toolDescription());
     }
 
-    // 3. inject profile (TODO load real profile for userId)
-    const profile: Profile = { static: [], dynamic: [] };
+    // 3. inject profile
+    const profile = await loadProfile(ctx.sql, DEFAULT_CONTAINER_TAG);
     const block = profileContextBlock(formatProfile(profile));
     if (typeof body.system === "string") body.system += block;
     else if (body.system && typeof body.system === "object" && "content" in body.system)
       body.system.content += block;
     else body.system = block.trim();
 
-    // 4. forward upstream; 5. intercept tool_calls; 6. run search; 7. re-invoke. (TODO)
-    void userId; void ctx; void searchMemories; void Q;
+    // 4-7. forward upstream, intercept tool_calls, runToolSearch, re-invoke. TODO (M3).
+    void userId;
     c.header("x-supermemory-tool-intercept", SUPERMEMORY_TOOL_NAME);
-    return c.json({ note: "proxy core not wired - tool injected, upstream forward is TODO" });
+    return c.json({ note: "proxy core not wired (M3): tool + profile injected; upstream forward TODO" });
   });
 
   return app;

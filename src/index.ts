@@ -12,30 +12,31 @@ const PORT = Number(process.env.PORT ?? 8080);
 
 async function main() {
   // Boot sequence (Spec 00): db -> migrations -> embed prewarm -> cron -> listen.
-  const db = await makeDb();
+  const sql = await makeDb();
   const embed = makeEmbed();
-  const ctx = { db, embed };
+  const ctx = { sql, embed };
 
   const app = new Hono();
 
-  // bearer auth
+  // health is public; everything else requires the bearer key.
+  app.get("/health", (c) => c.json({ ok: true }));
+
   app.use("*", async (c, next) => {
+    if (c.req.path === "/health") return next();
     if (!API_KEY) return c.json({ error: "MINIMEM_API_KEY not configured" }, 500);
     const auth = c.req.header("authorization") ?? "";
-    if (auth !== `Bearer ${API_KEY}`) return c.json({ error: "Unauthorized" }, 401);
+    if (auth !== "Bearer " + API_KEY) return c.json({ error: "Unauthorized" }, 401);
     await next();
   });
 
-  app.get("/health", (c) => c.json({ ok: true }));
   app.route("/memories", memoriesRoutes(ctx));
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
   app.route("/v1", proxyRoutes(ctx));
 
-  console.log(`minimem listening on :${PORT}`);
+  console.log("minimem listening on :" + PORT);
   return { app, port: PORT };
 }
 
-// Bun: `export default { fetch }` style serve.
 const { app, port } = await main();
 export default { port, fetch: app.fetch };
