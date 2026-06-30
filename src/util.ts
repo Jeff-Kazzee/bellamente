@@ -12,5 +12,5 @@ export function newId(len = 22): string {
 // pgvector text literal: [a,b,c]  -> cast with ::vector in SQL.
 export const toVector = (a: number[]): string => "[" + a.join(",") + "]";
 
-export const ORG_ID = process.env.ORG_ID ?? "sm_default_org";
-export const DEFAULT_CONTAINER_TAG = process.env.DEFAULT_CONTAINER_TAG ?? "sm_project_default";
+export const ORG_ID = process.env.ORG_ID ?? "minimem_default_org";
+export const DEFAULT_CONTAINER_TAG = process.env.DEFAULT_CONTAINER_TAG ?? "default";

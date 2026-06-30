@@ -1,12 +1,12 @@
-// profile.ts - profile build + injection (Spec 07).
+// profile.ts - profile build + injection (Spec 07). Clean-room wording.
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { newId, ORG_ID, DEFAULT_CONTAINER_TAG } from "./util";
 
 type Ctx = { sql: DB; embed: Embed };
-const RECENT_MEMORIES_DISPLAY_LIMIT = 10;
-const BULLET = "  • ";
+const RECENT_DISPLAY_LIMIT = 10;
+const BULLET = "  - ";
 
 export type Profile = { static?: string[]; dynamic?: string[] };
 
@@ -14,23 +14,23 @@ export function formatProfile(p: Profile): string {
   const lines: string[] = [];
   for (const s of p.static ?? []) lines.push(BULLET + s);
   const dyn = p.dynamic ?? [];
-  for (const d of dyn.slice(0, RECENT_MEMORIES_DISPLAY_LIMIT)) lines.push(BULLET + d);
-  const extra = dyn.length - RECENT_MEMORIES_DISPLAY_LIMIT;
-  if (extra > 0) lines.push("...and " + extra + " more recent memories");
+  for (const d of dyn.slice(0, RECENT_DISPLAY_LIMIT)) lines.push(BULLET + d);
+  const extra = dyn.length - RECENT_DISPLAY_LIMIT;
+  if (extra > 0) lines.push(`(+${extra} more recent items)`);
   return lines.join("\n");
 }
 
-// Verbatim template - do not paraphrase.
+// Our own context block (functionally: inject known user facts into the system prompt).
 export function profileContextBlock(formatted: string): string {
   return [
     "",
     "",
-    "[ADDITIONAL CONTEXT - User Profile Information]",
-    "The following is background information about the user to help personalize your responses. This information has been automatically collected from their previous interactions and documents:",
+    "[User memory context]",
+    "Known facts about the current user, gathered from earlier sessions and saved documents. Use them to tailor your responses when they are relevant:",
     "",
     formatted,
     "",
-    "Note: This context is provided for personalization purposes. Use it naturally when relevant, but don't explicitly mention that you have access to this profile unless directly asked.",
+    "Treat this purely as background - weave it in naturally and do not call attention to having a stored profile unless the user asks about it.",
   ].join("\n");
 }
 

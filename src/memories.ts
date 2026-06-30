@@ -1,4 +1,4 @@
-// memories.ts - direct write path (Spec 03, port of $V2).
+// memories.ts - direct write path (Spec 03, clean-room port of the direct-create algorithm).
 import { Hono } from "hono";
 import type { DB } from "./db";
 import { type Embed, isValidVector, embedModelName } from "./embed";
@@ -31,12 +31,12 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
       RETURNING id`;
     const spaceId = space!.id as string;
 
-    // 2. embed contents as documents
+    // 2. embed contents
     const contents = memories.map((m) => String(m.content));
     const vectors = await embed({ values: contents, taskType: "RETRIEVAL_DOCUMENT" });
     const model = embedModelName();
 
-    // 3. build rows (skip invalid vectors, like $V2)
+    // 3. build rows (skip invalid vectors)
     const rows = memories.flatMap((m, i) => {
       const v = vectors[i];
       if (!v || !isValidVector(v)) return [];
@@ -54,7 +54,7 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
     });
     if (rows.length === 0) return c.json({ documentId: null, memories: [] }, 201);
 
-    // 4. one transaction: synthetic document + memory rows + source links
+    // 4. one transaction: grouping document + memory rows + source links
     const docId = newId();
     const joined = contents.join("\n\n");
     const title = "Direct memories (" + rows.length + ")";
@@ -63,7 +63,7 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
         INSERT INTO document (id, content, type, source, status, container_tags, title,
                               chunk_count, token_count, metadata, org_id)
         VALUES (${docId}, ${joined}, 'text', 'api', 'done', ${[containerTag]},
-                ${title}, 0, 0, ${tx.json({ sm_direct_memory: true })}, ${ORG_ID})`;
+                ${title}, 0, 0, ${tx.json({ mm_direct_memory: true })}, ${ORG_ID})`;
       await tx`
         INSERT INTO documents_to_spaces (document_id, space_id)
         VALUES (${docId}, ${spaceId}) ON CONFLICT DO NOTHING`;

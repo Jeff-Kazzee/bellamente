@@ -1,5 +1,5 @@
-// proxy.ts - OpenAI-compatible interceptor (Spec 06, port of Cs6).
-// M1: injects the tool + profile. Upstream forward + tool-call interception = M3 (TODO).
+// proxy.ts - OpenAI-compatible interceptor. Injects a memory-search tool + user context.
+// (Clean-room: our own tool name, header names, and wording.)
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
@@ -9,16 +9,16 @@ import { DEFAULT_CONTAINER_TAG } from "./util";
 
 type Ctx = { sql: DB; embed: Embed };
 
-export const SUPERMEMORY_TOOL_NAME = "supermemoryToolSearch";
+export const MEMORY_TOOL_NAME = "searchMemory";
 export const MIN_QUERIES_PER_CALL = 1;
 export const MAX_QUERIES_PER_CALL = 5;
 
-// Verbatim tool definition (must match exactly).
+// Our own tool definition (functionally: one call per turn, batch queries into the array).
 export function toolDescription() {
   return {
-    name: SUPERMEMORY_TOOL_NAME,
+    name: MEMORY_TOOL_NAME,
     description:
-      "***CRITICAL: YOU CAN ONLY MAKE ONE TOOL CALL*** - Search through the user's personal memories, documents, and stored information when you need specific context that isn't already available. You can include MULTIPLE search queries in a SINGLE tool call. Do NOT make multiple separate tool calls - include all your queries in the queries array in ONE call. Use this when the user asks about their personal information, past conversations, documents they've saved, or when you need more context to provide a helpful response.",
+      "Look up the user's saved memories and documents whenever you need context you do not already have - their preferences, facts about them, earlier conversations, or material they have stored. Call this at most once per turn: put every question you want answered into the `queries` array in a single call instead of invoking the tool repeatedly.",
     parameters: {
       type: "object",
       properties: {
@@ -26,7 +26,7 @@ export function toolDescription() {
           type: "array",
           items: { type: "string" },
           description:
-            "Array of search queries to find relevant information. Include ALL queries you want to search in this single array - you cannot make multiple tool calls.",
+            "One or more search phrases to look up. Include every query you need here, because the tool runs only once per turn.",
           minItems: MIN_QUERIES_PER_CALL,
           maxItems: MAX_QUERIES_PER_CALL,
         },
@@ -58,7 +58,7 @@ export function proxyRoutes(ctx: Ctx) {
   // POST /v1/chat/completions
   app.post("/chat/completions", async (c) => {
     const userId =
-      c.req.header("x-sm-user-id") || new URL(c.req.url).searchParams.get("userId") || undefined;
+      c.req.header("x-minimem-user-id") || new URL(c.req.url).searchParams.get("userId") || undefined;
     const body = await c.req.json().catch(() => ({}));
 
     // 1. passthrough if request already carries tool_result content
@@ -66,14 +66,14 @@ export function proxyRoutes(ctx: Ctx) {
       (m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === "tool_result"),
     );
     if (hasToolResults) {
-      c.header("x-supermemory-tool-passthrough", "true");
-      c.header("x-supermemory-context-modified", "false");
+      c.header("x-minimem-tool-passthrough", "true");
+      c.header("x-minimem-context-modified", "false");
       return c.json({ note: "passthrough mode (upstream forward not wired - M3)" });
     }
 
     // 2. inject tool
     body.tools = body.tools ?? [];
-    if (!body.tools.some((t: any) => t.name === SUPERMEMORY_TOOL_NAME)) {
+    if (!body.tools.some((t: any) => t.name === MEMORY_TOOL_NAME)) {
       body.tools.unshift(toolDescription());
     }
 
@@ -87,7 +87,7 @@ export function proxyRoutes(ctx: Ctx) {
 
     // 4-7. forward upstream, intercept tool_calls, runToolSearch, re-invoke. TODO (M3).
     void userId;
-    c.header("x-supermemory-tool-intercept", SUPERMEMORY_TOOL_NAME);
+    c.header("x-minimem-tool-intercept", MEMORY_TOOL_NAME);
     return c.json({ note: "proxy core not wired (M3): tool + profile injected; upstream forward TODO" });
   });
 

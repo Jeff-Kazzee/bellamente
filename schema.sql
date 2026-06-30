@@ -1,4 +1,6 @@
 -- minimem schema (pgvector). Applied at boot, idempotent.
+-- NOTE: vector(N) must equal EMBED_DIM (default 384 for multilingual-e5-small).
+-- Changing the embedding model's dimension requires recreating these tables.
 CREATE EXTENSION IF NOT EXISTS vector;
 
 DO $$ BEGIN
@@ -71,7 +73,7 @@ CREATE TABLE IF NOT EXISTS memory_entry (
   metadata json,
   created_at timestamp NOT NULL DEFAULT now(),
   updated_at timestamp NOT NULL DEFAULT now(),
-  memory_embedding vector(768),
+  memory_embedding vector(384),
   memory_embedding_model text
 );
 
@@ -94,7 +96,7 @@ CREATE TABLE IF NOT EXISTS chunk (
   type chunk_type NOT NULL DEFAULT 'text',
   metadata json,
   created_at timestamp NOT NULL DEFAULT now(),
-  embedding vector(768),
+  embedding vector(384),
   embedding_model text
 );
 

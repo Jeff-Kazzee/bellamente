@@ -1,41 +1,41 @@
 // embed.ts - the single embedding singleton (Spec 02).
-// Default = local, in-process (no cloud/server): bge-base-en-v1.5 (MIT, 768-d). Chosen by A/B
-// (`bun run bench`): ties Qwen3-0.6B on English retrieval at ~7x the speed / ~5.5x smaller.
-// Per-model profiles (pooling + prompt) keep us model-agnostic; Qwen3 stays a one-line opt-in.
+// Default = local, in-process (no cloud/server): multilingual-e5-small (MIT, 384-d, ~100 langs).
+// Chosen by A/B (`bun run bench`): ties bge-base on English, smallest+fastest, and verified
+// multilingual (100% vs bge 40% on non-Latin cross-lingual). Per-model profiles below.
 export type TaskType = "QUESTION_ANSWERING" | "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
-export const EMBED_DIM = Number(process.env.EMBED_DIM ?? 768);
+export const EMBED_DIM = Number(process.env.EMBED_DIM ?? 384);
 const MAX_PAYLOAD_CHARS = 36000;
 
 const PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
-const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? "Xenova/bge-base-en-v1.5";
+const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? "Xenova/multilingual-e5-small";
 const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
 
 export type Embed = (args: { values: string[]; taskType: TaskType }) => Promise<number[][]>;
 
-// --- per-model profiles (pooling + query/doc prompt formatting) ------------
+// --- per-model profiles (pooling + query/doc prompt) -----------------------
 type Pooling = "last_token" | "mean" | "cls";
 type ModelProfile = { pooling: Pooling; query: (t: string) => string; doc: (t: string) => string };
 const raw = (t: string) => t;
+const e5: ModelProfile = { pooling: "mean", query: (t) => `query: ${t}`, doc: (t) => `passage: ${t}` };
 const bge: ModelProfile = {
   pooling: "cls",
   query: (t) => `Represent this sentence for searching relevant passages: ${t}`,
   doc: raw,
 };
+const qwen: ModelProfile = {
+  pooling: "last_token",
+  query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`,
+  doc: raw,
+};
 const PROFILES: Record<string, ModelProfile> = {
+  "Xenova/multilingual-e5-small": e5,
+  "Xenova/multilingual-e5-base": e5,
+  "Xenova/multilingual-e5-large": e5,
   "Xenova/bge-base-en-v1.5": bge,
   "Xenova/bge-small-en-v1.5": bge,
-  "onnx-community/Qwen3-Embedding-0.6B-ONNX": {
-    pooling: "last_token",
-    query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`,
-    doc: raw,
-  },
-  "onnx-community/Qwen3-Embedding-4B-ONNX": {
-    pooling: "last_token",
-    query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`,
-    doc: raw,
-  },
+  "onnx-community/Qwen3-Embedding-0.6B-ONNX": qwen,
+  "onnx-community/Qwen3-Embedding-4B-ONNX": qwen,
 };
-// Sensible generic fallback for any other transformers.js model.
 const profile: ModelProfile = PROFILES[LOCAL_MODEL] ?? { pooling: "mean", query: raw, doc: raw };
 
 export function embedModelName(): string {
@@ -55,7 +55,7 @@ function formatForTask(text: string, taskType: TaskType): string {
   return taskType === "RETRIEVAL_DOCUMENT" ? profile.doc(text) : profile.query(text);
 }
 function mrl(vec: number[], dim: number): number[] {
-  const s = vec.length > dim ? vec.slice(0, dim) : vec; // Matryoshka truncation (no-op if native==dim)
+  const s = vec.length > dim ? vec.slice(0, dim) : vec;
   let n = 0;
   for (const x of s) n += x * x;
   n = Math.sqrt(n) || 1;

@@ -5,56 +5,62 @@ The single embed() used by writes, ingestion, and search.
 
 ## Contract
 - type TaskType = QUESTION_ANSWERING | RETRIEVAL_QUERY | RETRIEVAL_DOCUMENT
-- embed({ values: string[], taskType }): Promise<number[][]>   each row length EMBED_DIM (768)
-- EMBED_DIM = 768 (port of kd0())
+- embed({ values: string[], taskType }): Promise<number[][]>  each row length EMBED_DIM (384)
+- EMBED_DIM = 384 (must equal schema.sql vector(N))
 
-## Rules (verbatim from source)
-- Query side: QUESTION_ANSWERING (v4) / RETRIEVAL_QUERY (v3). Document side: RETRIEVAL_DOCUMENT.
+## Rules
+- Query side: QUESTION_ANSWERING / RETRIEVAL_QUERY. Document side: RETRIEVAL_DOCUMENT.
 - Truncate input when len*2 > 36000 chars -> cut to 36000/2.
-- Validate every vector: length === EMBED_DIM AND all finite; skip otherwise (matches $V2).
-- Prewarm at boot unless MINIMEM_SKIP_EMBEDDING_PREWARM=1 (verbatim env behavior).
+- Validate every vector: length === EMBED_DIM AND finite; skip otherwise.
+- Prewarm at boot unless MINIMEM_SKIP_EMBEDDING_PREWARM=1.
 
 ## Default model (chosen by A/B, `bun run bench`)
-bge-base-en-v1.5 (Xenova/bge-base-en-v1.5) via transformers.js (ONNX), in-process.
-- MIT licensed, 109M params, 768-d native (no truncation), CLS pooling.
-- This is also the model the original Supermemory shipped (mP0 = "Xenova/bge-base-en-v1.5"),
-  but it was selected here on merit, not fidelity - it WON the head-to-head.
+multilingual-e5-small (Xenova/multilingual-e5-small) via transformers.js (ONNX), in-process.
+- MIT, 118M params, 384-d native, mean pooling, prefixes "query: " / "passage: ".
+- Picked on merit: ties bge-base on English AND is genuinely multilingual, smallest + fastest.
 
-A/B results (14 memories, 12 English queries, q8, CPU):
-| Model | params | dim | ctx | license | Recall@1 | Recall@3 | MRR | ms/embed |
-|-------|--------|-----|-----|---------|----------|----------|-----|----------|
-| bge-base-en-v1.5 (DEFAULT) | 109M | 768 | 512 | MIT | 83.3% | 91.7% | 0.889 | 15 |
-| Qwen3-Embedding-0.6B | 600M | 768 | 32K | Apache-2.0 | 83.3% | 91.7% | 0.896 | 105 |
-| bge-small-en-v1.5 | 33M | 384 | 512 | MIT | 83.3% | 83.3% | 0.861 | 6 |
-bge-base ties Qwen3 on quality at ~7x the speed / ~5.5x smaller -> best quality-per-resource.
+English A/B (14 mem, 12 queries, q8, CPU):
+| Model | params | dim | license | EN R@1 | EN MRR | ms/embed |
+|-------|--------|-----|---------|--------|--------|----------|
+| multilingual-e5-small (DEFAULT) | 118M | 384 | MIT | 83% | 0.882 | ~7 |
+| bge-base-en-v1.5 | 109M | 768 | MIT | 83% | 0.882 | ~11 |
+| Qwen3-Embedding-0.6B | 600M | 768 | Apache-2.0 | 83% | 0.892 | ~110 |
+| multilingual-e5-base | 278M | 768 | MIT | 75% | 0.833 | ~17 |
+
+Multilingual verification (non-Latin cross-lingual: query in zh/ja/ko/ru/ar -> English memory):
+- multilingual-e5-small: R@1 = 100% (all correct)
+- bge-base-en-v1.5: R@1 = 40% (English/Latin-only; fails zh/ko/ar)
+Confirmed live: Spanish query -> correct English memory at 0.82.
+
+## Supported languages (multilingual-e5-small, ~100 from XLM-RoBERTa / CC100)
+Strongest on high-resource languages; low-resource may degrade. Verified here: en, es, fr, de,
+it, pt, zh, ja, ko, ru, ar. Full set (ISO codes):
+af am ar as az be bg bn br bs ca cs cy da de el en eo es et eu fa fi fr fy ga gd gl gu ha he hi
+hr hu hy id is it ja jv ka kk km kn ko ku ky la lo lt lv mg mk ml mn mr ms my ne nl no om or pa
+pl ps pt ro ru sa sd si sk sl so sq sr su sv sw ta te th tl tr ug uk ur uz vi xh yi zh
 
 ## Per-model profiles (src/embed.ts)
-Each model needs its own pooling + prompt format; PROFILES maps model id -> { pooling, query, doc }:
-- bge-*: pooling "cls"; query prefix "Represent this sentence for searching relevant passages: "; doc raw.
+PROFILES maps model id -> { pooling, query, doc }:
+- e5 (multilingual-e5-*): pooling "mean"; query "query: {t}"; doc "passage: {t}".
+- bge-*: pooling "cls"; query "Represent this sentence for searching relevant passages: {t}"; doc raw.
 - Qwen3: pooling "last_token"; query "Instruct: ...\nQuery:{t}"; doc raw.
 - fallback: pooling "mean", raw prompts.
-taskType RETRIEVAL_DOCUMENT -> doc(); QUESTION_ANSWERING/RETRIEVAL_QUERY -> query().
-Matryoshka: slice to EMBED_DIM then L2-normalize (no-op when native == EMBED_DIM).
+Matryoshka: slice to EMBED_DIM then L2-normalize.
 
-## Opt-ins
-- Multilingual / 32K context (heavier ~5x): LOCAL_EMBED_MODEL=onnx-community/Qwen3-Embedding-0.6B-ONNX (keep EMBED_DIM=768).
-- Ultralight 33M / 384-d: LOCAL_EMBED_MODEL=Xenova/bge-small-en-v1.5 (set EMBED_DIM=384 + schema vector(384)).
-- Long-context Apache alt: nomic-embed-text-v1.5 (8192 ctx, 768-d, mean pooling, search_query/search_document
-  prefixes) - add a profile + a valid transformers.js ONNX repo id.
+## Opt-ins (set EMBED_DIM to match + recreate DB)
+- English-only, slightly higher MRR: Xenova/bge-base-en-v1.5 (768).
+- 768-d multilingual: Xenova/multilingual-e5-base (768).
+- Multilingual + 32K context: onnx-community/Qwen3-Embedding-0.6B-ONNX (768).
 
-## Context length note
-512 tokens (~2000 chars) is ample for short + multi-sentence memories and 1075-char chunks. It is
-NOT a memory cap - it is max text per embedding call. Only embedding long passages un-chunked or
-multilingual needs Qwen3's 32K.
+## Context length
+e5-small reads up to 512 tokens (~2000 chars) per input - ample for short + multi-sentence
+memories and our 1075-char chunks. It is max-text-per-embedding, not a memory cap. Use Qwen3
+(32K) only to embed long passages un-chunked.
 
 ## Dev fallback provider: openai
-EMBEDDING_PROVIDER=openai -> text-embedding-3-small with dimensions:768. Requires OPENAI_API_KEY.
-
-## M2 (single binary)
-Bundle the ONNX weights (or download-on-first-run to a data dir) so `bun build --compile` embeds
-locally with no network.
+EMBEDDING_PROVIDER=openai -> text-embedding-3-small (dimensions per EMBED_DIM). Needs OPENAI_API_KEY.
 
 ## Acceptance
 - embed() returns EMBED_DIM-length finite vectors for both task sides.
-- Relevant query/document pairs out-rank irrelevant ones (verified: query->dark-mode 0.58 vs paris 0.31).
+- Relevant pairs out-rank irrelevant ones, cross-lingually for multilingual models.
 - Dim mismatch rejected before insert.
