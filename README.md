@@ -1,8 +1,16 @@
 # eunoia
 
+> **Eunoia is the memory layer a user can actually inspect and trust.**
+
 Eunoia is a local-first memory substrate for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 OpenAI-compatible proxy for injecting relevant memory and profile context.
+
+Most agent-memory tools store memory but stay opaque — you can't see what they
+know or why a given answer was recalled. Eunoia's wedge is the opposite:
+**inspect** (a recall/inject trace, a memory browser, provenance) and **trust**
+(local-first, bounded resources, durable writes, a single binary with no Docker
+or Python). Everything on the roadmap ladders up to those two words.
 
 The product thesis is simple: agents need a well-ordered mind that stays close
 to the user, remains inspectable, and can run without a hosted memory service.
@@ -12,10 +20,10 @@ recall traces, document ingestion, and profile-aware workflows.
 ## Status
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
 - Embeddings: LOCAL + worker-threaded by default (no cloud, no model server) -
-  multilingual-e5-small via transformers.js (ONNX), 384 dimensions. OpenAI is an
-  optional dev fallback.
-- M2 standalone binary: in progress. The HTTP server compiles; Windows native ONNX
-  packaging is still being hardened.
+  multilingual-e5-small via transformers.js / onnxruntime-web (WASM, single-threaded, zero native
+  code), 384 dimensions. OpenAI is an optional dev fallback.
+- M2 standalone binary: DONE. WASM engine (onnxruntime-web, single-threaded); zero native
+  code/DLLs; all platforms including Windows work out of the box.
 - M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection wired).
 
 ## Architecture (one process)
@@ -40,7 +48,6 @@ docs/            PRD + 11 subsystem specs
 ```
 cp .env.example .env          # set EUNOIA_API_KEY (defaults are local-embeddings, no cloud)
 bun install
-bun pm trust --all            # allow onnxruntime-node native install
 docker run -d --name eunoia-pg -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=eunoia pgvector/pgvector:pg16
 bun run dev                   # first boot downloads the local embedding model and prewarms
 ```
@@ -57,10 +64,11 @@ curl -s localhost:8080/search -H "authorization: Bearer $EUNOIA_API_KEY" \
 ```
 
 ## Embeddings: local by default
-Eunoia defaults to `Xenova/multilingual-e5-small` via transformers.js (ONNX) in a
-worker thread. It uses query/document prefixes, mean pooling, and L2-normalized
-384-d vectors. Set `LOCAL_EMBED_MODEL` and `EMBED_DIM` together when trying a
-different local model, or set `EMBEDDING_PROVIDER=openai` for a cloud fallback.
+Eunoia defaults to `Xenova/multilingual-e5-small` in a worker thread. Tokenization via
+transformers.js AutoTokenizer; inference via `onnxruntime-web` (WASM, single-threaded —
+zero native code, works on all platforms). It uses query/document prefixes, mean pooling,
+and L2-normalized 384-d vectors. Set `LOCAL_EMBED_MODEL` and `EMBED_DIM` together when
+trying a different local model, or set `EMBEDDING_PROVIDER=openai` for a cloud fallback.
 See `docs/02-embedding.md` if you keep local design docs in this checkout.
 
 ## Build single binary (M2)
