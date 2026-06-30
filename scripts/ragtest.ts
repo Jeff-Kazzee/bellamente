@@ -11,7 +11,7 @@ import { searchChunks } from "../src/search";
 
 const DOC_DIRS = [
   "C:/Users/jeffk/dev/The Little AI Co Projects/sm-decomp/docs",
-  "C:/Users/jeffk/dev/The Little AI Co Projects/minimem/docs",
+  "C:/Users/jeffk/dev/The Little AI Co Projects/eunoia/docs",
 ];
 const TAG = "docs";
 
