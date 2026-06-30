@@ -1,41 +1,28 @@
-// scripts/eval.ts - A/B evaluation of LOCAL embedding models on a labeled memory set.
-// Pure + in-process. No DB, no server, no cloud. All models here are MIT / Apache-2.0.
-// Each model carries its own pooling + query/doc prompt format (this matters - getting it
-// wrong tanks a model's score). Robust: a model that fails to load is reported and skipped.
+// scripts/eval.ts - A/B of LOCAL embedding models on a labeled memory set.
+// Pure + in-process, no DB/server/cloud. All models MIT / Apache-2.0.
+// Reports English AND multilingual (cross-lingual) retrieval separately.
 import { pipeline } from "@huggingface/transformers";
 
 type Pooling = "last_token" | "mean" | "cls";
 type Profile = {
-  name: string;
-  modelId: string;
-  dtype: "fp32" | "fp16" | "q8" | "q4";
-  pooling: Pooling;
-  dim: number;
-  params: string;
-  ctx: string;
-  license: string;
-  queryPrompt: (t: string) => string;
-  docPrompt: (t: string) => string;
+  name: string; modelId: string; dtype: "fp32" | "fp16" | "q8" | "q4";
+  pooling: Pooling; dim: number; params: string; ctx: string; license: string; multi: boolean;
+  query: (t: string) => string; doc: (t: string) => string;
 };
-
 const raw = (t: string) => t;
 const PROFILES: Profile[] = [
-  // the original Supermemory model (MIT) - baseline
   { name: "bge-base-en-v1.5", modelId: "Xenova/bge-base-en-v1.5", dtype: "q8", pooling: "cls", dim: 768,
-    params: "109M", ctx: "512", license: "MIT",
-    queryPrompt: (t) => `Represent this sentence for searching relevant passages: ${t}`, docPrompt: raw },
-  // long-context (8192) lightweight Apache option - NOT a clone of Supermemory
-  { name: "nomic-embed-text-v1.5", modelId: "Xenova/nomic-embed-text-v1.5", dtype: "q8", pooling: "mean", dim: 768,
-    params: "137M", ctx: "8192", license: "Apache-2.0",
-    queryPrompt: (t) => `search_query: ${t}`, docPrompt: (t) => `search_document: ${t}` },
-  // current default - heavier, top quality, multilingual (Apache)
+    params: "109M", ctx: "512", license: "MIT", multi: false,
+    query: (t) => `Represent this sentence for searching relevant passages: ${t}`, doc: raw },
+  { name: "multilingual-e5-small", modelId: "Xenova/multilingual-e5-small", dtype: "q8", pooling: "mean", dim: 384,
+    params: "118M", ctx: "512", license: "MIT", multi: true,
+    query: (t) => `query: ${t}`, doc: (t) => `passage: ${t}` },
+  { name: "multilingual-e5-base", modelId: "Xenova/multilingual-e5-base", dtype: "q8", pooling: "mean", dim: 768,
+    params: "278M", ctx: "512", license: "MIT", multi: true,
+    query: (t) => `query: ${t}`, doc: (t) => `passage: ${t}` },
   { name: "Qwen3-Embedding-0.6B", modelId: "onnx-community/Qwen3-Embedding-0.6B-ONNX", dtype: "q8", pooling: "last_token", dim: 768,
-    params: "600M", ctx: "32K", license: "Apache-2.0",
-    queryPrompt: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`, docPrompt: raw },
-  // ultralight floor (MIT, 384-dim)
-  { name: "bge-small-en-v1.5", modelId: "Xenova/bge-small-en-v1.5", dtype: "q8", pooling: "cls", dim: 384,
-    params: "33M", ctx: "512", license: "MIT",
-    queryPrompt: (t) => `Represent this sentence for searching relevant passages: ${t}`, docPrompt: raw },
+    params: "600M", ctx: "32K", license: "Apache-2.0", multi: true,
+    query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`, doc: raw },
 ];
 
 const MEMORIES: { id: string; text: string }[] = [
@@ -51,10 +38,12 @@ const MEMORIES: { id: string; text: string }[] = [
   { id: "m10", text: "John is learning to play the cello and practices on weekends." },
   { id: "m11", text: "John's manager is Priya, and his skip-level is the VP of Engineering, Dale." },
   { id: "m12", text: "John prefers async communication and finds back-to-back meetings draining." },
-  { id: "m13", text: "John's home office faces east and gets bright morning light." },
-  { id: "m14", text: "The capital of France is Paris." },
+  // multilingual memories
+  { id: "ml1", text: "A Maria le encanta el cafe con leche de avena por las mananas." },
+  { id: "ml2", text: "Pierre travaille comme ingenieur logiciel a Paris." },
+  { id: "ml3", text: "Hans faehrt jeden Tag mit dem Fahrrad zur Arbeit." },
 ];
-const QUERIES: { q: string; gold: string }[] = [
+const EN_QUERIES: { q: string; gold: string }[] = [
   { q: "what theme does John use when coding", gold: "m1" },
   { q: "how does John usually get to the office", gold: "m2" },
   { q: "what food allergy should I be careful about with John", gold: "m3" },
@@ -68,6 +57,11 @@ const QUERIES: { q: string; gold: string }[] = [
   { q: "who does John report to", gold: "m11" },
   { q: "how does John feel about lots of meetings", gold: "m12" },
 ];
+const ML_QUERIES: { q: string; gold: string }[] = [
+  { q: "que bebida le gusta a Maria", gold: "ml1" },
+  { q: "quel est le metier de Pierre", gold: "ml2" },
+  { q: "wie kommt Hans zur Arbeit", gold: "ml3" },
+];
 
 function mrl(v: number[], dim: number): number[] {
   const s = v.length > dim ? v.slice(0, dim) : v;
@@ -79,42 +73,38 @@ const cos = (a: number[], b: number[]): number => { let d = 0; for (let i = 0; i
 async function embedBatch(pipe: any, p: Profile, texts: string[]): Promise<{ vecs: number[][]; ms: number }> {
   const t0 = performance.now();
   const out = await pipe(texts, { pooling: p.pooling, normalize: false });
-  const ms = performance.now() - t0;
-  return { vecs: (out.tolist() as number[][]).map((v) => mrl(v, p.dim)), ms };
+  return { vecs: (out.tolist() as number[][]).map((v) => mrl(v, p.dim)), ms: performance.now() - t0 };
+}
+function score(qvecs: number[][], queries: { gold: string }[], dvecs: number[][]) {
+  let r1 = 0, mrr = 0;
+  queries.forEach((query, qi) => {
+    const ranked = MEMORIES.map((m, mi) => ({ id: m.id, s: cos(qvecs[qi] as number[], dvecs[mi] as number[]) })).sort((a, b) => b.s - a.s);
+    const rank = ranked.findIndex((x) => x.id === query.gold) + 1;
+    if (rank === 1) r1++;
+    if (rank >= 1) mrr += 1 / rank;
+  });
+  return { r1: r1 / queries.length, mrr: mrr / queries.length };
 }
 
-type Row = { name: string; params: string; dim: number; ctx: string; license: string; r1: number; r3: number; mrr: number; msPer: number };
+type Row = { name: string; params: string; dim: number; ctx: string; license: string; multi: boolean; enR1: number; enMrr: number; mlR1: number; mlMrr: number; ms: number };
 const rows: Row[] = [];
-
 for (const p of PROFILES) {
-  process.stdout.write(`Running ${p.name} (${p.params}, ${p.license}) ... `);
+  process.stdout.write(`Running ${p.name} ... `);
   try {
     const pipe = await pipeline("feature-extraction", p.modelId, { dtype: p.dtype });
-    const docs = await embedBatch(pipe, p, MEMORIES.map((m) => p.docPrompt(m.text)));
-    const qs = await embedBatch(pipe, p, QUERIES.map((q) => p.queryPrompt(q.q)));
-    let r1 = 0, r3 = 0, mrrSum = 0;
-    QUERIES.forEach((query, qi) => {
-      const ranked = MEMORIES
-        .map((m, mi) => ({ id: m.id, s: cos(qs.vecs[qi] as number[], docs.vecs[mi] as number[]) }))
-        .sort((a, b) => b.s - a.s);
-      const rank = ranked.findIndex((x) => x.id === query.gold) + 1;
-      if (rank === 1) r1++;
-      if (rank >= 1 && rank <= 3) r3++;
-      if (rank >= 1) mrrSum += 1 / rank;
-    });
-    const n = QUERIES.length;
-    rows.push({ name: p.name, params: p.params, dim: p.dim, ctx: p.ctx, license: p.license,
-      r1: r1 / n, r3: r3 / n, mrr: mrrSum / n, msPer: (docs.ms + qs.ms) / (MEMORIES.length + QUERIES.length) });
+    const docs = await embedBatch(pipe, p, MEMORIES.map((m) => p.doc(m.text)));
+    const enq = await embedBatch(pipe, p, EN_QUERIES.map((q) => p.query(q.q)));
+    const mlq = await embedBatch(pipe, p, ML_QUERIES.map((q) => p.query(q.q)));
+    const en = score(enq.vecs, EN_QUERIES, docs.vecs);
+    const ml = score(mlq.vecs, ML_QUERIES, docs.vecs);
+    rows.push({ name: p.name, params: p.params, dim: p.dim, ctx: p.ctx, license: p.license, multi: p.multi,
+      enR1: en.r1, enMrr: en.mrr, mlR1: ml.r1, mlMrr: ml.mrr, ms: (docs.ms + enq.ms + mlq.ms) / (MEMORIES.length + EN_QUERIES.length + ML_QUERIES.length) });
     console.log("done");
-  } catch (e) {
-    console.log(`FAILED: ${(e as Error).message.slice(0, 120)}`);
-  }
+  } catch (e) { console.log(`FAILED: ${(e as Error).message.slice(0, 100)}`); }
 }
-
-console.log(`\nEval set: ${MEMORIES.length} memories, ${QUERIES.length} queries (English, short + multi-sentence)\n`);
-console.log("| Model | params | dim | ctx | license | Recall@1 | Recall@3 | MRR | ms/embed |");
-console.log("|---|---:|---:|---:|---|---:|---:|---:|---:|");
-for (const r of rows.sort((a, b) => b.mrr - a.mrr)) {
-  console.log(`| ${r.name} | ${r.params} | ${r.dim} | ${r.ctx} | ${r.license} | ${(r.r1 * 100).toFixed(1)}% | ${(r.r3 * 100).toFixed(1)}% | ${r.mrr.toFixed(3)} | ${r.msPer.toFixed(1)} |`);
+console.log(`\nEN: ${EN_QUERIES.length} queries  |  ML(es/fr/de): ${ML_QUERIES.length} queries  |  ${MEMORIES.length} memories\n`);
+console.log("| Model | params | dim | ctx | license | EN R@1 | EN MRR | ML R@1 | ML MRR | ms/embed |");
+console.log("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|");
+for (const r of rows.sort((a, b) => b.enMrr - a.enMrr)) {
+  console.log(`| ${r.name} | ${r.params} | ${r.dim} | ${r.ctx} | ${r.license} | ${(r.enR1*100).toFixed(0)}% | ${r.enMrr.toFixed(3)} | ${(r.mlR1*100).toFixed(0)}% | ${r.mlMrr.toFixed(3)} | ${r.ms.toFixed(1)} |`);
 }
-console.log("\n(sorted by MRR. Recall@1 = right memory ranked #1; ms/embed = CPU latency.)");
