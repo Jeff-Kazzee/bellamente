@@ -8,19 +8,20 @@ Reverse-engineered from the decompiled bundle in the sibling `sm-decomp` project
 Clean-room: no decompiled code is copied in; algorithms are ported from documented behavior.
 
 ## Status
-- M1 core loop: WIRED + verified end-to-end against pgvector (write -> embed -> store -> cosine recall).
-- Embeddings: OpenAI fallback (text-embedding-3-small, dimensions:768) wired; local model = TODO (M2).
-- M2 single binary (PGlite + local model + `bun build --compile`): TODO.
-- M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection already wired).
+- Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
+- Embeddings: LOCAL + in-process by default (no cloud, no server) - Qwen3-Embedding-0.6B via
+  transformers.js (ONNX), Matryoshka-truncated to 768. OpenAI is an optional dev fallback.
+- M2 single binary (PGlite + bundled model + `bun build --compile`): TODO.
+- M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection wired).
 
 ## Architecture (one process)
-One Hono app + two singletons: `sql` (pgvector) and `embed` (768-d). Every feature is a
+One Hono app + two singletons: `sql` (pgvector) and `embed` (768-d, local). Every feature is a
 route module sharing `ctx = { sql, embed }`. The proxy calls search/profile in-process.
 
 ```
-src/index.ts     entrypoint: singletons + mount all routes + bearer auth + listen
+src/index.ts     entrypoint: singletons + embed prewarm + mount routes + bearer auth + listen
 src/db.ts        DB singleton (postgres.js; applies schema.sql at boot). M2 -> PGlite.
-src/embed.ts     embed({ values, taskType }) -> 768-d; EMBED_DIM=768; OpenAI fallback wired
+src/embed.ts     embed({ values, taskType }) -> 768-d; local Qwen3 (transformers.js) + OpenAI fallback
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  POST/GET /memories          (port of $V2)
 src/search.ts    POST /search + searchMemories()  (cosine, threshold 0.4, dedup, cap 25)
@@ -30,12 +31,13 @@ schema.sql       full pgvector DDL (applied at boot)
 docs/            PRD + 11 subsystem specs
 ```
 
-## Quick start (dev, M1)
+## Quick start (dev)
 ```
-cp .env.example .env          # set MINIMEM_API_KEY, DATABASE_URL, OPENAI_API_KEY, EMBEDDING_PROVIDER=openai
+cp .env.example .env          # set MINIMEM_API_KEY (defaults are local-embeddings, no cloud)
 bun install
+bun pm trust --all            # allow onnxruntime-node native install
 docker run -d --name minimem-pg -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=minimem pgvector/pgvector:pg16
-bun run dev
+bun run dev                   # first boot downloads Qwen3-Embedding-0.6B (~600MB q8) and prewarms
 ```
 
 Example:
@@ -46,12 +48,19 @@ curl -s localhost:8080/memories -H "authorization: Bearer $MINIMEM_API_KEY" \
   -d '{"containerTag":"user_123","memories":[{"content":"John prefers dark mode","isStatic":true}]}'
 curl -s localhost:8080/search -H "authorization: Bearer $MINIMEM_API_KEY" \
   -H 'content-type: application/json' \
-  -d '{"q":"what display setting does John like","containerTag":"user_123"}'
+  -d '{"q":"what theme does John like","containerTag":"user_123"}'
 ```
+
+## Embeddings: local by default
+Qwen3-Embedding-0.6B runs in-process via transformers.js (ONNX) - no cloud API, no model server.
+Instruction-aware (queries get an `Instruct:` prefix; documents raw) and Matryoshka-truncated to
+768 so the schema is unchanged. Swap `LOCAL_EMBED_MODEL` for nomic-embed-text-v2, bge-m3,
+granite-embedding, or Qwen3-Embedding-4B; set `EMBEDDING_PROVIDER=openai` for a cloud fallback.
+See docs/02-embedding.md.
 
 ## Build single binary (M2)
 ```
-bun run build      # -> ./minimem  (PGlite + local model embedded)
+bun run build      # -> ./minimem  (PGlite + bundled model embedded)
 ./minimem
 ```
 
@@ -64,6 +73,6 @@ bun run build      # -> ./minimem  (PGlite + local model embedded)
 See docs/PRD.md and docs/08-api.md.
 
 ## Provenance / fidelity
-Specs mark "verbatim" (from decompiled source) vs "[DESIGN]" (designed here because the
-source lacked it - notably the document->memory extraction prompt and the local embedding
-model name, which are not present in the decompiled output).
+Specs mark "verbatim" (from decompiled source) vs "[DESIGN]" (designed here). The local embedding
+model name was not recoverable from the decompiled bundle, so Qwen3-Embedding-0.6B was selected as
+a current (2026) 768-d, instruction-aware, in-process replacement.

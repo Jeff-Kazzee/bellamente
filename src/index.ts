@@ -1,7 +1,7 @@
 // index.ts - the only entrypoint. Builds singletons, mounts all routes, listens.
 import { Hono } from "hono";
 import { makeDb } from "./db";
-import { makeEmbed } from "./embed";
+import { makeEmbed, prewarmEmbed } from "./embed";
 import { memoriesRoutes } from "./memories";
 import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
@@ -11,9 +11,10 @@ const API_KEY = process.env.MINIMEM_API_KEY;
 const PORT = Number(process.env.PORT ?? 8080);
 
 async function main() {
-  // Boot sequence (Spec 00): db -> migrations -> embed prewarm -> cron -> listen.
+  // Boot sequence (Spec 00): db -> migrations -> embed prewarm -> listen.
   const sql = await makeDb();
   const embed = makeEmbed();
+  await prewarmEmbed(embed);
   const ctx = { sql, embed };
 
   const app = new Hono();
