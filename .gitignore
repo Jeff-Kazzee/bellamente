@@ -1,0 +1,10 @@
+node_modules/
+dist/
+minimem
+minimem.exe
+*.log
+.env
+.env.local
+pgdata/
+*.tmp
+.DS_Store
