@@ -1,46 +1,14 @@
-// embed-worker.ts - runs the transformers.js / ONNX model OFF the main thread.
-// The worker keeps native model runtime work away from the HTTP loop and avoids main-thread
-// standalone-binary instability while embeddings are generated.
+// embed-worker.ts - runs the WASM embedding engine (src/embed-wasm.ts) OFF the main thread, so model
+// inference never blocks the HTTP loop. No native code involved.
 //
 // Protocol (structured-clone over postMessage):
 //   in : { id: number, type: "embed", values: string[], taskType: TaskType }
 //   out: { id: number, ok: true, vectors: number[][] } | { id: number, ok: false, error: string }
-import { LOCAL_MODEL, LOCAL_DTYPE, profile, formatForTask, truncatePayload, mrl, EMBED_DIM, type TaskType } from "./embed-common";
-
-// P0b will extract embedded ORT native libs to runtimeDir() + set the loader search path BEFORE the
-// first transformers.js import below pulls in onnxruntime-node. Done here (in the worker, pre-import).
-import { prepareNativeRuntime } from "./runtime";
+import { embedWasm } from "./embed-wasm";
+import type { TaskType } from "./embed-common";
 
 type InMsg = { id: number; type: "embed"; values: string[]; taskType: TaskType };
 type OutMsg = { id: number; ok: true; vectors: number[][] } | { id: number; ok: false; error: string };
-
-let pipePromise: Promise<(input: string[], opts: any) => Promise<{ tolist: () => number[][] }>> | null = null;
-async function getLocalPipe() {
-  if (!pipePromise) {
-    pipePromise = (async () => {
-      await prepareNativeRuntime();
-      const { pipeline, env } = await import("@huggingface/transformers");
-      const { modelsDir } = await import("./paths");
-      // Safe, writable model cache under the per-user app-data dir (see src/paths.ts).
-      env.cacheDir = process.env.EUNOIA_MODEL_DIR ?? modelsDir();
-      // Bounded CPU/memory: cap ONNX thread pools (default 1 — predictable footprint, never grabs
-      // every core). Users raise EUNOIA_ONNX_THREADS for faster bulk ingestion. (resource-safety)
-      const threads = Math.max(1, Number(process.env.EUNOIA_ONNX_THREADS ?? 1));
-      return (await pipeline("feature-extraction", LOCAL_MODEL, {
-        dtype: LOCAL_DTYPE,
-        session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 },
-      })) as any;
-    })();
-  }
-  return pipePromise;
-}
-
-async function embedLocal(values: string[], taskType: TaskType): Promise<number[][]> {
-  const input = truncatePayload(values).map((v) => formatForTask(v, taskType));
-  const pipe = await getLocalPipe();
-  const out = await pipe(input, { pooling: profile.pooling, normalize: false });
-  return out.tolist().map((v) => mrl(v, EMBED_DIM));
-}
 
 declare const self: { onmessage: ((ev: MessageEvent<InMsg>) => void) | null; postMessage: (m: OutMsg) => void };
 
@@ -48,7 +16,7 @@ self.onmessage = async (ev: MessageEvent<InMsg>) => {
   const m = ev.data;
   if (m.type !== "embed") return;
   try {
-    const vectors = await embedLocal(m.values, m.taskType);
+    const vectors = await embedWasm(m.values, m.taskType);
     self.postMessage({ id: m.id, ok: true, vectors });
   } catch (e: any) {
     self.postMessage({ id: m.id, ok: false, error: String(e?.message ?? e) });
