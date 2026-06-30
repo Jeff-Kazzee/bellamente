@@ -1,7 +1,5 @@
 // embed.ts - the single embedding singleton (Spec 02).
 // Default = local, in-process (no cloud/server): multilingual-e5-small (MIT, 384-d, ~100 langs).
-// Chosen by A/B (`bun run bench`): ties bge-base on English, smallest+fastest, and verified
-// multilingual (100% vs bge 40% on non-Latin cross-lingual). Per-model profiles below.
 export type TaskType = "QUESTION_ANSWERING" | "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
 export const EMBED_DIM = Number(process.env.EMBED_DIM ?? 384);
 const MAX_PAYLOAD_CHARS = 36000;
@@ -12,7 +10,6 @@ const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" |
 
 export type Embed = (args: { values: string[]; taskType: TaskType }) => Promise<number[][]>;
 
-// --- per-model profiles (pooling + query/doc prompt) -----------------------
 type Pooling = "last_token" | "mean" | "cls";
 type ModelProfile = { pooling: Pooling; query: (t: string) => string; doc: (t: string) => string };
 const raw = (t: string) => t;
@@ -66,7 +63,11 @@ let pipePromise: Promise<(input: string[], opts: any) => Promise<{ tolist: () =>
 async function getLocalPipe() {
   if (!pipePromise) {
     pipePromise = (async () => {
-      const { pipeline } = await import("@huggingface/transformers");
+      const { pipeline, env } = await import("@huggingface/transformers");
+      const { homedir } = await import("node:os");
+      const { join } = await import("node:path");
+      // Explicit, writable model cache dir (the default resolves wrong inside a compiled binary).
+      env.cacheDir = process.env.EUNOIA_MODEL_DIR ?? join(homedir(), ".eunoia", "models");
       return (await pipeline("feature-extraction", LOCAL_MODEL, { dtype: LOCAL_DTYPE })) as any;
     })();
   }

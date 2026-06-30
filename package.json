@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --outfile eunoia",
+    "build": "bun run build.ts",
     "bench": "bun run scripts/eval.ts",
     "typecheck": "tsc --noEmit"
   },
