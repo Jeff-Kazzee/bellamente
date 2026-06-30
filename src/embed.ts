@@ -1,81 +1,27 @@
-// embed.ts - the single embedding singleton (Spec 02).
-// Default = local, in-process (no cloud/server): multilingual-e5-small (MIT, 384-d, ~100 langs).
-export type TaskType = "QUESTION_ANSWERING" | "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
-export const EMBED_DIM = Number(process.env.EMBED_DIM ?? 384);
-const MAX_PAYLOAD_CHARS = 36000;
+// embed.ts - the embedding singleton + public surface (Spec 02).
+// Local path runs the model in a WORKER thread (src/embed-worker.ts) — off the HTTP event loop and
+// clear of the Bun-standalone main-thread native-ORT segfault. OpenAI dev-fallback stays inline
+// (network call, no native dep). Pure model/profile helpers live in src/embed-common.ts.
+import {
+  EMBED_DIM,
+  PROVIDER,
+  LOCAL_MODEL,
+  LOCAL_DTYPE,
+  profile,
+  truncatePayload,
+  formatForTask,
+  type Embed,
+  type TaskType,
+} from "./embed-common";
 
-const PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
-const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? "Xenova/multilingual-e5-small";
-const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
+export { EMBED_DIM, isValidVector, embedModelName } from "./embed-common";
+export type { Embed, TaskType } from "./embed-common";
 
-export type Embed = (args: { values: string[]; taskType: TaskType }) => Promise<number[][]>;
-
-type Pooling = "last_token" | "mean" | "cls";
-type ModelProfile = { pooling: Pooling; query: (t: string) => string; doc: (t: string) => string };
-const raw = (t: string) => t;
-const e5: ModelProfile = { pooling: "mean", query: (t) => `query: ${t}`, doc: (t) => `passage: ${t}` };
-const bge: ModelProfile = {
-  pooling: "cls",
-  query: (t) => `Represent this sentence for searching relevant passages: ${t}`,
-  doc: raw,
-};
-const qwen: ModelProfile = {
-  pooling: "last_token",
-  query: (t) => `Instruct: Given a search query, retrieve relevant memories and passages that answer the query\nQuery:${t}`,
-  doc: raw,
-};
-const PROFILES: Record<string, ModelProfile> = {
-  "Xenova/multilingual-e5-small": e5,
-  "Xenova/multilingual-e5-base": e5,
-  "Xenova/multilingual-e5-large": e5,
-  "Xenova/bge-base-en-v1.5": bge,
-  "Xenova/bge-small-en-v1.5": bge,
-  "onnx-community/Qwen3-Embedding-0.6B-ONNX": qwen,
-  "onnx-community/Qwen3-Embedding-4B-ONNX": qwen,
-};
-const profile: ModelProfile = PROFILES[LOCAL_MODEL] ?? { pooling: "mean", query: raw, doc: raw };
-
-export function embedModelName(): string {
-  return PROVIDER === "openai" ? (process.env.OPENAI_EMBED_MODEL ?? "text-embedding-3-small") : LOCAL_MODEL;
-}
-export function isValidVector(v: number[]): boolean {
-  return v.length === EMBED_DIM && v.every((x) => Number.isFinite(x));
-}
-
-function truncatePayload(values: string[]): string[] {
-  const total = values.reduce((n, v) => n + v.length, 0) * 2;
-  if (total <= MAX_PAYLOAD_CHARS) return values;
-  const per = Math.floor(MAX_PAYLOAD_CHARS / 2 / Math.max(values.length, 1));
-  return values.map((v) => (v.length > per ? v.slice(0, per) : v));
-}
-function formatForTask(text: string, taskType: TaskType): string {
-  return taskType === "RETRIEVAL_DOCUMENT" ? profile.doc(text) : profile.query(text);
-}
-function mrl(vec: number[], dim: number): number[] {
-  const s = vec.length > dim ? vec.slice(0, dim) : vec;
-  let n = 0;
-  for (const x of s) n += x * x;
-  n = Math.sqrt(n) || 1;
-  return s.map((x) => x / n);
-}
-
-let pipePromise: Promise<(input: string[], opts: any) => Promise<{ tolist: () => number[][] }>> | null = null;
-async function getLocalPipe() {
-  if (!pipePromise) {
-    pipePromise = (async () => {
-      const { pipeline, env } = await import("@huggingface/transformers");
-      const { modelsDir } = await import("./paths");
-      // Safe, writable model cache under the per-user app-data dir (see src/paths.ts).
-      env.cacheDir = process.env.EUNOIA_MODEL_DIR ?? modelsDir();
-      return (await pipeline("feature-extraction", LOCAL_MODEL, { dtype: LOCAL_DTYPE })) as any;
-    })();
-  }
-  return pipePromise;
-}
-
-async function embedOpenAI(input: string[]): Promise<number[][]> {
+// ---- OpenAI dev fallback (EMBEDDING_PROVIDER=openai) -----------------------------------------
+async function embedOpenAI(values: string[], taskType: TaskType): Promise<number[][]> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY required when EMBEDDING_PROVIDER=openai");
+  const input = truncatePayload(values).map((v) => formatForTask(v, taskType));
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
@@ -86,17 +32,52 @@ async function embedOpenAI(input: string[]): Promise<number[][]> {
   return json.data.slice().sort((a, b) => a.index - b.index).map((d) => d.embedding);
 }
 
-async function embedLocal(input: string[]): Promise<number[][]> {
-  const pipe = await getLocalPipe();
-  const out = await pipe(input, { pooling: profile.pooling, normalize: false });
-  return out.tolist().map((v) => mrl(v, EMBED_DIM));
+// ---- Local worker client ---------------------------------------------------------------------
+type WorkerOut = { id: number; ok: true; vectors: number[][] } | { id: number; ok: false; error: string };
+
+function makeLocalWorkerEmbed(): Embed {
+  let worker: Worker | null = null;
+  let seq = 0;
+  const pending = new Map<number, { resolve: (v: number[][]) => void; reject: (e: Error) => void }>();
+
+  const failAll = (err: Error) => {
+    for (const p of pending.values()) p.reject(err);
+    pending.clear();
+  };
+
+  const ensureWorker = (): Worker => {
+    if (worker) return worker;
+    // Bun bundles + embeds this worker into the --compile binary when referenced this way.
+    const w = new Worker(new URL("./embed-worker.ts", import.meta.url).href, { type: "module" });
+    w.onmessage = (ev: MessageEvent<WorkerOut>) => {
+      const m = ev.data;
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      if (m.ok) p.resolve(m.vectors);
+      else p.reject(new Error(m.error));
+    };
+    w.onerror = (ev: ErrorEvent) => {
+      failAll(new Error("embed worker crashed: " + (ev?.message ?? "unknown")));
+      worker = null; // allow a fresh worker on the next call
+    };
+    worker = w;
+    return w;
+  };
+
+  return ({ values, taskType }) => {
+    if (values.length === 0) return Promise.resolve([]);
+    const w = ensureWorker();
+    const id = ++seq;
+    return new Promise<number[][]>((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      w.postMessage({ id, type: "embed", values, taskType });
+    });
+  };
 }
 
 export function makeEmbed(): Embed {
-  return async ({ values, taskType }) => {
-    const input = truncatePayload(values).map((v) => formatForTask(v, taskType));
-    return PROVIDER === "openai" ? embedOpenAI(input) : embedLocal(input);
-  };
+  return PROVIDER === "openai" ? ({ values, taskType }) => embedOpenAI(values, taskType) : makeLocalWorkerEmbed();
 }
 
 export async function prewarmEmbed(embed: Embed): Promise<void> {
@@ -105,7 +86,7 @@ export async function prewarmEmbed(embed: Embed): Promise<void> {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }
-  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, pooling=${profile.pooling}, dim=${EMBED_DIM})...`);
+  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, pooling=${profile.pooling}, dim=${EMBED_DIM}) in worker...`);
   const t = Date.now();
   await embed({ values: ["warmup"], taskType: "RETRIEVAL_DOCUMENT" });
   console.log(`[embeddings] ready in ${Date.now() - t}ms`);
