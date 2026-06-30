@@ -15,7 +15,7 @@
 //   EUNOIA_MODEL_DIR  - (used by embed.ts) point the model cache anywhere directly
 //   DATABASE_URL      - use an external Postgres instead of the embedded DB (dev / advanced)
 import envPaths from "env-paths";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const P = envPaths("Eunoia", { suffix: "" });
@@ -34,3 +34,38 @@ export const dbDir = (): string => ensure(join(dataBase, "db")); // embedded Pos
 export const modelsDir = (): string => ensure(join(cacheBase, "models")); // embedding weights cache
 export const runtimeDir = (): string => ensure(join(cacheBase, "runtime")); // extracted native libs — M2
 export const logsDir = (): string => ensure(logBase);
+
+// --- Resource-safety helpers: measure on-disk footprint + enforce an optional soft budget. ---
+export function dirSizeBytes(dir: string): number {
+  let total = 0;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0; // missing dir = 0 bytes
+  }
+  for (const e of entries) {
+    const p = join(dir, e);
+    try {
+      const st = statSync(p);
+      total += st.isDirectory() ? dirSizeBytes(p) : st.size;
+    } catch {}
+  }
+  return total;
+}
+
+/** Total bytes Eunoia is using on disk (data + cache; logs excluded — safely deletable + small). */
+export const diskUsedBytes = (): number => dirSizeBytes(dataBase) + dirSizeBytes(cacheBase);
+
+/** Soft disk cap in MB (0 = unlimited). User sets EUNOIA_DISK_BUDGET_MB. */
+export const diskBudgetMb = (): number => Math.max(0, Number(process.env.EUNOIA_DISK_BUDGET_MB ?? 0));
+
+/** Resolved storage locations, for `eunoia doctor` and diagnostics. */
+export const storageDirs = () => ({
+  data: dataBase,
+  db: join(dataBase, "db"),
+  cache: cacheBase,
+  models: join(cacheBase, "models"),
+  runtime: join(cacheBase, "runtime"),
+  logs: logBase,
+});

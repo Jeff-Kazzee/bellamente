@@ -23,7 +23,13 @@ async function getLocalPipe() {
       const { modelsDir } = await import("./paths");
       // Safe, writable model cache under the per-user app-data dir (see src/paths.ts).
       env.cacheDir = process.env.EUNOIA_MODEL_DIR ?? modelsDir();
-      return (await pipeline("feature-extraction", LOCAL_MODEL, { dtype: LOCAL_DTYPE })) as any;
+      // Bounded CPU/memory: cap ONNX thread pools (default 1 — predictable footprint, never grabs
+      // every core). Users raise EUNOIA_ONNX_THREADS for faster bulk ingestion. (resource-safety)
+      const threads = Math.max(1, Number(process.env.EUNOIA_ONNX_THREADS ?? 1));
+      return (await pipeline("feature-extraction", LOCAL_MODEL, {
+        dtype: LOCAL_DTYPE,
+        session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 },
+      })) as any;
     })();
   }
   return pipePromise;
