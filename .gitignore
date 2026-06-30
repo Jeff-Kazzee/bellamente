@@ -2,6 +2,7 @@ node_modules/
 dist/
 eunoia
 eunoia.exe
+eunoia-probe-*
 *.log
 .env
 .env.local

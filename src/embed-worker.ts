@@ -1,6 +1,6 @@
 // embed-worker.ts - runs the transformers.js / ONNX model OFF the main thread.
-// This is Supermemory's pattern (a worker pool) and it is also our fix for the Bun-standalone
-// main-thread native-ORT segfault: the heavy native addon loads + runs here, not on the HTTP loop.
+// The worker keeps native model runtime work away from the HTTP loop and avoids main-thread
+// standalone-binary instability while embeddings are generated.
 //
 // Protocol (structured-clone over postMessage):
 //   in : { id: number, type: "embed", values: string[], taskType: TaskType }
@@ -18,7 +18,7 @@ let pipePromise: Promise<(input: string[], opts: any) => Promise<{ tolist: () =>
 async function getLocalPipe() {
   if (!pipePromise) {
     pipePromise = (async () => {
-      prepareNativeRuntime();
+      await prepareNativeRuntime();
       const { pipeline, env } = await import("@huggingface/transformers");
       const { modelsDir } = await import("./paths");
       // Safe, writable model cache under the per-user app-data dir (see src/paths.ts).
