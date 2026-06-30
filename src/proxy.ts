@@ -58,7 +58,7 @@ export function proxyRoutes(ctx: Ctx) {
   // POST /v1/chat/completions
   app.post("/chat/completions", async (c) => {
     const userId =
-      c.req.header("x-minimem-user-id") || new URL(c.req.url).searchParams.get("userId") || undefined;
+      c.req.header("x-eunoia-user-id") || new URL(c.req.url).searchParams.get("userId") || undefined;
     const body = await c.req.json().catch(() => ({}));
 
     // 1. passthrough if request already carries tool_result content
@@ -66,8 +66,8 @@ export function proxyRoutes(ctx: Ctx) {
       (m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === "tool_result"),
     );
     if (hasToolResults) {
-      c.header("x-minimem-tool-passthrough", "true");
-      c.header("x-minimem-context-modified", "false");
+      c.header("x-eunoia-tool-passthrough", "true");
+      c.header("x-eunoia-context-modified", "false");
       return c.json({ note: "passthrough mode (upstream forward not wired - M3)" });
     }
 
@@ -87,7 +87,7 @@ export function proxyRoutes(ctx: Ctx) {
 
     // 4-7. forward upstream, intercept tool_calls, runToolSearch, re-invoke. TODO (M3).
     void userId;
-    c.header("x-minimem-tool-intercept", MEMORY_TOOL_NAME);
+    c.header("x-eunoia-tool-intercept", MEMORY_TOOL_NAME);
     return c.json({ note: "proxy core not wired (M3): tool + profile injected; upstream forward TODO" });
   });
 

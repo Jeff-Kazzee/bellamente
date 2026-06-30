@@ -1,7 +1,7 @@
 node_modules/
 dist/
-minimem
-minimem.exe
+eunoia
+eunoia.exe
 *.log
 .env
 .env.local

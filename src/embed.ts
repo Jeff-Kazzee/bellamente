@@ -101,7 +101,7 @@ export function makeEmbed(): Embed {
 
 export async function prewarmEmbed(embed: Embed): Promise<void> {
   if (PROVIDER === "openai") return;
-  if (process.env.MINIMEM_SKIP_EMBEDDING_PREWARM === "1" || process.env.MINIMEM_SKIP_EMBEDDING_PREWARM === "true") {
+  if (process.env.EUNOIA_SKIP_EMBEDDING_PREWARM === "1" || process.env.EUNOIA_SKIP_EMBEDDING_PREWARM === "true") {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }

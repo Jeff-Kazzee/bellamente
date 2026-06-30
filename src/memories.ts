@@ -63,7 +63,7 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
         INSERT INTO document (id, content, type, source, status, container_tags, title,
                               chunk_count, token_count, metadata, org_id)
         VALUES (${docId}, ${joined}, 'text', 'api', 'done', ${[containerTag]},
-                ${title}, 0, 0, ${tx.json({ mm_direct_memory: true })}, ${ORG_ID})`;
+                ${title}, 0, 0, ${tx.json({ eu_direct_memory: true })}, ${ORG_ID})`;
       await tx`
         INSERT INTO documents_to_spaces (document_id, space_id)
         VALUES (${docId}, ${spaceId}) ON CONFLICT DO NOTHING`;

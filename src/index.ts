@@ -7,7 +7,7 @@ import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
 
-const API_KEY = process.env.MINIMEM_API_KEY;
+const API_KEY = process.env.EUNOIA_API_KEY;
 const PORT = Number(process.env.PORT ?? 8080);
 
 async function main() {
@@ -24,7 +24,7 @@ async function main() {
 
   app.use("*", async (c, next) => {
     if (c.req.path === "/health") return next();
-    if (!API_KEY) return c.json({ error: "MINIMEM_API_KEY not configured" }, 500);
+    if (!API_KEY) return c.json({ error: "EUNOIA_API_KEY not configured" }, 500);
     const auth = c.req.header("authorization") ?? "";
     if (auth !== "Bearer " + API_KEY) return c.json({ error: "Unauthorized" }, 401);
     await next();
@@ -35,7 +35,7 @@ async function main() {
   app.route("/profile", profileRoutes(ctx));
   app.route("/v1", proxyRoutes(ctx));
 
-  console.log("minimem listening on :" + PORT);
+  console.log("eunoia listening on :" + PORT);
   return { app, port: PORT };
 }
 

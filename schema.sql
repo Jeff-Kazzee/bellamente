@@ -1,4 +1,4 @@
--- minimem schema (pgvector). Applied at boot, idempotent.
+-- eunoia schema (pgvector). Applied at boot, idempotent.
 -- NOTE: vector(N) must equal EMBED_DIM (default 384 for multilingual-e5-small).
 -- Changing the embedding model's dimension requires recreating these tables.
 CREATE EXTENSION IF NOT EXISTS vector;
