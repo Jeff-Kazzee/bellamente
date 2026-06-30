@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS document (
   status document_status NOT NULL DEFAULT 'unknown',
   task_type task_type NOT NULL DEFAULT 'memory',
   container_tags text[],
+  filepath text,
   chunk_count integer NOT NULL DEFAULT 0,
   token_count integer,
   title text,
@@ -101,5 +102,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_entry_embedding_hnsw
   ON memory_entry USING hnsw (memory_embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_chunk_embedding_hnsw
   ON chunk USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_chunk_document ON chunk (document_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_content
   ON chunk USING gin (to_tsvector('english', content));
