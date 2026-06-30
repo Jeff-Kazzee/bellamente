@@ -54,3 +54,15 @@ yields a binary that embeds locally with no network.
 - embed() returns EMBED_DIM-length finite vectors for both task sides.
 - Relevant query/document pairs out-rank irrelevant ones.
 - Dim mismatch is rejected before insert.
+
+## Model size guidance (Qwen3-Embedding)
+| Model | Params | Native dim | q8 download | ~RAM | CPU speed | Use when |
+|-------|--------|-----------|-------------|------|-----------|----------|
+| Qwen3-Embedding-0.6B (DEFAULT) | 0.6B | 1024 | ~600MB | ~1-1.5GB | fast | in-process, single binary, low resources |
+| Qwen3-Embedding-4B | 4B | 2560 | ~4GB | ~4-6GB | slow (wants GPU) | max quality, have RAM/GPU |
+| Qwen3-Embedding-8B | 8B | 4096 | ~8GB | ~8-10GB | very slow on CPU | server-grade only |
+
+Recommendation: keep 0.6B as the default. The 4B is a ~7x jump in params/RAM for a few MTEB
+points and is slow on CPU - not worth it for an in-process single binary. All three are
+instruction-aware and MRL-truncate to EMBED_DIM=768, so switching is just LOCAL_EMBED_MODEL
+(no schema change). Use LOCAL_EMBED_DTYPE=q4 to roughly halve memory again at some quality cost.
