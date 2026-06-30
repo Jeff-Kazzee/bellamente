@@ -1,33 +1,38 @@
 // build.ts - compile the Bun single binary (WASM engine: no native code embedded).
 //
 //  Env knobs:
-//    ENTRY               entrypoint        (default ./src/index.ts)
 //    OUTFILE             output binary     (default ./eunoia)
 //    BUN_COMPILE_TARGET  Bun compile target, e.g. bun-linux-x64 / bun-darwin-arm64 (default: host)
-//    WORKER              worker entrypoint (default ./src/embed-worker.ts; "none" => single-entry)
 //
 //  What it does:
 //   - stubs the unused native `sharp` image dep (we are text-only)
 //   - aliases `onnxruntime-node` -> `onnxruntime-web` so transformers.js (used only for its pure-JS
-//     tokenizer) never drags the NATIVE ONNX backend into the binary. Inference uses onnxruntime-web.
+//     tokenizer) never pulls the NATIVE ONNX backend into the bundle. Inference uses onnxruntime-web.
 //   The ONNX WASM runtime + glue are embedded automatically via type:"file" imports in src/embed-wasm.ts.
 import { resolve } from "node:path";
 
-const ENTRY = resolve(import.meta.dir, process.env.ENTRY ?? "src/index.ts");
+const ENTRY = resolve(import.meta.dir, "src/index.ts");
 // The embed worker MUST be an explicit entrypoint — Bun does not auto-detect new Worker(...) for --compile.
 // Both entrypoints live in src/ so they co-locate in the embedded FS.
-const WORKER = resolve(import.meta.dir, process.env.WORKER && process.env.WORKER !== "none" ? process.env.WORKER : "src/embed-worker.ts");
+const WORKER = resolve(import.meta.dir, "src/embed-worker.ts");
 const OUTFILE = process.env.OUTFILE ?? import.meta.dir + "/eunoia";
 const TARGET = process.env.BUN_COMPILE_TARGET; // undefined -> host target
 
-const compile: Record<string, unknown> = { outfile: OUTFILE };
+const compile: Record<string, unknown> = {
+  outfile: OUTFILE,
+  // SECURITY: a standalone binary must NOT autoload bunfig.toml/.env from the current working directory,
+  // or an attacker who controls the cwd could run arbitrary `preload` code (RCE) or override
+  // DATABASE_URL / EUNOIA_API_KEY / EUNOIA_*_DIR via a planted .env. The binary reads config from real
+  // process environment variables only (docs/10-config.md). These flags do not affect `bun run dev`.
+  autoloadBunfig: false,
+  autoloadDotenv: false,
+};
 if (TARGET) compile.target = TARGET;
-const entrypoints = process.env.WORKER === "none" ? [ENTRY] : [ENTRY, WORKER];
 
 const webEntry = Bun.resolveSync("onnxruntime-web", import.meta.dir);
 
 const r = await Bun.build({
-  entrypoints,
+  entrypoints: [ENTRY, WORKER],
   compile: compile as any,
   plugins: [
     {
@@ -41,10 +46,12 @@ const r = await Bun.build({
       },
     },
     {
-      // Alias the native ONNX backend to the WASM one so it is never bundled. Same onnxruntime-common API.
+      // Keep the NATIVE onnxruntime-node backend out of the bundle (inference runs on onnxruntime-web).
+      // Broad filter so a bare OR subpath import (`onnxruntime-node`, `onnxruntime-node/...`) is aliased
+      // — survives transformers.js switching to a subpath import in a future version.
       name: "alias-ort-node-to-web",
       setup(b) {
-        b.onResolve({ filter: /^onnxruntime-node$/ }, () => ({ path: webEntry }));
+        b.onResolve({ filter: /^onnxruntime-node(\/|$)/ }, () => ({ path: webEntry }));
       },
     },
   ],

@@ -15,8 +15,8 @@
 //   EUNOIA_MODEL_DIR  - (used by embed.ts) point the model cache anywhere directly
 //   DATABASE_URL      - use an external Postgres instead of the embedded DB (dev / advanced)
 import envPaths from "env-paths";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readdirSync, lstatSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 const P = envPaths("Eunoia", { suffix: "" });
 const HOME = process.env.EUNOIA_HOME;
@@ -32,10 +32,12 @@ const ensure = (p: string): string => {
 export const dataDir = (): string => ensure(dataBase);
 export const dbDir = (): string => ensure(join(dataBase, "db")); // embedded Postgres (PGlite) — M2
 export const modelsDir = (): string => ensure(join(cacheBase, "models")); // embedding weights cache
-export const runtimeDir = (): string => ensure(join(cacheBase, "runtime")); // extracted native libs — M2
+export const runtimeDir = (): string => ensure(join(cacheBase, "runtime")); // extracted WASM runtime + glue
 export const logsDir = (): string => ensure(logBase);
 
 // --- Resource-safety helpers: measure on-disk footprint + enforce an optional soft budget. ---
+// Uses lstatSync (does NOT follow symlinks): a symlink cycle can't cause infinite recursion, and a
+// symlink to a large external tree isn't walked or counted as that tree.
 export function dirSizeBytes(dir: string): number {
   let total = 0;
   let entries: string[];
@@ -47,15 +49,22 @@ export function dirSizeBytes(dir: string): number {
   for (const e of entries) {
     const p = join(dir, e);
     try {
-      const st = statSync(p);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) continue; // skip links (count nothing) — avoids cycles + external inflation
       total += st.isDirectory() ? dirSizeBytes(p) : st.size;
     } catch {}
   }
   return total;
 }
 
-/** Total bytes Eunoia is using on disk (data + cache; logs excluded — safely deletable + small). */
-export const diskUsedBytes = (): number => dirSizeBytes(dataBase) + dirSizeBytes(cacheBase);
+/** Total bytes Eunoia is using on disk (data + cache; logs excluded — safely deletable + small).
+ *  Dedupes overlapping roots so EUNOIA_HOME (data===cache===HOME) isn't double-counted. */
+export const diskUsedBytes = (): number => {
+  const roots = [...new Set([resolve(dataBase), resolve(cacheBase)])];
+  // Drop any root nested inside another so a shared parent (e.g. EUNOIA_HOME) is measured once.
+  const top = roots.filter((r) => !roots.some((o) => o !== r && (r === o || r.startsWith(o + "/") || r.startsWith(o + "\\"))));
+  return top.reduce((sum, r) => sum + dirSizeBytes(r), 0);
+};
 
 /** Soft disk cap in MB (0 = unlimited). User sets EUNOIA_DISK_BUDGET_MB. */
 export const diskBudgetMb = (): number => Math.max(0, Number(process.env.EUNOIA_DISK_BUDGET_MB ?? 0));

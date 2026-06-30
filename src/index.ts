@@ -7,9 +7,19 @@ import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
+import { timingSafeEqual } from "node:crypto";
 
 const API_KEY = process.env.EUNOIA_API_KEY;
+const EXPECTED_AUTH = API_KEY ? "Bearer " + API_KEY : null;
 const PORT = Number(process.env.PORT ?? 8080);
+
+// Constant-time bearer comparison (avoids leaking the key via response-timing on byte-by-byte compare).
+function authOk(header: string): boolean {
+  if (!EXPECTED_AUTH) return false;
+  const a = Buffer.from(header);
+  const b = Buffer.from(EXPECTED_AUTH);
+  return a.length === b.length && timingSafeEqual(a, b); // length differs first (cheap, not secret)
+}
 
 // Subcommand: `eunoia doctor` runs the health/resource check and exits (no server).
 if (process.argv[2] === "doctor") {
@@ -44,9 +54,8 @@ async function main() {
 
   app.use("*", async (c, next) => {
     if (c.req.path === "/health") return next();
-    if (!API_KEY) return c.json({ error: "EUNOIA_API_KEY not configured" }, 500);
-    const auth = c.req.header("authorization") ?? "";
-    if (auth !== "Bearer " + API_KEY) return c.json({ error: "Unauthorized" }, 401);
+    if (!EXPECTED_AUTH) return c.json({ error: "EUNOIA_API_KEY not configured" }, 500);
+    if (!authOk(c.req.header("authorization") ?? "")) return c.json({ error: "Unauthorized" }, 401);
     await next();
   });
 

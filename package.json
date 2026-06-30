@@ -15,6 +15,7 @@
     "@huggingface/transformers": "^4.2.0",
     "env-paths": "^4.0.0",
     "hono": "^4.6.0",
+    "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
     "postgres": "^3.4.5"
   },
   "devDependencies": {
@@ -23,7 +24,6 @@
     "bun-types": "^1.1.0"
   },
   "trustedDependencies": [
-    "onnxruntime-node",
     "protobufjs"
   ]
 }

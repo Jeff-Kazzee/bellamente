@@ -1,7 +1,7 @@
 // embed.ts - the embedding singleton + public surface (Spec 02).
-// Local path runs the model in a WORKER thread (src/embed-worker.ts) — off the HTTP event loop and
-// clear of the Bun-standalone main-thread native-ORT segfault. OpenAI dev-fallback stays inline
-// (network call, no native dep). Pure model/profile helpers live in src/embed-common.ts.
+// Local path runs the WASM embedding engine in a WORKER thread (src/embed-worker.ts) — keeping model
+// inference off the HTTP event loop. OpenAI dev-fallback stays inline (network call). Pure model/profile
+// helpers live in src/embed-common.ts.
 import {
   EMBED_DIM,
   PROVIDER,
@@ -35,13 +35,20 @@ async function embedOpenAI(values: string[], taskType: TaskType): Promise<number
 // ---- Local worker client ---------------------------------------------------------------------
 type WorkerOut = { id: number; ok: true; vectors: number[][] } | { id: number; ok: false; error: string };
 
+type Pending = { resolve: (v: number[][]) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
+const EMBED_TIMEOUT_MS = Number(process.env.EUNOIA_EMBED_TIMEOUT_MS ?? 120_000);
+
 function makeLocalWorkerEmbed(): Embed {
   let worker: Worker | null = null;
   let seq = 0;
-  const pending = new Map<number, { resolve: (v: number[][]) => void; reject: (e: Error) => void }>();
+  const pending = new Map<number, Pending>();
 
-  const failAll = (err: Error) => {
-    for (const p of pending.values()) p.reject(err);
+  // Tear down the (hung/crashed) worker and reject every in-flight request so the next call respawns.
+  const recycle = (err: Error) => {
+    const dead = worker;
+    worker = null;
+    if (dead) { try { dead.terminate(); } catch {} }
+    for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err); }
     pending.clear();
   };
 
@@ -55,16 +62,18 @@ function makeLocalWorkerEmbed(): Embed {
       ? new Worker("./embed-worker.ts", { type: "module" })
       : new Worker(new URL("./embed-worker.ts", import.meta.url), { type: "module" });
     w.onmessage = (ev: MessageEvent<WorkerOut>) => {
+      if (w !== worker) return; // ignore late messages from a replaced worker
       const m = ev.data;
       const p = pending.get(m.id);
       if (!p) return;
+      clearTimeout(p.timer);
       pending.delete(m.id);
       if (m.ok) p.resolve(m.vectors);
       else p.reject(new Error(m.error));
     };
     w.onerror = (ev: ErrorEvent) => {
-      failAll(new Error("embed worker crashed: " + (ev?.message ?? "unknown")));
-      worker = null; // allow a fresh worker on the next call
+      if (w !== worker) return; // ignore late errors from a replaced worker
+      recycle(new Error("embed worker crashed: " + (ev?.message ?? "unknown")));
     };
     worker = w;
     return w;
@@ -75,7 +84,11 @@ function makeLocalWorkerEmbed(): Embed {
     const w = ensureWorker();
     const id = ++seq;
     return new Promise<number[][]>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        // A hung worker won't serve anyone — recycle it so the next request gets a fresh one.
+        if (pending.has(id)) recycle(new Error(`embed worker timed out after ${EMBED_TIMEOUT_MS}ms`));
+      }, EMBED_TIMEOUT_MS);
+      pending.set(id, { resolve, reject, timer });
       w.postMessage({ id, type: "embed", values, taskType });
     });
   };

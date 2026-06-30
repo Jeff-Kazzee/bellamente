@@ -11,6 +11,19 @@ export const PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
 export const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? "Xenova/multilingual-e5-small";
 export const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
 
+// Maps the weight dtype to the .onnx filename transformers.js publishes under <model>/onnx/.
+export const ONNX_FILE: Record<string, string> = {
+  fp32: "model.onnx",
+  fp16: "model_fp16.onnx",
+  q8: "model_quantized.onnx",
+  int8: "model_quantized.onnx",
+  q4: "model_q4.onnx",
+};
+/** Path segments (relative to the model cache dir) of the .onnx weights for the current model + dtype. */
+export function onnxRelPath(): string[] {
+  return [...LOCAL_MODEL.split("/"), "onnx", ONNX_FILE[LOCAL_DTYPE] ?? "model_quantized.onnx"];
+}
+
 export type Pooling = "last_token" | "mean" | "cls";
 type ModelProfile = { pooling: Pooling; query: (t: string) => string; doc: (t: string) => string };
 const raw = (t: string) => t;

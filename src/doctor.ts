@@ -1,10 +1,10 @@
 // doctor.ts - `eunoia doctor`: verify the install is ready and surface resource usage.
 // A trust/visibility tool: it checks DB reachability, model presence, and storage footprint vs the
 // optional disk budget. Read-only beyond ensuring the (already-safe) storage dirs exist.
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { storageDirs, dirSizeBytes, diskUsedBytes, diskBudgetMb } from "./paths";
-import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, PROVIDER } from "./embed-common";
+import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, PROVIDER, onnxRelPath } from "./embed-common";
 
 const MB = 1024 * 1024;
 const mb = (bytes: number) => (bytes / MB).toFixed(1) + " MB";
@@ -30,18 +30,21 @@ export async function runDoctor(): Promise<number> {
   console.log("Config:");
   console.log(
     `  provider=${PROVIDER}  model=${LOCAL_MODEL}  dtype=${LOCAL_DTYPE}  dim=${EMBED_DIM}` +
-      `  onnxThreads=${process.env.EUNOIA_ONNX_THREADS ?? 1}  port=${process.env.PORT ?? 8080}`,
+      `  wasmThreads=1  port=${process.env.PORT ?? 8080}`,
   );
   console.log("");
 
   console.log("Checks:");
 
-  // Model present? (local provider only.) Honor EUNOIA_MODEL_DIR exactly like the embed worker.
+  // Model present? (local provider only.) Check the actual .onnx WEIGHTS file (not just the model dir —
+  // the tokenizer files are downloaded separately, so a dir-only check would falsely report "cached").
+  // Honor EUNOIA_MODEL_DIR exactly like the embed engine.
   if (PROVIDER === "local") {
     const modelBase = process.env.EUNOIA_MODEL_DIR ?? dirs.models;
-    const modelPath = join(modelBase, ...LOCAL_MODEL.split("/"));
-    const present = existsSync(modelPath);
-    check(present, `model cached: ${LOCAL_MODEL}`, present ? modelPath : "not yet downloaded (fetched on first run)");
+    const weights = join(modelBase, ...onnxRelPath());
+    let present = false;
+    try { present = statSync(weights).size > 0; } catch {}
+    check(present, `model weights cached: ${LOCAL_MODEL}`, present ? weights : "not yet downloaded (fetched on first run)");
   }
 
   // Disk budget.

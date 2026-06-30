@@ -1,23 +1,24 @@
 // embed-wasm.ts - the local embedding engine, WASM-only (no native code).
 //   - Tokenizer: transformers.js AutoTokenizer (pure JS). build.ts aliases onnxruntime-node ->
 //     onnxruntime-web so importing transformers.js never pulls the native backend into the binary.
-//   - Inference: onnxruntime-web (WASM), single-thread (multi-thread hangs in Bun via Atomics.wait).
+//   - Inference: onnxruntime-web (WASM), SINGLE-thread (multi-thread hangs in Bun via Atomics.wait).
 // The wasm runtime + emscripten glue are embedded (type:"file") and extracted to runtimeDir() at boot.
 import * as ort from "onnxruntime-web";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { statSync } from "node:fs";
-import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, formatForTask, mrl, type TaskType } from "./embed-common";
+import { statSync, renameSync, rmSync } from "node:fs";
+import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, ONNX_FILE, onnxRelPath, profile, formatForTask, truncatePayload, mrl, type TaskType } from "./embed-common";
 import wasmFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm" with { type: "file" };
 import glueFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs" with { type: "file" };
 
-const ONNX_FILE: Record<string, string> = {
-  fp32: "model.onnx",
-  fp16: "model_fp16.onnx",
-  q8: "model_quantized.onnx",
-  int8: "model_quantized.onnx",
-  q4: "model_q4.onnx",
-};
+// Validate the model id up front: it is interpolated into a filesystem path AND a download URL, so reject
+// anything but a plain "<org>/<name>" (no `..`, slashes, or URL/path injection).
+const MODEL_RE = /^[\w.-]+\/[\w.-]+$/;
+if (!MODEL_RE.test(LOCAL_MODEL)) {
+  throw new Error(`invalid LOCAL_EMBED_MODEL '${LOCAL_MODEL}' (expected '<org>/<name>')`);
+}
+
+const MODEL_DOWNLOAD_TIMEOUT_MS = Number(process.env.EUNOIA_MODEL_DOWNLOAD_TIMEOUT_MS ?? 300_000);
 
 let sessionP: Promise<ort.InferenceSession> | null = null;
 let tokP: Promise<any> | null = null;
@@ -27,25 +28,55 @@ async function modelDir(): Promise<string> {
   return process.env.EUNOIA_MODEL_DIR ?? modelsDir();
 }
 
-/** Ensure the .onnx weights exist in the cache; download from HF on first run if missing. */
+/** Ensure the .onnx weights exist in the cache; download from HF on first run if missing.
+ *  Downloads to a temp file and renames on success, so an interrupted download never leaves a
+ *  truncated file that the size>0 reuse check would wrongly accept. */
 async function ensureModelFile(): Promise<string> {
   const onnxName = ONNX_FILE[LOCAL_DTYPE] ?? "model_quantized.onnx";
-  const dest = join(await modelDir(), ...LOCAL_MODEL.split("/"), "onnx", onnxName);
+  const dest = join(await modelDir(), ...onnxRelPath());
   try {
-    if (statSync(dest).size > 0) return dest;
+    if (statSync(dest).size > 0) return dest; // any present file is complete (only full downloads are renamed in)
   } catch {}
+
   const url = `https://huggingface.co/${LOCAL_MODEL}/resolve/main/onnx/${onnxName}`;
+  const tmp = dest + ".part";
   console.log(`[embed] downloading model ${LOCAL_MODEL}/${onnxName} ...`);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`model download failed HTTP ${res.status}: ${url}`);
-  await Bun.write(dest, res); // Bun.write creates parent dirs
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MODEL_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`model download failed HTTP ${res.status}: ${url}`);
+    await Bun.write(tmp, res); // Bun.write creates parent dirs
+    const expected = Number(res.headers.get("content-length") ?? 0);
+    const got = statSync(tmp).size;
+    if (expected > 0 && got !== expected) {
+      throw new Error(`model download truncated: got ${got} of ${expected} bytes`);
+    }
+    renameSync(tmp, dest); // atomic publish — only a complete file ever appears at `dest`
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch {}
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   console.log(`[embed] model cached at ${dest}`);
   return dest;
 }
 
-async function getSession(): Promise<ort.InferenceSession> {
+// Cache the session/tokenizer promises, but clear them on rejection so a transient first-run failure
+// (e.g. a network blip during download) does not poison every later embed until process restart.
+function memo<T>(get: () => Promise<T>, slot: "session" | "tok"): Promise<T> {
+  const p = get();
+  p.catch(() => {
+    if (slot === "session" && sessionP === (p as unknown)) sessionP = null;
+    if (slot === "tok" && tokP === (p as unknown)) tokP = null;
+  });
+  return p;
+}
+
+function getSession(): Promise<ort.InferenceSession> {
   if (sessionP) return sessionP;
-  sessionP = (async () => {
+  sessionP = memo(async () => {
     const { runtimeDir } = await import("./paths");
     const dir = runtimeDir();
     for (const [name, src] of [
@@ -59,29 +90,52 @@ async function getSession(): Promise<ort.InferenceSession> {
       } catch {}
       if (!have) await Bun.write(d, Bun.file(src));
     }
-    ort.env.wasm.numThreads = Math.max(1, Number(process.env.EUNOIA_ONNX_THREADS ?? 1)); // >1 hangs in Bun
+    ort.env.wasm.numThreads = 1; // MUST be 1 — multi-thread WASM hangs in Bun (Atomics.wait on main thread)
     ort.env.wasm.proxy = false;
     ort.env.wasm.wasmPaths = pathToFileURL(dir).href + "/";
     const modelPath = await ensureModelFile();
     return ort.InferenceSession.create(modelPath, { executionProviders: ["wasm"] });
-  })();
+  }, "session");
   return sessionP;
 }
 
-async function getTokenizer(): Promise<any> {
+function getTokenizer(): Promise<any> {
   if (tokP) return tokP;
-  tokP = (async () => {
+  tokP = memo(async () => {
     const { AutoTokenizer, env } = await import("@huggingface/transformers");
     (env as any).cacheDir = await modelDir();
     return AutoTokenizer.from_pretrained(LOCAL_MODEL);
-  })();
+  }, "tok");
   return tokP;
 }
 
-/** Embed a batch of texts -> EMBED_DIM-length L2-normalized vectors (masked mean pool). */
+// Pool one row's token embeddings into a single vector per the model's pooling strategy.
+function poolRow(data: Float32Array, mask: BigInt64Array, n: number, L: number, H: number): number[] {
+  const at = (s: number, h: number) => data[(n * L + s) * H + h]!;
+  if (profile.pooling === "cls") {
+    return Array.from({ length: H }, (_, h) => at(0, h)); // CLS = first token (bge)
+  }
+  if (profile.pooling === "last_token") {
+    let last = 0;
+    for (let s = 0; s < L; s++) if (Number(mask[n * L + s]) !== 0) last = s; // last non-padded (qwen)
+    return Array.from({ length: H }, (_, h) => at(last, h));
+  }
+  // mean = masked mean over real tokens (e5, default)
+  const pooled = new Array(H).fill(0);
+  let count = 0;
+  for (let s = 0; s < L; s++) {
+    if (Number(mask[n * L + s]) === 0) continue;
+    count++;
+    for (let h = 0; h < H; h++) pooled[h] += at(s, h);
+  }
+  for (let h = 0; h < H; h++) pooled[h] /= count || 1;
+  return pooled;
+}
+
+/** Embed a batch of texts -> EMBED_DIM-length L2-normalized vectors (pooling per the model profile). */
 export async function embedWasm(values: string[], taskType: TaskType): Promise<number[][]> {
   if (values.length === 0) return [];
-  const texts = values.map((v) => formatForTask(v, taskType));
+  const texts = truncatePayload(values).map((v) => formatForTask(v, taskType));
   const [tok, session] = await Promise.all([getTokenizer(), getSession()]);
   const enc = await tok(texts, { padding: true, truncation: true, max_length: 512 });
   const [N, L] = enc.input_ids.dims as number[];
@@ -98,21 +152,13 @@ export async function embedWasm(values: string[], taskType: TaskType): Promise<n
 
   const out: any = await session.run(feeds);
   const lhs = out[session.outputNames[0]!];
+  if (lhs.type !== "float32") {
+    throw new Error(`unexpected model output dtype '${lhs.type}'; only float32 last_hidden_state is supported`);
+  }
   const H = lhs.dims[2] as number;
   const data = lhs.data as Float32Array;
 
   const result: number[][] = [];
-  for (let n = 0; n < N!; n++) {
-    const pooled = new Array(H).fill(0);
-    let count = 0;
-    for (let s = 0; s < L!; s++) {
-      if (Number(mask[n * L! + s]) === 0) continue;
-      count++;
-      const base = (n * L! + s) * H;
-      for (let h = 0; h < H; h++) pooled[h] += data[base + h]!;
-    }
-    for (let h = 0; h < H; h++) pooled[h] /= count || 1;
-    result.push(mrl(pooled, EMBED_DIM));
-  }
+  for (let n = 0; n < N!; n++) result.push(mrl(poolRow(data, mask, n, L!, H), EMBED_DIM));
   return result;
 }
