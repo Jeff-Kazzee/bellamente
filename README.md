@@ -1,29 +1,34 @@
 # eunoia
 
-Single-binary personal memory server - a minimal, faithful re-implementation of
-Supermemory's memory subsystem (store facts, recall them semantically, and an
-OpenAI-compatible proxy that auto-injects memory + profile).
+Eunoia is a local-first memory substrate for AI agents. It stores durable facts
+and source documents, recalls them semantically, and gives chat clients a small
+OpenAI-compatible proxy for injecting relevant memory and profile context.
 
-Reverse-engineered from the decompiled bundle in the sibling `sm-decomp` project.
-Clean-room: no decompiled code is copied in; algorithms are ported from documented behavior.
+The product thesis is simple: agents need a well-ordered mind that stays close
+to the user, remains inspectable, and can run without a hosted memory service.
+Eunoia keeps the core small enough to reason about while leaving room for richer
+recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
-- Embeddings: LOCAL + in-process by default (no cloud, no server) - Qwen3-Embedding-0.6B via
-  transformers.js (ONNX), Matryoshka-truncated to 768. OpenAI is an optional dev fallback.
-- M2 single binary (PGlite + bundled model + `bun build --compile`): TODO.
+- Embeddings: LOCAL + worker-threaded by default (no cloud, no model server) -
+  multilingual-e5-small via transformers.js (ONNX), 384 dimensions. OpenAI is an
+  optional dev fallback.
+- M2 standalone binary: in progress. The HTTP server compiles; Windows native ONNX
+  packaging is still being hardened.
 - M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection wired).
 
 ## Architecture (one process)
-One Hono app + two singletons: `sql` (pgvector) and `embed` (768-d, local). Every feature is a
-route module sharing `ctx = { sql, embed }`. The proxy calls search/profile in-process.
+One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
+feature is a route module sharing `ctx = { sql, embed }`. The proxy calls
+search/profile in-process.
 
 ```
 src/index.ts     entrypoint: singletons + embed prewarm + mount routes + bearer auth + listen
 src/db.ts        DB singleton (postgres.js; applies schema.sql at boot). M2 -> PGlite.
-src/embed.ts     embed({ values, taskType }) -> 768-d; local Qwen3 (transformers.js) + OpenAI fallback
+src/embed.ts     embed({ values, taskType }) -> 384-d; local e5 (transformers.js) + OpenAI fallback
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
-src/memories.ts  POST/GET /memories          (port of $V2)
+src/memories.ts  POST/GET /memories
 src/search.ts    POST /search + searchMemories()  (cosine, threshold 0.4, dedup, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
 src/proxy.ts     POST /v1/chat/completions   (tool + profile injection; forward = M3)
@@ -37,7 +42,7 @@ cp .env.example .env          # set EUNOIA_API_KEY (defaults are local-embedding
 bun install
 bun pm trust --all            # allow onnxruntime-node native install
 docker run -d --name eunoia-pg -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=eunoia pgvector/pgvector:pg16
-bun run dev                   # first boot downloads Qwen3-Embedding-0.6B (~600MB q8) and prewarms
+bun run dev                   # first boot downloads the local embedding model and prewarms
 ```
 
 Example:
@@ -52,15 +57,15 @@ curl -s localhost:8080/search -H "authorization: Bearer $EUNOIA_API_KEY" \
 ```
 
 ## Embeddings: local by default
-Qwen3-Embedding-0.6B runs in-process via transformers.js (ONNX) - no cloud API, no model server.
-Instruction-aware (queries get an `Instruct:` prefix; documents raw) and Matryoshka-truncated to
-768 so the schema is unchanged. Swap `LOCAL_EMBED_MODEL` for nomic-embed-text-v2, bge-m3,
-granite-embedding, or Qwen3-Embedding-4B; set `EMBEDDING_PROVIDER=openai` for a cloud fallback.
-See docs/02-embedding.md.
+Eunoia defaults to `Xenova/multilingual-e5-small` via transformers.js (ONNX) in a
+worker thread. It uses query/document prefixes, mean pooling, and L2-normalized
+384-d vectors. Set `LOCAL_EMBED_MODEL` and `EMBED_DIM` together when trying a
+different local model, or set `EMBEDDING_PROVIDER=openai` for a cloud fallback.
+See `docs/02-embedding.md` if you keep local design docs in this checkout.
 
 ## Build single binary (M2)
 ```
-bun run build      # -> ./eunoia  (PGlite + bundled model embedded)
+bun run build      # -> ./eunoia / eunoia.exe
 ./eunoia
 ```
 
@@ -72,7 +77,12 @@ bun run build      # -> ./eunoia  (PGlite + bundled model embedded)
 - POST /v1/chat/completions - OpenAI-compatible proxy
 See docs/PRD.md and docs/08-api.md.
 
-## Provenance / fidelity
-Specs mark "verbatim" (from decompiled source) vs "[DESIGN]" (designed here). The local embedding
-model name was not recoverable from the decompiled bundle, so Qwen3-Embedding-0.6B was selected as
-a current (2026) 768-d, instruction-aware, in-process replacement.
+## Design principles
+- Local-first by default: no hosted memory account, no model server, no cloud
+  embeddings unless you opt in.
+- Inspectable recall: memories and chunks are stored in plain database tables with
+  scores, provenance fields, and room for recall tracing.
+- Small core: one process, one database handle, one embedding path, and route modules
+  that call each other directly.
+- Agent-friendly surface: direct memory writes, semantic search, profile context, and
+  a proxy path that can become transparent memory for OpenAI-compatible clients.

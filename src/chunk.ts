@@ -1,5 +1,5 @@
-// chunk.ts - markdown-aware chunker (Spec 05). Char-based, default ~1075 (matches the
-// decompiled organization_settings.chunk_size), with overlap and heading breadcrumbs.
+// chunk.ts - markdown-aware chunker. Char-based, default ~1075, with overlap and
+// heading breadcrumbs.
 //
 // Design goals (and where it is deliberately strict):
 //  - Keep fenced code blocks and markdown tables ATOMIC when they fit; only force-split

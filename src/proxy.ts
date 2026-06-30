@@ -1,5 +1,4 @@
 // proxy.ts - OpenAI-compatible interceptor. Injects a memory-search tool + user context.
-// (Clean-room: our own tool name, header names, and wording.)
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
@@ -13,7 +12,7 @@ export const MEMORY_TOOL_NAME = "searchMemory";
 export const MIN_QUERIES_PER_CALL = 1;
 export const MAX_QUERIES_PER_CALL = 5;
 
-// Our own tool definition (functionally: one call per turn, batch queries into the array).
+// One call per turn; batch all needed memory lookups into the queries array.
 export function toolDescription() {
   return {
     name: MEMORY_TOOL_NAME,

@@ -1,7 +1,7 @@
 {
   "name": "eunoia",
   "version": "0.0.1",
-  "description": "Single-binary personal memory server (minimal Supermemory-style memory subsystem).",
+  "description": "Local-first memory substrate for agents: facts, documents, recall, and profile context.",
   "type": "module",
   "module": "src/index.ts",
   "scripts": {

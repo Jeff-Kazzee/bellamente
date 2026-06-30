@@ -1,5 +1,5 @@
-// scripts/ragtest.ts - real RAG over the actual docs (sm-decomp/docs + minimem/docs).
-// Chunk -> embed (local Qwen3) -> store in pgvector -> query. No extra LLM. Reports
+// scripts/ragtest.ts - real RAG over selected local markdown docs.
+// Chunk -> embed (local model) -> store in pgvector -> query. No extra LLM. Reports
 // chunk-quality stats + retrieval results so we can be critical about both.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -9,10 +9,9 @@ import { chunkMarkdown } from "../src/chunk";
 import { ingestDocument } from "../src/documents";
 import { searchChunks } from "../src/search";
 
-const DOC_DIRS = [
-  "C:/Users/jeffk/dev/The Little AI Co Projects/sm-decomp/docs",
+const DOC_DIRS = (process.env.EUNOIA_RAGTEST_DIRS?.split(";").filter(Boolean) ?? [
   "C:/Users/jeffk/dev/The Little AI Co Projects/eunoia/docs",
-];
+]);
 const TAG = "docs";
 
 function gatherFiles() {
@@ -72,8 +71,8 @@ const QUERIES = [
   "What embedding vector dimensions are used?",
   "How are memories versioned when they are updated?",
   "What is the default chunk size in characters?",
-  "How does the supermemory tool injection proxy work?",
-  "What pooling method does the Qwen3 embedding model use?",
+  "How does the memory tool injection proxy work?",
+  "What pooling method does the default embedding model use?",
   "How do you create a memory directly bypassing the ingestion workflow?",
   "What pgvector operator is used for cosine distance?",
 ];

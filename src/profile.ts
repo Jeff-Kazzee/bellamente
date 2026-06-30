@@ -1,4 +1,4 @@
-// profile.ts - profile build + injection (Spec 07). Clean-room wording.
+// profile.ts - profile build + prompt injection.
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";

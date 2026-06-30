@@ -1,4 +1,4 @@
-// memories.ts - direct write path (Spec 03, clean-room port of the direct-create algorithm).
+// memories.ts - direct write path for durable user and agent facts.
 import { Hono } from "hono";
 import type { DB } from "./db";
 import { type Embed, isValidVector, embedModelName } from "./embed";
