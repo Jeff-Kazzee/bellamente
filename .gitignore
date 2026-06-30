@@ -8,3 +8,7 @@ minimem.exe
 pgdata/
 *.tmp
 .DS_Store
+
+# Internal/semi-proprietary design docs + reverse-engineering provenance.
+# Kept in the working folder, NOT published to GitHub.
+docs/
