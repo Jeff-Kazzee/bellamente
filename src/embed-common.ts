@@ -2,12 +2,20 @@
 // Imported by BOTH the worker (src/embed-worker.ts, which owns the model) and the OpenAI fallback
 // path (src/embed.ts), so the model-specific prompt/pooling/normalize logic lives in exactly one place.
 import { totalmem } from "node:os";
+import { readEmbedderMeta } from "./paths";
 
 export type TaskType = "QUESTION_ANSWERING" | "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
 export type Embed = (args: { values: string[]; taskType: TaskType }) => Promise<number[][]>;
 
 const MAX_PAYLOAD_CHARS = 36000;
 export const PROVIDER = process.env.EMBEDDING_PROVIDER ?? "local";
+
+// A BLANK env var (e.g. an uncommented "EMBED_DIM=" template line) must behave like UNSET, not like "" —
+// otherwise Number("")=0 / model="" silently break resolution. Treat empty/whitespace as absent.
+const env = (k: string): string | undefined => {
+  const v = process.env[k];
+  return v != null && v.trim() !== "" ? v : undefined;
+};
 
 // --- embedder tier (device-scaled) ---------------------------------------------------------------------
 // DEFAULT = "quality" = multilingual-e5-small (WASM): the best-scoring engine (higher quality + multilingual),
@@ -25,17 +33,32 @@ const MODEL_DIMS: Record<string, number> = {
   "minishlab/potion-base-8M": 256, "minishlab/potion-base-32M": 512,
 };
 function resolveTier(): "quality" | "light" {
-  const forced = process.env.EUNOIA_EMBED_TIER;
+  const forced = env("EUNOIA_EMBED_TIER");
   if (forced === "quality" || forced === "light") return forced;
-  const minRamGb = Number(process.env.EUNOIA_EMBED_MIN_RAM_GB ?? 7);
-  return totalmem() / 2 ** 30 < minRamGb ? "light" : "quality"; // total RAM is stable per machine (no flip-flop)
+  const parsed = Number(env("EUNOIA_EMBED_MIN_RAM_GB") ?? 7);
+  const minRamGb = Number.isFinite(parsed) ? parsed : 7; // junk/blank -> safe default; never fail toward WASM
+  // NOTE: totalmem() is TOTAL HOST RAM — NOT cgroup/container-limit aware. In a memory-capped container set
+  // EUNOIA_EMBED_TIER=light explicitly (Eunoia targets local desktops/laptops, not memory-limited containers).
+  return totalmem() / 2 ** 30 < minRamGb ? "light" : "quality";
 }
 export const EMBED_TIER = resolveTier();
-export const LOCAL_MODEL = process.env.LOCAL_EMBED_MODEL ?? TIERS[EMBED_TIER];
-// EMBED_DIM auto-follows the resolved model (the DB's on-disk vector dim). The Phase-A boot guard catches any
-// mismatch against an existing DB (switching models/tiers on a populated DB requires recreating the tables).
-export const EMBED_DIM = Number(process.env.EMBED_DIM ?? MODEL_DIMS[LOCAL_MODEL] ?? 384);
-export const LOCAL_DTYPE = (process.env.LOCAL_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
+
+// Any explicit pin (model/dim/tier) means the user is in control -> ignore the persisted meta; otherwise the
+// persisted FIRST-BOOT choice STICKS, so a benign RAM/VM/hardware change can't flip the model/dim under an
+// existing populated DB and brick it (paths.ts persists {model,dim} at first DB init).
+const explicitModel = env("LOCAL_EMBED_MODEL");
+const explicitDim = env("EMBED_DIM");
+const meta = explicitModel || explicitDim || env("EUNOIA_EMBED_TIER") || PROVIDER === "openai" ? null : readEmbedderMeta();
+
+export const LOCAL_MODEL = explicitModel ?? meta?.model ?? TIERS[EMBED_TIER];
+// OpenAI's cloud vectors are provider-fixed (384-d, e5-like ~0.4 scale) — don't let the RAM-selected local
+// tier leak its dim/threshold into that path. Otherwise EMBED_DIM auto-follows the resolved model; the
+// Phase-A DB guard catches any mismatch against an existing DB.
+export const EMBED_DIM = Number(explicitDim ?? meta?.dim ?? (PROVIDER === "openai" ? 384 : MODEL_DIMS[LOCAL_MODEL] ?? 384));
+// True when the dim is AUTHORITATIVE (user-pinned or persisted) — the runtime dim guards then trust it
+// (and don't force a re-pin for an intentional matryoshka slice).
+export const EMBED_DIM_EXPLICIT = explicitDim != null || meta != null;
+export const LOCAL_DTYPE = (env("LOCAL_EMBED_DTYPE") ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
 
 // Maps the weight dtype to the .onnx filename transformers.js publishes under <model>/onnx/.
 export const ONNX_FILE: Record<string, string> = {
@@ -94,14 +117,23 @@ export const profile: ModelProfile =
   PROFILES[LOCAL_MODEL] ??
   { pooling: "mean", query: raw, doc: raw, engine: isStaticModel ? "static" : "wasm", threshold: isStaticModel ? 0.1 : 0.4 };
 
-/** Default cosine floor for /search, calibrated to the active model's engine (overridden by SEARCH_THRESHOLD). */
-export const DEFAULT_SIMILARITY_THRESHOLD = profile.threshold;
+/** Default cosine floor for /search, calibrated to the active model's engine (overridden by SEARCH_THRESHOLD).
+ *  OpenAI vectors live on the e5-like ~0.4 scale regardless of the local tier, so pin 0.4 for that provider. */
+export const DEFAULT_SIMILARITY_THRESHOLD = PROVIDER === "openai" ? 0.4 : profile.threshold;
 
 export function embedModelName(): string {
   return PROVIDER === "openai" ? (process.env.OPENAI_EMBED_MODEL ?? "text-embedding-3-small") : LOCAL_MODEL;
 }
 export function isValidVector(v: number[]): boolean {
-  return v.length === EMBED_DIM && v.every((x) => Number.isFinite(x));
+  if (v.length !== EMBED_DIM) return false;
+  let norm = 0;
+  for (const x of v) {
+    if (!Number.isFinite(x)) return false;
+    norm += x * x;
+  }
+  // Reject the ALL-ZERO vector: whitespace/OOV-only content embeds to zeros on the static engine, which
+  // pgvector then makes permanently unrecallable (NaN cosine). A real normalized embedding always has norm>0.
+  return norm > 0;
 }
 export function truncatePayload(values: string[]): string[] {
   const total = values.reduce((n, v) => n + v.length, 0) * 2;

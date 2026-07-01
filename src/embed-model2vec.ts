@@ -8,8 +8,12 @@ import { join } from "node:path";
 import { statSync, renameSync, rmSync } from "node:fs";
 import { EMBED_DIM, LOCAL_MODEL, formatForTask, truncatePayload, type TaskType } from "./embed-common";
 
-const MODEL_RE = /^[\w.-]+\/[\w.-]+$/; // interpolated into a path + URL — reject anything but "<org>/<name>"
-if (!MODEL_RE.test(LOCAL_MODEL)) throw new Error(`invalid LOCAL_EMBED_MODEL '${LOCAL_MODEL}' (expected '<org>/<name>')`);
+// Interpolated into a filesystem path AND a URL — reject anything but "<org>/<name>". [\w.-]+ would match a
+// pure-dot segment (".."/"."), so explicitly reject those to prevent escaping the model cache dir.
+const MODEL_RE = /^[\w.-]+\/[\w.-]+$/;
+if (!MODEL_RE.test(LOCAL_MODEL) || LOCAL_MODEL.split("/").some((p) => p === "." || p === "..")) {
+  throw new Error(`invalid LOCAL_EMBED_MODEL '${LOCAL_MODEL}' (expected '<org>/<name>')`);
+}
 const DL_TIMEOUT_MS = Number(process.env.EUNOIA_MODEL_DOWNLOAD_TIMEOUT_MS ?? 300_000);
 const MAX_TOKENS = 512;
 
@@ -74,6 +78,14 @@ function memo<T>(get: () => Promise<T>, slot: "mat" | "tok"): Promise<T> {
   return p;
 }
 
+// A `keepCache` error is a VALID-but-incompatible file (wrong dim/dtype/shape) — re-downloading won't fix it,
+// so the cache is kept and the config error surfaced. Anything else (truncated/corrupt bytes) drops the cache.
+function keepErr(message: string): Error {
+  const e = new Error(message);
+  (e as { keepCache?: boolean }).keepCache = true;
+  return e;
+}
+
 // Parse the safetensors embedding tensor -> a compact float16 matrix. Kept in its own function so the large
 // intermediates (the F32 copy) are unreachable the moment it returns.
 function parseMatrix(buf: Uint8Array): { mat: Uint16Array; V: number; D: number } {
@@ -83,13 +95,13 @@ function parseMatrix(buf: Uint8Array): { mat: Uint16Array; V: number; D: number 
   const dataStart = 8 + headerLen;
   const names = Object.keys(header).filter((k) => k !== "__metadata__");
   const embName = names.find((k) => Array.isArray(header[k].shape) && header[k].shape.length === 2);
-  if (!embName) throw new Error(`no 2-D embedding tensor in ${LOCAL_MODEL}/model.safetensors`);
+  if (!embName) throw keepErr(`no 2-D embedding tensor in ${LOCAL_MODEL}/model.safetensors`);
   const t = header[embName];
   const [V, D] = t.shape as number[];
   if (D !== EMBED_DIM) {
-    throw new Error(`model ${LOCAL_MODEL} has native dim ${D} but EMBED_DIM=${EMBED_DIM}. Set EMBED_DIM=${D} (and, on an existing DB, recreate the tables — see docs).`);
+    throw keepErr(`model ${LOCAL_MODEL} has native dim ${D} but EMBED_DIM=${EMBED_DIM}. Set EMBED_DIM=${D} (and, on an existing DB, recreate the tables — see docs).`);
   }
-  if (t.dtype !== "F32") throw new Error(`unsupported embedding dtype ${t.dtype} (expected F32)`);
+  if (t.dtype !== "F32") throw keepErr(`unsupported embedding dtype ${t.dtype} (expected F32)`);
   const [s, e] = t.data_offsets as number[];
   // Copy the tensor region into an aligned Float32Array (safetensors offsets aren't guaranteed 4-aligned),
   // then pack to float16.
@@ -102,7 +114,16 @@ function getMatrix(): Promise<Matrix> {
   matP = memo(async () => {
     const [stPath, cfgPath] = await Promise.all([ensureFile("model.safetensors"), ensureFile("config.json").catch(() => "")]);
     let bytes: Uint8Array | null = new Uint8Array(await Bun.file(stPath).arrayBuffer());
-    const { mat, V, D } = parseMatrix(bytes);
+    let parsed: { mat: Uint16Array; V: number; D: number };
+    try {
+      parsed = parseMatrix(bytes);
+    } catch (e: any) {
+      // Drop a structurally-corrupt/truncated cache so the next boot re-downloads; keep a valid-but-
+      // incompatible one (wrong dim/dtype) so the config error isn't masked by a pointless re-download loop.
+      if (!e?.keepCache) { try { rmSync(stPath, { force: true }); } catch {} }
+      throw e;
+    }
+    const { mat, V, D } = parsed;
     bytes = null; // release the whole-file buffer + the F32 copy — only the compact F16 matrix is retained
     void bytes;
     (globalThis as any).Bun?.gc?.(true); // reclaim the load transients now, not at some later GC

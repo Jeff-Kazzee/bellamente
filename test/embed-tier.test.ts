@@ -1,11 +1,14 @@
 // Device-scaled embedder tier selection (the "don't crash old laptops" safety): e5-small on capable
-// machines, static Model2Vec on low-RAM machines, with explicit overrides winning.
+// machines, static Model2Vec on low-RAM machines, with explicit overrides winning + fail-safe env handling.
 import { test, expect } from "bun:test";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
+let seq = 0;
 async function resolve(over: Record<string, string>): Promise<any> {
   const base = { ...process.env } as Record<string, string>;
-  for (const k of ["EUNOIA_EMBED_TIER", "EUNOIA_EMBED_MIN_RAM_GB", "LOCAL_EMBED_MODEL", "EMBED_DIM"]) delete base[k];
+  for (const k of ["EUNOIA_EMBED_TIER", "EUNOIA_EMBED_MIN_RAM_GB", "LOCAL_EMBED_MODEL", "EMBED_DIM", "EMBEDDING_PROVIDER"]) delete base[k];
+  base.EUNOIA_DATA_DIR = join(tmpdir(), `eunoia-tier-test-${process.pid}-${seq++}`); // fresh dir -> no persisted marker
   const p = Bun.spawn([process.execPath, join(import.meta.dir, "embed-tier-probe.ts")], { env: { ...base, ...over }, stdout: "pipe", stderr: "pipe" });
   const out = await new Response(p.stdout).text();
   await p.exited;
@@ -29,4 +32,21 @@ test("EUNOIA_EMBED_TIER=quality overrides a low-RAM machine", async () => {
 test("explicit LOCAL_EMBED_MODEL wins and EMBED_DIM auto-follows", async () => {
   const pinned = await resolve({ LOCAL_EMBED_MODEL: "minishlab/potion-multilingual-128M", EUNOIA_EMBED_MIN_RAM_GB: "0" });
   expect(pinned).toMatchObject({ model: "minishlab/potion-multilingual-128M", dim: 256, engine: "static" });
+});
+
+test("blank/junk env is treated as UNSET (fails SAFE toward the light tier, no dim=0/model='' traps)", async () => {
+  // Empty MIN_RAM_GB must NOT fail-open to quality on a low-RAM box.
+  const blankMin = await resolve({ EUNOIA_EMBED_MIN_RAM_GB: "  " });
+  expect(blankMin.dim).toBeGreaterThan(0); // not the Number('')=0 trap
+  const junkMin = await resolve({ EUNOIA_EMBED_MIN_RAM_GB: "eight" });
+  expect(junkMin.dim).toBeGreaterThan(0);
+  // Blank model/dim must behave like unset, not model='' / dim=0.
+  const blankModel = await resolve({ LOCAL_EMBED_MODEL: "", EMBED_DIM: "", EUNOIA_EMBED_MIN_RAM_GB: "999999" });
+  expect(blankModel).toMatchObject({ model: "minishlab/potion-retrieval-32M", dim: 512 });
+});
+
+test("OpenAI provider keeps its own dim (384) + threshold (0.4), ignoring the device tier", async () => {
+  const openai = await resolve({ EMBEDDING_PROVIDER: "openai", EUNOIA_EMBED_MIN_RAM_GB: "999999" }); // low-RAM would pick 512/0.1
+  expect(openai.dim).toBe(384);
+  expect(openai.threshold).toBe(0.4);
 });
