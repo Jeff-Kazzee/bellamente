@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { existsSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { makePgliteSql } from "../src/pg-shim";
-import { schemaForDim, assertEmbeddingDim, acquireDbLock } from "../src/db";
+import { schemaForDim, assertEmbeddingDim, assertEmbeddingModel, acquireDbLock } from "../src/db";
+import { isValidVector, EMBED_DIM } from "../src/embed-common";
 
 test("schemaForDim rewrites vector(384) -> vector(dim) and rejects out-of-range", () => {
   const s = schemaForDim(256);
@@ -24,6 +25,31 @@ test("assertEmbeddingDim passes on match, throws on a dimension switch", async (
   await assertEmbeddingDim(sql, 8); // matches -> no throw
   await expect(assertEmbeddingDim(sql, 16)).rejects.toThrow(/on-disk embedding dimension is 8 but EMBED_DIM=16/);
   await sql.end();
+});
+
+test("assertEmbeddingModel passes on a fresh DB and on match; throws on a same-dim model swap", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  await assertEmbeddingModel(sql, "model-a"); // fresh DB (no rows) -> never refuses
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, memory_embedding_model)
+            VALUES (${"a".repeat(22)}, ${"org"}, ${"s".repeat(22)}, ${"hi"}, ${"model-a"})`;
+  await assertEmbeddingModel(sql, "model-a"); // matches -> ok
+  await expect(assertEmbeddingModel(sql, "model-b")).rejects.toThrow(/produced by \[model-a\] but the active/);
+  // Already-MIXED store: model-a matches some rows but model-b rows exist -> must still refuse.
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, memory_embedding_model)
+            VALUES (${"b".repeat(22)}, ${"org"}, ${"s".repeat(22)}, ${"yo"}, ${"model-b"})`;
+  await expect(assertEmbeddingModel(sql, "model-a")).rejects.toThrow(/produced by \[model-b\]/);
+  await sql.end();
+});
+
+test("isValidVector rejects an all-zero vector (whitespace/OOV), accepts a real one", () => {
+  const zero = new Array(EMBED_DIM).fill(0);
+  const real = new Array(EMBED_DIM).fill(0);
+  real[0] = 1;
+  expect(isValidVector(zero)).toBe(false);
+  expect(isValidVector(real)).toBe(true);
+  expect(isValidVector(new Array(EMBED_DIM).fill(NaN))).toBe(false);
 });
 
 test("acquireDbLock: writes our pid; reclaims OWN pid; refuses live/dead-foreign/garbage; release guards ownership", async () => {

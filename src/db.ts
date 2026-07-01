@@ -11,8 +11,8 @@ import { totalmem } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { openSync, closeSync, writeSync, readFileSync, rmSync } from "node:fs";
-import { EMBED_DIM } from "./embed-common";
-import { dataDir, dbDir, runtimeDir } from "./paths";
+import { EMBED_DIM, LOCAL_MODEL, PROVIDER, embedModelName } from "./embed-common";
+import { dataDir, dbDir, runtimeDir, writeEmbedderMeta } from "./paths";
 import { makePgliteSql, type DB } from "./pg-shim";
 import schemaSql from "../schema.sql" with { type: "text" };
 
@@ -54,12 +54,35 @@ export async function assertEmbeddingDim(sql: DB, dim: number): Promise<void> {
     const found = await onDisk(table, col);
     if (found !== null && found !== dim) {
       throw new Error(
-        `on-disk embedding dimension is ${found} but EMBED_DIM=${dim}. Switching the embedding model's ` +
-          `dimension is NOT automatic — the existing tables keep their original dimension. To change it, ` +
-          `delete the data dir (${dbDir()}) to recreate the tables at ${dim}-d, or migrate/re-embed explicitly.`,
+        `on-disk embedding dimension is ${found} but EMBED_DIM=${dim}. The existing tables keep their original ` +
+          `dimension. If this appeared after a RAM/hardware/VM change, boot WITHOUT data loss by pinning the ` +
+          `previous embedder (set EUNOIA_EMBED_TIER or LOCAL_EMBED_MODEL back to the model that made the ${found}-d ` +
+          `vectors). Otherwise delete the data dir (${dbDir()}) to recreate at ${dim}-d — that erases all memories.`,
       );
     }
   }
+}
+
+// Guard model IDENTITY, not just dim: e5, bge and Model2Vec produce INCOMPATIBLE vector spaces even at equal
+// dimension (e.g. e5-base/bge-base both 768-d), so a same-dim model swap would silently corrupt recall with no
+// error. The producing model is already persisted per row, so we compare it — no schema change needed.
+export async function assertEmbeddingModel(sql: DB, model: string): Promise<void> {
+  // Fail if ANY stored row was produced by a DIFFERENT model than the active one. Probing for `<> model`
+  // (not "active is absent from a sample") also catches an already-MIXED store, where the active model
+  // matches some rows but others are a foreign space.
+  const guard = (rows: any[]) => {
+    const other = rows.map((r) => r.m as string).filter(Boolean);
+    if (other.length > 0) {
+      throw new Error(
+        `on-disk embeddings were produced by [${other.join(", ")}] but the active embedding model is ${model}. ` +
+          `Different models occupy different vector spaces even at equal dimension, so mixing them silently ` +
+          `corrupts recall. Pin the previous model (LOCAL_EMBED_MODEL / EUNOIA_EMBED_TIER) to keep using this ` +
+          `store, or delete the data dir (${dbDir()}) to re-embed at ${model} — that erases all memories.`,
+      );
+    }
+  };
+  guard(await sql`SELECT DISTINCT memory_embedding_model AS m FROM memory_entry WHERE memory_embedding_model IS NOT NULL AND memory_embedding_model <> ${model} LIMIT 5`);
+  guard(await sql`SELECT DISTINCT embedding_model AS m FROM chunk WHERE embedding_model IS NOT NULL AND embedding_model <> ${model} LIMIT 5`);
 }
 
 // --- single-writer lock -------------------------------------------------------------------------------
@@ -258,7 +281,10 @@ export async function makeDb(): Promise<DB> {
     : await makePglite();
   try {
     await sql.unsafe(schema); // idempotent schema apply at boot (Spec 01)
-    await assertEmbeddingDim(sql, EMBED_DIM); // fail fast on a model/dimension switch (no silent 500-storm)
+    await assertEmbeddingDim(sql, EMBED_DIM); // fail fast on a dimension switch (no silent 500-storm)
+    await assertEmbeddingModel(sql, embedModelName()); // ...and on a same-dim model swap (silent corruption)
+    // Pin the local embedder identity so a benign RAM/VM change can't flip the model/dim under this DB.
+    if (PROVIDER !== "openai") writeEmbedderMeta(LOCAL_MODEL, EMBED_DIM);
     return sql;
   } catch (e) {
     try { await sql.end({}); } catch {}

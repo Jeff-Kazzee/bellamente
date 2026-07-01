@@ -15,7 +15,7 @@
 //   EUNOIA_MODEL_DIR  - (used by embed.ts) point the model cache anywhere directly
 //   DATABASE_URL      - use an external Postgres instead of the embedded DB (dev / advanced)
 import envPaths from "env-paths";
-import { mkdirSync, readdirSync, lstatSync } from "node:fs";
+import { mkdirSync, readdirSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const P = envPaths("Eunoia", { suffix: "" });
@@ -31,6 +31,21 @@ const ensure = (p: string): string => {
 
 export const dataDir = (): string => ensure(dataBase);
 export const dbDir = (): string => ensure(join(dataBase, "db")); // embedded Postgres (PGlite) — M2
+
+// Embedder identity persisted at first DB init. The auto tier is chosen by device RAM, but the on-disk vector
+// dim is fixed once the DB exists — so we PIN the first-boot {model, dim} here and prefer it over re-deriving
+// from RAM on every boot. That stops a benign RAM/VM change from flipping the dim and bricking the store.
+const EMBEDDER_META = "embedder.json";
+export function readEmbedderMeta(): { model: string; dim: number } | null {
+  try {
+    const m = JSON.parse(readFileSync(join(dataBase, EMBEDDER_META), "utf8"));
+    if (typeof m?.model === "string" && Number.isInteger(m?.dim)) return { model: m.model, dim: m.dim };
+  } catch {}
+  return null;
+}
+export function writeEmbedderMeta(model: string, dim: number): void {
+  try { writeFileSync(join(ensure(dataBase), EMBEDDER_META), JSON.stringify({ model, dim })); } catch {}
+}
 export const modelsDir = (): string => ensure(join(cacheBase, "models")); // embedding weights cache
 export const runtimeDir = (): string => ensure(join(cacheBase, "runtime")); // extracted WASM runtime + glue
 export const logsDir = (): string => ensure(logBase);

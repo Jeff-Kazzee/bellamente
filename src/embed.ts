@@ -95,7 +95,19 @@ function makeLocalWorkerEmbed(): Embed {
 }
 
 export function makeEmbed(): Embed {
-  return PROVIDER === "openai" ? ({ values, taskType }) => embedOpenAI(values, taskType) : makeLocalWorkerEmbed();
+  if (PROVIDER === "openai") return ({ values, taskType }) => embedOpenAI(values, taskType);
+  if (profile.engine === "static") return makeStaticEmbed();
+  return makeLocalWorkerEmbed();
+}
+
+// Static Model2Vec ("potion") runs INLINE — pure-TS, low-RAM, no worker and no native/WASM, so it cannot
+// hang (the multi-thread WASM failure) or OOM-crash. Loaded lazily on first use.
+function makeStaticEmbed(): Embed {
+  return async ({ values, taskType }) => {
+    if (values.length === 0) return [];
+    const { embedStatic } = await import("./embed-model2vec");
+    return embedStatic(values, taskType);
+  };
 }
 
 export async function prewarmEmbed(embed: Embed): Promise<void> {
@@ -104,7 +116,8 @@ export async function prewarmEmbed(embed: Embed): Promise<void> {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }
-  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, pooling=${profile.pooling}, dim=${EMBED_DIM}) in worker...`);
+  const where = profile.engine === "static" ? "static/inline" : `wasm/worker dtype=${LOCAL_DTYPE}`;
+  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (${where}, pooling=${profile.pooling}, dim=${EMBED_DIM})...`);
   const t = Date.now();
   await embed({ values: ["warmup"], taskType: "RETRIEVAL_DOCUMENT" });
   console.log(`[embeddings] ready in ${Date.now() - t}ms`);

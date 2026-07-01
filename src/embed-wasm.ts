@@ -7,7 +7,7 @@ import * as ort from "onnxruntime-web";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { statSync, renameSync, rmSync } from "node:fs";
-import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, ONNX_FILE, onnxRelPath, profile, formatForTask, truncatePayload, mrl, type TaskType } from "./embed-common";
+import { EMBED_DIM, EMBED_DIM_EXPLICIT, LOCAL_MODEL, LOCAL_DTYPE, ONNX_FILE, onnxRelPath, profile, formatForTask, truncatePayload, mrl, type TaskType } from "./embed-common";
 import wasmFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm" with { type: "file" };
 import glueFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs" with { type: "file" };
 
@@ -156,6 +156,12 @@ export async function embedWasm(values: string[], taskType: TaskType): Promise<n
     throw new Error(`unexpected model output dtype '${lhs.type}'; only float32 last_hidden_state is supported`);
   }
   const H = lhs.dims[2] as number;
+  // Guard an unlisted, non-matryoshka model whose native dim != EMBED_DIM: without this, mrl() would silently
+  // SLICE it to EMBED_DIM (semantically wrong) and store degraded vectors. Skip when the dim is authoritative
+  // (user-pinned / persisted) so intentional matryoshka truncation still works.
+  if (H !== EMBED_DIM && !EMBED_DIM_EXPLICIT) {
+    throw new Error(`model ${LOCAL_MODEL} has native dim ${H} but EMBED_DIM=${EMBED_DIM}. Set EMBED_DIM=${H} (and, on an existing DB, recreate the tables).`);
+  }
   const data = lhs.data as Float32Array;
 
   const result: number[][] = [];
