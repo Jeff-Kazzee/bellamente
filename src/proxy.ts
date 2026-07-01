@@ -1,5 +1,6 @@
 // proxy.ts - Chat Completions-compatible interceptor. Injects a memory-search tool + user context.
 import { Hono } from "hono";
+import { isIP } from "node:net";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { searchMemories, Q, type MemoryResult } from "./search";
@@ -55,7 +56,7 @@ export function toolDescription() {
   };
 }
 
-function openAiToolDefinition() {
+function chatCompletionsToolDefinition() {
   return { type: "function", function: toolDescription() };
 }
 
@@ -168,10 +169,10 @@ function injectMemoryTool(body: any): boolean {
   const existing = body.tools.findIndex((t: any) => toolName(t) === MEMORY_TOOL_NAME);
   if (existing >= 0) {
     const tool = body.tools[existing];
-    if (tool?.type !== "function" || !tool?.function) body.tools[existing] = openAiToolDefinition();
+    if (tool?.type !== "function" || !tool?.function) body.tools[existing] = chatCompletionsToolDefinition();
     return true;
   }
-  body.tools.unshift(openAiToolDefinition());
+  body.tools.unshift(chatCompletionsToolDefinition());
   return false;
 }
 
@@ -228,8 +229,37 @@ function chatCompletionsUrl(base: string): string {
   return trimmed.endsWith("/chat/completions") ? trimmed : `${trimmed}/chat/completions`;
 }
 
+function normalizedHostname(url: URL): string {
+  return url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function isIpv4Loopback(host: string): boolean {
+  if (isIP(host) !== 4) return false;
+  return Number(host.split(".")[0]) === 127;
+}
+
+function hexWord(word: string): number | null {
+  if (!/^[0-9a-f]{1,4}$/i.test(word)) return null;
+  const value = Number.parseInt(word, 16);
+  return Number.isInteger(value) && value >= 0 && value <= 0xffff ? value : null;
+}
+
+function isIpv4MappedLoopback(host: string): boolean {
+  if (isIP(host) !== 6 || !host.startsWith("::ffff:")) return false;
+  const mapped = host.slice("::ffff:".length);
+  if (isIpv4Loopback(mapped)) return true;
+
+  const words = mapped.split(":");
+  if (words.length !== 2) return false;
+  const highWord = hexWord(words[0]);
+  const lowWord = hexWord(words[1]);
+  if (highWord == null || lowWord == null) return false;
+  return highWord >> 8 === 127;
+}
+
 function isLoopbackUpstream(url: URL): boolean {
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname.endsWith(".localhost");
+  const host = normalizedHostname(url);
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || isIpv4Loopback(host) || isIpv4MappedLoopback(host);
 }
 
 function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
@@ -257,10 +287,6 @@ function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
   const headers = new Headers({ "content-type": "application/json" });
   if (explicitAuth) headers.set("authorization", explicitAuth);
   else if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
-  const org = c.req.header("x-eunoia-upstream-organization") || process.env.OPENAI_ORG_ID;
-  if (org) headers.set("openai-organization", org);
-  const project = c.req.header("x-eunoia-upstream-project") || process.env.OPENAI_PROJECT_ID;
-  if (project) headers.set("openai-project", project);
   return { ok: true, url, headers };
 }
 
@@ -410,19 +436,19 @@ function proxyStreamResponse(
     await onDone({ chunkCount, byteCount, error });
   };
   const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
+    async pull(controller) {
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            chunkCount += 1;
-            byteCount += value.byteLength;
-            controller.enqueue(value);
-          }
+        const { done, value } = await reader.read();
+        if (done) {
+          await finish();
+          controller.close();
+          return;
         }
-        await finish();
-        controller.close();
+        if (value) {
+          chunkCount += 1;
+          byteCount += value.byteLength;
+          controller.enqueue(value);
+        }
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         await finish(error);
@@ -459,7 +485,7 @@ export function proxyRoutes(ctx: Ctx) {
       new URL(c.req.url).searchParams.get("userId") ||
       undefined;
     const containerTag = c.req.header("x-eunoia-container-tag") || body.containerTag || DEFAULT_CONTAINER_TAG;
-    delete body.containerTag; // Eunoia routing hint, not an OpenAI chat-completions parameter.
+    delete body.containerTag; // Eunoia routing hint, not an upstream chat-completions parameter.
     const query = promptText(body);
 
 

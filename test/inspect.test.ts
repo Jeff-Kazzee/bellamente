@@ -171,6 +171,45 @@ test("proxy defaults to a local loopback upstream without auth", async () => {
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("proxy treats 127/8 and mapped loopback upstreams as local without auth", async () => {
+  const cases = [
+    { base: "http://127.0.1.1:11434/v1", expected: "http://127.0.1.1:11434/v1/chat/completions" },
+    { base: "http://[::ffff:127.0.0.1]:11434/v1", expected: "http://[::ffff:7f00:1]:11434/v1/chat/completions" },
+    { base: "http://model.localhost:11434/v1", expected: "http://model.localhost:11434/v1/chat/completions" },
+  ];
+
+  for (const { base, expected } of cases) {
+    const upstreamCalls: string[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      upstreamCalls.push(String(input));
+      expect(String(input)).toBe(expected);
+      expect((init?.headers as Headers).get("authorization")).toBeNull();
+      return new Response(
+        JSON.stringify({ id: "chatcmpl-local-range", choices: [{ message: { role: "assistant", content: "Local answer." } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: base });
+    try {
+      const app = new Hono();
+      app.route("/v1", proxyRoutes(ctx as any));
+      app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+      const res = await app.request("/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Use the local model" }] }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(upstreamCalls).toHaveLength(1);
+    } finally {
+      await ctx.close();
+    }
+  }
+}, TEST_TIMEOUT_MS);
 test("proxy forwards upstream, runs searchMemory tool calls, reinvokes, and records an answered trace", async () => {
   const upstreamCalls: any[] = [];
   const fetcher: typeof fetch = async (input, init) => {
