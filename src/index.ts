@@ -6,6 +6,7 @@ import { memoriesRoutes } from "./memories";
 import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
+import { inspectRoutes } from "./inspect";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
 import { timingSafeEqual } from "node:crypto";
 
@@ -63,6 +64,7 @@ async function main() {
   app.route("/memories", memoriesRoutes(ctx));
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
+  app.route("/inspect", inspectRoutes({ sql }));
   app.route("/v1", proxyRoutes(ctx));
 
   console.log("eunoia listening on :" + PORT);

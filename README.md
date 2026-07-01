@@ -21,6 +21,7 @@ recall traces, document ingestion, and profile-aware workflows.
   `DATABASE_URL` stays as an advanced override for external Postgres.
 - M2 standalone binary: in progress. The HTTP server + embedded DB compile and run.
 - M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection wired).
+- Inspect API: baseline recall/proxy traces are durable and readable via `/inspect`; headers expose trace IDs, result counts, and latency.
 
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
@@ -82,7 +83,8 @@ bun run build      # -> ./eunoia / eunoia.exe
 ## API
 - POST /memories  - create 1..100 memories
 - GET  /memories  - list latest, non-forgotten
-- POST /search    - semantic recall (cosine, per-model similarity floor)
+- POST /search    - semantic recall (cosine, per-model similarity floor, emits trace headers)
+- GET  /inspect   - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
 - POST /v1/chat/completions - OpenAI-compatible proxy
 See docs/PRD.md and docs/08-api.md.

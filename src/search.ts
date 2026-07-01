@@ -2,8 +2,9 @@
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
-import { toVector, ORG_ID } from "./util";
+import { newId, toVector, ORG_ID } from "./util";
 import { DEFAULT_SIMILARITY_THRESHOLD } from "./embed-common";
+import { recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
 
 type Ctx = { sql: DB; embed: Embed };
 
@@ -138,11 +139,54 @@ export function searchRoutes(ctx: Ctx) {
   app.post("/", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as SearchOpts;
     if (!body.q || typeof body.q !== "string") return c.json({ error: "q (string) is required" }, 400);
-    const results = (await Promise.race([
-      search(ctx, body),
-      new Promise<SearchResult[]>((res) => setTimeout(() => res([]), Q.SEARCH_TIMEOUT_MS)),
-    ])) as SearchResult[];
-    return c.json({ results });
+
+    const traceId = newId();
+    const started = Date.now();
+    let timedOut = false;
+    try {
+      const results = (await Promise.race([
+        search(ctx, body),
+        new Promise<SearchResult[]>((res) => setTimeout(() => { timedOut = true; res([]); }, Q.SEARCH_TIMEOUT_MS)),
+      ])) as SearchResult[];
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "search",
+        status: timedOut ? "timeout" : "ok",
+        containerTag: body.containerTag,
+        query: body.q,
+        queries: [body.q],
+        searchMode: body.searchMode ?? "memories",
+        resultCount: results.length,
+        latencyMs,
+        retrieved: traceItemsFromSearchResults(results),
+        request: {
+          limit: body.limit,
+          threshold: body.threshold,
+          keyword: body.keyword,
+          includeForgottenMemories: !!body.include?.forgottenMemories,
+        },
+      });
+      c.header("x-eunoia-trace-id", traceId);
+      c.header("x-eunoia-search-results", String(results.length));
+      c.header("x-eunoia-search-latency-ms", String(latencyMs));
+      return c.json({ results, traceId });
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "search",
+        status: "error",
+        containerTag: body.containerTag,
+        query: body.q,
+        queries: [body.q],
+        searchMode: body.searchMode ?? "memories",
+        latencyMs,
+        metadata: { error: e instanceof Error ? e.message : String(e) },
+      });
+      c.header("x-eunoia-trace-id", traceId);
+      throw e;
+    }
   });
   return app;
 }
