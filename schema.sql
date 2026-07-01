@@ -90,6 +90,25 @@ CREATE TABLE IF NOT EXISTS memory_document_source (
   PRIMARY KEY (memory_entry_id, document_id)
 );
 
+CREATE TABLE IF NOT EXISTS recall_trace (
+  id char(22) PRIMARY KEY,
+  org_id varchar(22) NOT NULL,
+  kind text NOT NULL,
+  status text NOT NULL DEFAULT 'ok',
+  user_id text,
+  container_tag varchar(255),
+  query text,
+  queries json NOT NULL DEFAULT '[]'::json,
+  search_mode text,
+  result_count integer NOT NULL DEFAULT 0,
+  injected_count integer NOT NULL DEFAULT 0,
+  latency_ms integer NOT NULL DEFAULT 0,
+  retrieved json NOT NULL DEFAULT '[]'::json,
+  injected json NOT NULL DEFAULT '[]'::json,
+  request json NOT NULL DEFAULT '{}'::json,
+  metadata json NOT NULL DEFAULT '{}'::json,
+  created_at timestamp NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS chunk (
   id char(22) PRIMARY KEY,
   document_id char(22) NOT NULL,
@@ -108,6 +127,10 @@ CREATE INDEX IF NOT EXISTS idx_memory_entry_embedding_hnsw
 CREATE INDEX IF NOT EXISTS idx_chunk_embedding_hnsw
   ON chunk USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_chunk_document ON chunk (document_id);
+CREATE INDEX IF NOT EXISTS idx_recall_trace_created
+  ON recall_trace (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recall_trace_kind_created
+  ON recall_trace (org_id, kind, created_at DESC);
 -- full-text leg for hybrid search; 'simple' = language-neutral (multilingual default)
 CREATE INDEX IF NOT EXISTS idx_chunk_content
   ON chunk USING gin (to_tsvector('simple', content));
