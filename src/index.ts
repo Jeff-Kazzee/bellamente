@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { makeDb, type DB } from "./db";
 import { makeEmbed, prewarmEmbed, type Embed } from "./embed";
 import { memoriesRoutes } from "./memories";
+import { documentsRoutes } from "./documents";
 import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
@@ -59,6 +60,7 @@ export function buildApp(ctx: { sql: DB; embed: Embed }) {
   });
 
   app.route("/memories", memoriesRoutes(ctx));
+  app.route("/documents", documentsRoutes(ctx)); // ingestion: the populate path for document/hybrid search
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
   app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
