@@ -35,6 +35,19 @@ export function supersedeThreshold(): number {
 
 const toIso = (v: unknown): string => (v instanceof Date ? v.toISOString() : new Date(String(v)).toISOString());
 
+// forget_after used to be enforced only as a read-time filter — expired memories stayed
+// is_forgotten=false forever, invisible in search but "alive" everywhere else. The sweep makes expiry
+// durable state. Called at boot + on an interval from index.ts main().
+export async function sweepExpiredMemories(sql: DB): Promise<number> {
+  const rows = await sql`
+    UPDATE memory_entry
+    SET is_forgotten = true, forget_reason = COALESCE(forget_reason, 'forget_after expired'), updated_at = now()
+    WHERE org_id = ${ORG_ID} AND is_forgotten = false AND forget_after IS NOT NULL AND forget_after <= now()
+    RETURNING id`;
+  if (rows.length) console.log(`[memories] forget_after sweep: forgot ${rows.length} expired memories`);
+  return rows.length;
+}
+
 function normalizeMemory(r: any) {
   return {
     id: r.id,

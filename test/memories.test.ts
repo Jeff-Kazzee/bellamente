@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { memoriesRoutes } from "../src/memories";
+import { memoriesRoutes, sweepExpiredMemories } from "../src/memories";
 import { ORG_ID } from "../src/util";
 import { EMBED_DIM } from "../src/embed-common";
 import type { Embed } from "../src/embed";
@@ -150,6 +150,30 @@ test("PATCH: content change writes a new version; flag change edits in place; st
     expect((await patch(app, `/memories/${newVersionId}`, {})).status).toBe(400);
     expect((await patch(app, "/memories/not-a-valid-id!!", { content: "x" })).status).toBe(400);
     expect((await patch(app, `/memories/${"z".repeat(22)}`, { content: "x" })).status).toBe(404);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("forget_after sweep durably forgets expired memories, leaves live ones alone", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    await post(app, "/memories", {
+      memories: [
+        { content: "John lives in Denver", forgetAfter: past, forgetReason: "temp note" },
+        { content: "John prefers dark mode", forgetAfter: future },
+      ],
+    });
+    const swept = await sweepExpiredMemories(sql);
+    expect(swept).toBe(1);
+    const rows = await sql`SELECT memory, is_forgotten, forget_reason FROM memory_entry ORDER BY memory`;
+    const expired = rows.find((r) => r.memory === "John lives in Denver");
+    const live = rows.find((r) => r.memory === "John prefers dark mode");
+    expect(expired).toMatchObject({ is_forgotten: true, forget_reason: "temp note" }); // existing reason kept
+    expect(live).toMatchObject({ is_forgotten: false });
+    expect(await sweepExpiredMemories(sql)).toBe(0); // idempotent
   } finally {
     await close();
   }

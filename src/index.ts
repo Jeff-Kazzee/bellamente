@@ -2,7 +2,7 @@
 import { Hono } from "hono";
 import { makeDb, type DB } from "./db";
 import { makeEmbed, prewarmEmbed, type Embed } from "./embed";
-import { memoriesRoutes } from "./memories";
+import { memoriesRoutes, sweepExpiredMemories } from "./memories";
 import { documentsRoutes } from "./documents";
 import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
@@ -80,8 +80,22 @@ async function main() {
   const embed = makeEmbed();
   await prewarmEmbed(embed);
   const app = buildApp({ sql, embed });
+  startForgetSweep(sql);
   console.log(`eunoia listening on ${HOST}:${PORT}`);
   return { app, port: PORT };
+}
+
+// forget_after expiry sweep (Spec 00 boot step 5): once at boot, then on an interval. Lives in main()
+// so tests importing buildApp never start a timer. EUNOIA_FORGET_SWEEP_INTERVAL_MS=0 disables.
+function startForgetSweep(sql: DB) {
+  const raw = Number(process.env.EUNOIA_FORGET_SWEEP_INTERVAL_MS ?? 3_600_000);
+  const intervalMs = Number.isFinite(raw) ? Math.round(raw) : 3_600_000;
+  const sweep = () =>
+    sweepExpiredMemories(sql).catch((e) =>
+      console.warn("[memories] forget_after sweep failed:", e instanceof Error ? e.message : String(e)),
+    );
+  void sweep();
+  if (intervalMs > 0) setInterval(sweep, Math.max(intervalMs, 60_000));
 }
 
 // Boot only when this is the server entry: `bun run` (import.meta.main) OR the compiled standalone binary
