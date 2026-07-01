@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { existsSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { makePgliteSql } from "../src/pg-shim";
 import { schemaForDim, assertEmbeddingDim, assertEmbeddingModel, acquireDbLock } from "../src/db";
+import { runMigrations, MIGRATIONS } from "../src/migrations";
 import { isValidVector, EMBED_DIM } from "../src/embed-common";
 
 test("schemaForDim rewrites vector(384) -> vector(dim) and rejects out-of-range", () => {
@@ -93,6 +94,44 @@ test("acquireDbLock: writes our pid; reclaims OWN pid; refuses live/dead-foreign
   releaseOwn();
   release();
   rmSync(lockPath, { force: true });
+});
+
+test("runMigrations: applies once, records in schema_migrations, re-run is a no-op", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8)); // fresh install: schema.sql already at the final shape
+  const first = await runMigrations(sql);
+  expect(first).toEqual(MIGRATIONS.map((m) => m.id)); // idempotent SQL runs clean against final schema
+  const rows = await sql`SELECT id, name FROM schema_migrations ORDER BY id`;
+  expect(rows.map((r) => Number(r.id))).toEqual(MIGRATIONS.map((m) => m.id));
+  const second = await runMigrations(sql);
+  expect(second).toEqual([]); // already recorded -> nothing re-applied
+  await sql.end();
+});
+
+test("runMigrations: brings a legacy install (missing new indexes) up to date", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  // Simulate a pre-migration install: the index exists in today's schema.sql but not on an old DB.
+  await sql.unsafe("DROP INDEX idx_memory_entry_latest");
+  await runMigrations(sql);
+  const idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_latest"}`;
+  expect(idx.length).toBe(1);
+  await sql.end();
+});
+
+test("runMigrations: a failing migration rolls back atomically (no SQL applied, no row recorded)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  const boom = [{ id: 99, name: "boom", up: "CREATE TABLE mig_atomic_probe (id int); SELECT no_such_function_xyz();" }];
+  await expect(runMigrations(sql, boom)).rejects.toThrow();
+  const probe = await sql`SELECT to_regclass(${"mig_atomic_probe"}) AS t`;
+  expect(probe[0]!.t).toBeNull(); // the CREATE TABLE inside the failed migration rolled back
+  const rows = await sql`SELECT id FROM schema_migrations WHERE id = 99`;
+  expect(rows.length).toBe(0); // ...and no completion row was recorded
+  await sql.end();
 });
 
 test("concurrent acquirers never double-acquire while a live holder exists", async () => {

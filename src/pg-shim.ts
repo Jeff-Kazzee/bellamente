@@ -98,6 +98,7 @@ function makeQuery(strings: readonly string[], values: readonly unknown[], pg: Q
 export interface Tx {
   <T = any>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T[]>;
   json: (value: unknown) => JsonW;
+  unsafe: (query: string, params?: unknown[]) => Promise<any[]>; // raw/multi-statement (migrations); porsager tx has this natively
 }
 export interface Sql {
   <T = any>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T[]>;
@@ -128,6 +129,10 @@ export function makePgliteSql(pg: PGlite): Sql {
     pg.transaction(async (pgTx) => {
       const tx: any = (strings: TemplateStringsArray, ...values: unknown[]) => makeQuery(strings, values, pgTx);
       tx.json = jsonWrap;
+      tx.unsafe = (query: string, params?: unknown[]): Promise<any[]> => {
+        if (params && params.length) return pgTx.query(query, params as any[]).then((r) => r.rows);
+        return pgTx.exec(query).then((results) => (results.length ? results[results.length - 1]!.rows : []));
+      };
       return cb(tx as Tx);
     });
 
