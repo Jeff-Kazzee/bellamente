@@ -36,6 +36,10 @@ test("assertEmbeddingModel passes on a fresh DB and on match; throws on a same-d
             VALUES (${"a".repeat(22)}, ${"org"}, ${"s".repeat(22)}, ${"hi"}, ${"model-a"})`;
   await assertEmbeddingModel(sql, "model-a"); // matches -> ok
   await expect(assertEmbeddingModel(sql, "model-b")).rejects.toThrow(/produced by \[model-a\] but the active/);
+  // Already-MIXED store: model-a matches some rows but model-b rows exist -> must still refuse.
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, memory_embedding_model)
+            VALUES (${"b".repeat(22)}, ${"org"}, ${"s".repeat(22)}, ${"yo"}, ${"model-b"})`;
+  await expect(assertEmbeddingModel(sql, "model-a")).rejects.toThrow(/produced by \[model-b\]/);
   await sql.end();
 });
 

@@ -11,9 +11,10 @@ recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
-- Embeddings: LOCAL + worker-threaded by default (no cloud, no model server) -
-  multilingual-e5-small via transformers.js (ONNX), 384 dimensions. OpenAI is an
-  optional dev fallback.
+- Embeddings: LOCAL + in-process, DEVICE-SCALED (no cloud, no model server). Capable machines use
+  multilingual-e5-small (WASM worker, 384-d — best quality + multilingual); low-RAM machines auto-fall-back
+  to a pure-TS static Model2Vec model (potion-retrieval-32M, ~440 MB, never crashes). The chosen model/dim
+  is pinned per data dir. OpenAI is an optional dev fallback.
 - Database: EMBEDDED by default - PGlite (Postgres compiled to WASM) + pgvector, running
   in-process inside the binary. No Docker, no server. Verified in the compiled binary
   (initdb, `<=>` cosine, full-text, transactional writes, persistence across restart).
@@ -30,10 +31,11 @@ search/profile in-process.
 src/index.ts     entrypoint: singletons + embed prewarm + mount routes + bearer auth + listen
 src/db.ts        DB handle: embedded PGlite (Postgres in WASM) by default; DATABASE_URL = external-PG override; applies schema.sql at boot
 src/pg-shim.ts   porsager-compatible `sql` tag over PGlite (so the tuned SQL runs unchanged)
-src/embed.ts     embed({ values, taskType }) -> 384-d; local e5 (transformers.js) + OpenAI fallback
+src/embed.ts     embed({ values, taskType }); device-scaled tier -> WASM worker (e5) or static engine; OpenAI fallback
+src/embed-model2vec.ts  pure-TS static Model2Vec ("potion") engine for the low-RAM tier (no worker, never crashes)
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  POST/GET /memories
-src/search.ts    POST /search + searchMemories()  (cosine, threshold 0.4, dedup, cap 25)
+src/search.ts    POST /search + searchMemories()  (cosine, per-model threshold, dedup, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
 src/proxy.ts     POST /v1/chat/completions   (tool + profile injection; forward = M3)
 schema.sql       full pgvector DDL (applied at boot)
@@ -58,12 +60,18 @@ curl -s localhost:8080/search -H "authorization: Bearer $EUNOIA_API_KEY" \
   -d '{"q":"what theme does John like","containerTag":"user_123"}'
 ```
 
-## Embeddings: local by default
-Eunoia defaults to `Xenova/multilingual-e5-small` via transformers.js (ONNX) in a
-worker thread. It uses query/document prefixes, mean pooling, and L2-normalized
-384-d vectors. Set `LOCAL_EMBED_MODEL` and `EMBED_DIM` together when trying a
-different local model, or set `EMBEDDING_PROVIDER=openai` for a cloud fallback.
-See `docs/02-embedding.md` if you keep local design docs in this checkout.
+## Embeddings: local + device-scaled
+Eunoia picks the embedder by device RAM so it "just works" without crashing low-end machines:
+- **quality** (default, capable machines): `Xenova/multilingual-e5-small` (WASM worker, 384-d) — best
+  quality + multilingual; query/passage prefixes, mean pooling, L2-normalized.
+- **light** (auto on < ~7 GB RAM): `minishlab/potion-retrieval-32M` — a pure-TS static Model2Vec model
+  (~440 MB, no worker, never OOM-crashes). The threaded-WASM OOM is uncatchable, so the tier is chosen
+  proactively by total RAM.
+
+Override with `EUNOIA_EMBED_TIER=quality|light`, `EUNOIA_EMBED_MIN_RAM_GB`, or pin `LOCAL_EMBED_MODEL`
+(`EMBED_DIM` auto-follows a known model). The chosen `{model, dim}` is pinned at first DB init
+(`<data>/embedder.json`), so a later RAM/hardware change won't flip it and break your stored memories.
+`EMBEDDING_PROVIDER=openai` is an optional cloud fallback. See `docs/02-embedding.md` for local design docs.
 
 ## Build single binary (M2)
 ```
@@ -74,7 +82,7 @@ bun run build      # -> ./eunoia / eunoia.exe
 ## API
 - POST /memories  - create 1..100 memories
 - GET  /memories  - list latest, non-forgotten
-- POST /search    - semantic recall (cosine, threshold 0.4)
+- POST /search    - semantic recall (cosine, per-model similarity floor)
 - GET/PUT /profile
 - POST /v1/chat/completions - OpenAI-compatible proxy
 See docs/PRD.md and docs/08-api.md.

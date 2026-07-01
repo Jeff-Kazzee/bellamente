@@ -67,19 +67,22 @@ export async function assertEmbeddingDim(sql: DB, dim: number): Promise<void> {
 // dimension (e.g. e5-base/bge-base both 768-d), so a same-dim model swap would silently corrupt recall with no
 // error. The producing model is already persisted per row, so we compare it — no schema change needed.
 export async function assertEmbeddingModel(sql: DB, model: string): Promise<void> {
+  // Fail if ANY stored row was produced by a DIFFERENT model than the active one. Probing for `<> model`
+  // (not "active is absent from a sample") also catches an already-MIXED store, where the active model
+  // matches some rows but others are a foreign space.
   const guard = (rows: any[]) => {
-    const stored = rows.map((r) => r.m as string).filter(Boolean);
-    if (stored.length > 0 && !stored.includes(model)) {
+    const other = rows.map((r) => r.m as string).filter(Boolean);
+    if (other.length > 0) {
       throw new Error(
-        `on-disk embeddings were produced by [${stored.join(", ")}] but the active embedding model is ${model}. ` +
+        `on-disk embeddings were produced by [${other.join(", ")}] but the active embedding model is ${model}. ` +
           `Different models occupy different vector spaces even at equal dimension, so mixing them silently ` +
           `corrupts recall. Pin the previous model (LOCAL_EMBED_MODEL / EUNOIA_EMBED_TIER) to keep using this ` +
           `store, or delete the data dir (${dbDir()}) to re-embed at ${model} — that erases all memories.`,
       );
     }
   };
-  guard(await sql`SELECT DISTINCT memory_embedding_model AS m FROM memory_entry WHERE memory_embedding_model IS NOT NULL LIMIT 5`);
-  guard(await sql`SELECT DISTINCT embedding_model AS m FROM chunk WHERE embedding_model IS NOT NULL LIMIT 5`);
+  guard(await sql`SELECT DISTINCT memory_embedding_model AS m FROM memory_entry WHERE memory_embedding_model IS NOT NULL AND memory_embedding_model <> ${model} LIMIT 5`);
+  guard(await sql`SELECT DISTINCT embedding_model AS m FROM chunk WHERE embedding_model IS NOT NULL AND embedding_model <> ${model} LIMIT 5`);
 }
 
 // --- single-writer lock -------------------------------------------------------------------------------

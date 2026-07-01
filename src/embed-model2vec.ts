@@ -35,7 +35,10 @@ async function ensureFile(rel: string): Promise<string> {
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) throw new Error(`model download failed HTTP ${res.status}: ${url}`);
     await Bun.write(tmp, res); // creates parent dirs
-    renameSync(tmp, dest); // atomic publish — only a complete file ever appears at `dest`
+    const expected = Number(res.headers.get("content-length") ?? 0);
+    const got = statSync(tmp).size;
+    if (expected > 0 && got !== expected) throw new Error(`model download truncated: got ${got} of ${expected} bytes: ${url}`);
+    renameSync(tmp, dest); // atomic publish — only a complete, length-verified file ever appears at `dest`
   } catch (e) {
     try { rmSync(tmp, { force: true }); } catch {}
     throw e;
