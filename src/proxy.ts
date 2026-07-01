@@ -130,12 +130,12 @@ function contentText(content: unknown): string {
   return "";
 }
 
+// The proxy speaks Chat Completions ONLY. It used to half-parse Anthropic-Messages shapes here
+// (top-level body.system, content blocks with type:"tool_result") that the tool-call round trip could
+// never actually serve — dead code that misled readers into thinking Anthropic was supported. Removed;
+// Anthropic support is a BACKLOG decision (docs/BACKLOG.md P2.2), not an accident of parsing.
 function promptText(body: any): string | undefined {
   const parts: string[] = [];
-  if (typeof body.system === "string") parts.push("system: " + body.system);
-  else if (body.system && typeof body.system === "object" && "content" in body.system) {
-    parts.push("system: " + contentText((body.system as any).content));
-  }
   for (const m of body.messages ?? []) {
     const text = contentText(m?.content);
     if (text) parts.push(`${m?.role ?? "message"}: ${text}`);
@@ -148,16 +148,13 @@ function requestSummary(body: any) {
     model: typeof body.model === "string" ? body.model : null,
     messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
     toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
-    hasSystem: body.system != null,
+    hasSystem: (body.messages ?? []).some((m: any) => m?.role === "system"),
     stream: body.stream === true,
   };
 }
 
 function hasToolResults(body: any): boolean {
-  return (body.messages ?? []).some((m: any) => {
-    if (m?.role === "tool") return true;
-    return Array.isArray(m?.content) && m.content.some((p: any) => p?.type === "tool_result");
-  });
+  return (body.messages ?? []).some((m: any) => m?.role === "tool");
 }
 
 function toolName(tool: any): string | undefined {
