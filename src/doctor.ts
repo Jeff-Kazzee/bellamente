@@ -21,14 +21,17 @@ function redactUrl(u: string): string {
   }
 }
 
-// Is an Eunoia server already running (and thus holding the embedded DB's single-writer lock)?
+// Is an EUNOIA server already running (and thus holding the embedded DB's single-writer lock)? Requires the
+// `service: "eunoia"` tag so an unrelated process answering 200 on the same port can't produce a false OK.
 async function serverIsUp(port: number): Promise<boolean> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1000);
     const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: ctrl.signal });
     clearTimeout(t);
-    return res.ok;
+    if (!res.ok) return false;
+    const body = (await res.json().catch(() => ({}))) as { service?: string };
+    return body?.service === "eunoia";
   } catch {
     return false;
   }
@@ -100,15 +103,27 @@ export async function runDoctor(): Promise<number> {
         await sql.end({ timeout: 1 });
       }
     } else if (await serverIsUp(Number(process.env.PORT ?? 8080))) {
-      check(true, dbLabel, `in use by the running server on :${process.env.PORT ?? 8080}`);
+      // A running server holds the single-writer lock; doctor genuinely cannot probe the DB while it's held.
+      // Report informationally (neither a pass nor a false OK) — the running server already verified it at boot.
+      console.log(`  -- embedded database in use by a running Eunoia server on :${process.env.PORT ?? 8080} (not probed while locked)`);
     } else {
-      const { makeDb } = await import("./db");
-      const sql = await makeDb();
+      const { makeDb, DB_LOCK_ERR } = await import("./db");
       try {
-        const ext = await sql`SELECT extname FROM pg_extension WHERE extname = 'vector'`;
-        check(ext.length > 0, dbLabel, ext.length > 0 ? "PGlite at " + dirs.db : "pgvector not installed");
-      } finally {
-        await sql.end({ timeout: 1 });
+        const sql = await makeDb();
+        try {
+          const ext = await sql`SELECT extname FROM pg_extension WHERE extname = 'vector'`;
+          check(ext.length > 0, dbLabel, ext.length > 0 ? "PGlite at " + dirs.db : "pgvector not installed");
+        } finally {
+          await sql.end({ timeout: 1 });
+        }
+      } catch (e: any) {
+        // Another Eunoia process grabbed the lock between the /health probe and now — that's healthy, not a
+        // problem; report it informationally rather than as a failed check.
+        if (e?.code === DB_LOCK_ERR) {
+          console.log(`  -- embedded database in use by another Eunoia process (not probed): ${e.message}`);
+        } else {
+          throw e;
+        }
       }
     }
   } catch (e: any) {

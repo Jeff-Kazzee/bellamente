@@ -65,11 +65,27 @@ export async function assertEmbeddingDim(sql: DB, dim: number): Promise<void> {
 // --- single-writer lock -------------------------------------------------------------------------------
 // PGlite has NO cross-process lock: two processes opening the same on-disk data dir run two independent
 // Postgres engines with separate buffer pools, silently diverge, and lose committed rows (or corrupt the
-// store) — a direct durability-pillar violation. Guard the embedded path with a PID-liveness lockfile kept
-// OUTSIDE the PGDATA dir (initdb requires an EMPTY data dir). A live holder => refuse loudly; a dead/stale
-// holder (crash) => reclaim. Fails SAFE: worst case is a false refusal that the user clears by deleting the
-// named file — never silent corruption. (Dev `bun run --hot` re-opens in-process; that pre-existing caveat
-// is unrelated — the real threat this closes is a SECOND process on the same dir.)
+// store) — a direct durability-pillar violation. Guard the embedded path with a PID lockfile kept OUTSIDE
+// the PGDATA dir (initdb requires an EMPTY data dir).
+//
+// Reclaim rule — must be RACE-FREE (a fail-open reclaim re-introduces the exact double-writer this prevents):
+//   • our OWN pid in the file      -> reclaim (a dev hot-reload re-open; a pid maps to one live process, so
+//                                     clearing it is race-free).
+//   • ANY foreign pid, live OR dead -> REFUSE. Auto-reclaiming a foreign *dead* pid is a delete-then-recreate
+//                                     TOCTOU: two concurrent starters both read the stale pid and each blows
+//                                     away the other's freshly written lock -> both "acquire". So never touch
+//                                     a foreign lock; the user deletes it (the message says so).
+//   • empty/garbage (a peer mid-create) -> REFUSE.
+// Fails SAFE: worst case is a false refusal cleared by deleting the named file — never silent corruption.
+// Graceful shutdowns (SIGINT/SIGTERM/SIGHUP) release the lock via handlers, so a manual delete is only ever
+// needed after a true HARD crash (SIGKILL / power loss) that left a stale lock behind.
+export const DB_LOCK_ERR = "EUNOIA_DB_LOCKED";
+function lockedError(message: string): Error {
+  const e = new Error(message);
+  (e as any).code = DB_LOCK_ERR;
+  return e;
+}
+
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -79,53 +95,75 @@ function isAlive(pid: number): boolean {
   }
 }
 
+function registerRelease(lockPath: string): () => void {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    // Delete only if the file still holds OUR pid (never unlink a lock another process now owns).
+    try {
+      if (readFileSync(lockPath, "utf8").trim() === String(process.pid)) rmSync(lockPath, { force: true });
+    } catch {}
+  };
+  process.once("exit", release);
+  // Node's 'exit' does NOT fire on a signal with no handler, so a bare Ctrl-C / `kill` would otherwise leave
+  // a stale lock. Release then exit on the common termination signals (Eunoia owns this process).
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(sig, () => { release(); process.exit(0); });
+  }
+  return release;
+}
+
 export function acquireDbLock(lockPath: string): () => void {
   const claim = (): boolean => {
+    let fd: number;
     try {
-      const fd = openSync(lockPath, "wx"); // atomic O_CREAT|O_EXCL
-      try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
-      return true;
+      fd = openSync(lockPath, "wx"); // atomic O_CREAT|O_EXCL — only one racer can create the file
     } catch (e: any) {
-      if (e?.code !== "EEXIST") throw e;
-      return false;
+      if (e?.code === "EEXIST") return false;
+      throw e;
     }
+    let wrote = false;
+    try {
+      writeSync(fd, String(process.pid));
+      wrote = true;
+    } finally {
+      closeSync(fd);
+      // A failed pid write (e.g. ENOSPC) would leave an empty self-owned orphan that trips the fail-safe
+      // refusal on the next boot — remove it so a transient disk error doesn't wedge startup.
+      if (!wrote) { try { rmSync(lockPath, { force: true }); } catch {} }
+    }
+    return true;
   };
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (claim()) {
-      const release = () => {
-        try {
-          if (readFileSync(lockPath, "utf8").trim() === String(process.pid)) rmSync(lockPath, { force: true });
-        } catch {}
-      };
-      process.once("exit", release);
-      return release;
-    }
-    // Decide whether the existing lock is reclaimable — FAIL SAFE on anything ambiguous (a fail-open
-    // reclaim here would re-introduce the exact double-writer this lock exists to prevent).
+    if (claim()) return registerRelease(lockPath);
     let raw = "";
     try { raw = readFileSync(lockPath, "utf8").trim(); } catch {}
     const holder = Number(raw);
     const parseable = raw !== "" && Number.isInteger(holder) && holder > 0;
-    if (parseable && holder !== process.pid && isAlive(holder)) {
-      throw new Error(
-        `the embedded database is already open by another Eunoia process (pid ${holder}); refusing to open ` +
-          `a second writer (two engines on one data dir corrupt the store). Stop that process first, or set ` +
-          `DATABASE_URL to use external Postgres. If no such process is running, delete ${lockPath}.`,
+    if (parseable && holder === process.pid) {
+      // Our own stale entry (a dev hot reload) — race-free to clear, then retry the claim.
+      try { rmSync(lockPath, { force: true }); } catch {}
+      continue;
+    }
+    if (parseable) {
+      throw lockedError(
+        isAlive(holder)
+          ? `the embedded database is already open by another Eunoia process (pid ${holder}); refusing to ` +
+              `open a second writer (two engines on one data dir corrupt the store). Stop that process first, ` +
+              `or set DATABASE_URL to use external Postgres. If no such process is running, delete ${lockPath}.`
+          : `the embedded database lock at ${lockPath} is stale (pid ${holder} is not running — likely a prior ` +
+              `hard crash). Not auto-reclaiming it, to avoid a double-writer race. If no Eunoia process is ` +
+              `running, delete ${lockPath} and start again.`,
       );
     }
-    if (!parseable) {
-      // Empty/garbage lockfile — most likely a PEER that just created the file (the window between its
-      // openSync and writeSync). Reclaiming would let two writers share one data dir, so refuse instead.
-      // A genuinely stale empty file (a crash inside that microsecond window) is cleared by deleting it.
-      throw new Error(
-        `the embedded database lock at ${lockPath} appears held by another starting process; refusing to ` +
-          `open a second writer. If no Eunoia process is running, delete ${lockPath}.`,
-      );
-    }
-    // Reclaimable: our own pid (a dev hot reload) or a parseable, confirmed-dead pid (a crash). Clear + retry.
-    try { rmSync(lockPath, { force: true }); } catch {}
+    // Empty/garbage — a peer mid-create (between its openSync and writeSync), or a crash in that window.
+    throw lockedError(
+      `the embedded database lock at ${lockPath} appears held by another starting process; refusing to open ` +
+        `a second writer. If no Eunoia process is running, delete ${lockPath}.`,
+    );
   }
-  throw new Error(`could not acquire the embedded database lock at ${lockPath}`);
+  throw lockedError(`could not acquire the embedded database lock at ${lockPath}`);
 }
 
 // Bun standalone binary detection (same check embed.ts uses): import.meta.url lives in the bunfs.

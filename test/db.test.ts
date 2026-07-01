@@ -5,7 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { existsSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { makePgliteSql } from "../src/pg-shim";
 import { schemaForDim, assertEmbeddingDim, acquireDbLock } from "../src/db";
 
@@ -26,32 +26,59 @@ test("assertEmbeddingDim passes on match, throws on a dimension switch", async (
   await sql.end();
 });
 
-test("acquireDbLock: fresh acquire, live-holder refusal, stale reclaim", async () => {
+test("acquireDbLock: writes our pid; reclaims OWN pid; refuses live/dead-foreign/garbage; release guards ownership", async () => {
   const lockPath = join(tmpdir(), `eunoia-lock-test-${process.pid}.lock`);
   rmSync(lockPath, { force: true });
 
+  // fresh acquire -> the file actually holds OUR pid (not just "exists")
   const release = acquireDbLock(lockPath);
-  expect(existsSync(lockPath)).toBe(true);
+  expect(readFileSync(lockPath, "utf8").trim()).toBe(String(process.pid));
 
-  // A live, DIFFERENT holder -> refuse loudly.
+  // our OWN stale pid (a dev hot reload) -> reclaimed in-process (race-free), still ours
+  writeFileSync(lockPath, String(process.pid));
+  const releaseOwn = acquireDbLock(lockPath);
+  expect(readFileSync(lockPath, "utf8").trim()).toBe(String(process.pid));
+
+  // a LIVE, different holder -> refuse
   const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"]);
   writeFileSync(lockPath, String(child.pid));
   expect(() => acquireDbLock(lockPath)).toThrow(/already open by another Eunoia process/);
+  child.kill();
+  await child.exited;
 
-  // An empty/garbage lockfile (a peer mid-openSync-before-writeSync) -> refuse, do NOT reclaim (fail-safe).
+  // a DEAD, different holder -> REFUSE (no cross-process reclaim; that would be a double-writer TOCTOU)
+  writeFileSync(lockPath, "2147483647"); // a pid that is not running
+  expect(() => acquireDbLock(lockPath)).toThrow(/Not auto-reclaiming/);
+
+  // empty / garbage -> refuse (fail-safe)
   writeFileSync(lockPath, "");
   expect(() => acquireDbLock(lockPath)).toThrow(/appears held by another starting process/);
   writeFileSync(lockPath, "not-a-pid");
   expect(() => acquireDbLock(lockPath)).toThrow(/appears held by another starting process/);
 
-  // A stale (dead-pid) holder -> reclaim and acquire.
-  child.kill();
-  await child.exited;
-  writeFileSync(lockPath, String(child.pid)); // now a dead pid
-  const release2 = acquireDbLock(lockPath);
+  // release() only unlinks a lock still holding OUR pid — never one another process now owns
+  writeFileSync(lockPath, String(process.pid));
+  const rel = acquireDbLock(lockPath);
+  writeFileSync(lockPath, "424242"); // someone else "took over" the file
+  rel();
   expect(existsSync(lockPath)).toBe(true);
+  expect(readFileSync(lockPath, "utf8").trim()).toBe("424242");
 
-  release2();
+  releaseOwn();
   release();
+  rmSync(lockPath, { force: true });
+});
+
+test("concurrent acquirers never double-acquire while a live holder exists", async () => {
+  const lockPath = join(tmpdir(), `eunoia-lock-conc-${process.pid}.lock`);
+  rmSync(lockPath, { force: true });
+  const held = acquireDbLock(lockPath); // this test process is a LIVE holder
+  const childPath = join(import.meta.dir, "lock-child.ts");
+  const kids = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, childPath, lockPath], { stdout: "pipe", stderr: "pipe" }));
+  const outs = await Promise.all(kids.map((k) => new Response(k.stdout).text()));
+  await Promise.all(kids.map((k) => k.exited));
+  expect(outs.filter((o) => o.includes("ACQUIRED")).length).toBe(0); // a live holder blocks every other process
+  expect(outs.filter((o) => o.includes("REFUSED")).length).toBe(4);
+  held();
   rmSync(lockPath, { force: true });
 });
