@@ -49,8 +49,9 @@ async function main() {
 
   const app = new Hono();
 
-  // health is public; everything else requires the bearer key.
-  app.get("/health", (c) => c.json({ ok: true }));
+  // health is public; everything else requires the bearer key. The `service` tag lets `eunoia doctor`
+  // confirm the responder is actually Eunoia (not some unrelated process on the same port).
+  app.get("/health", (c) => c.json({ ok: true, service: "eunoia" }));
 
   app.use("*", async (c, next) => {
     if (c.req.path === "/health") return next();

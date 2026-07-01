@@ -62,12 +62,16 @@ export function dirSizeBytes(dir: string): number {
 export const diskUsedBytes = (): number => {
   const roots = [...new Set([resolve(dataBase), resolve(cacheBase)])];
   // Drop any root nested inside another so a shared parent (e.g. EUNOIA_HOME) is measured once.
-  const top = roots.filter((r) => !roots.some((o) => o !== r && (r === o || r.startsWith(o + "/") || r.startsWith(o + "\\"))));
+  const top = roots.filter((r) => !roots.some((o) => o !== r && (r.startsWith(o + "/") || r.startsWith(o + "\\"))));
   return top.reduce((sum, r) => sum + dirSizeBytes(r), 0);
 };
 
-/** Soft disk cap in MB (0 = unlimited). User sets EUNOIA_DISK_BUDGET_MB. */
-export const diskBudgetMb = (): number => Math.max(0, Number(process.env.EUNOIA_DISK_BUDGET_MB ?? 0));
+/** Soft disk cap in MB (0 = unlimited). User sets EUNOIA_DISK_BUDGET_MB. A non-numeric value (e.g. "500MB")
+ *  coerces to 0 (unlimited) rather than NaN, which would silently disable the cap in the > 0 consumers. */
+export const diskBudgetMb = (): number => {
+  const n = Number(process.env.EUNOIA_DISK_BUDGET_MB ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
 
 /** Resolved storage locations, for `eunoia doctor` and diagnostics. */
 export const storageDirs = () => ({
