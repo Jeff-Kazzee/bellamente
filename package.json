@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@electric-sql/pglite": "0.4.6",
     "@huggingface/transformers": "^4.2.0",
     "env-paths": "^4.0.0",
     "hono": "^4.6.0",
