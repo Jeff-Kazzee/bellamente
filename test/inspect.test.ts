@@ -5,7 +5,7 @@ import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
 import { searchRoutes } from "../src/search";
-import { inspectRoutes } from "../src/inspect";
+import { inspectRoutes, recordTrace } from "../src/inspect";
 import { proxyRoutes } from "../src/proxy";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
@@ -638,6 +638,22 @@ test("proxy degrades to empty memory results when local memory search fails", as
       toolSearchTimedOut: false,
     });
   } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("trace pruning is batched (every 25 writes) and bounds the table to the retention", async () => {
+  process.env.EUNOIA_TRACE_RETENTION = "5";
+  const ctx = await makeCtx();
+  try {
+    const count = async () =>
+      Number((await ctx.sql`SELECT count(*)::int AS n FROM recall_trace`)[0]!.n);
+    for (let i = 0; i < 24; i++) await recordTrace(ctx.sql, { kind: "search", query: `q${i}` });
+    expect(await count()).toBe(24); // no prune yet — pruning no longer runs on every write
+    await recordTrace(ctx.sql, { kind: "search", query: "q24" }); // 25th write triggers the prune
+    expect(await count()).toBe(5); // ...and bounds the table to the retention
+  } finally {
+    delete process.env.EUNOIA_TRACE_RETENTION;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
