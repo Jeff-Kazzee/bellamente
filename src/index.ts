@@ -15,6 +15,10 @@ import { timingSafeEqual } from "node:crypto";
 const API_KEY = process.env.EUNOIA_API_KEY;
 const EXPECTED_AUTH = API_KEY ? "Bearer " + API_KEY : null;
 const PORT = Number(process.env.PORT ?? 8080);
+// Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
+// conversation text — Bun's default 0.0.0.0 would expose it to the whole LAN behind only the bearer key.
+// Opt into wider exposure explicitly with EUNOIA_HOST=0.0.0.0 (or a specific interface).
+const HOST = process.env.EUNOIA_HOST?.trim() || "127.0.0.1";
 
 // Constant-time bearer comparison (avoids leaking the key via response-timing on byte-by-byte compare).
 function authOk(header: string): boolean {
@@ -76,7 +80,7 @@ async function main() {
   const embed = makeEmbed();
   await prewarmEmbed(embed);
   const app = buildApp({ sql, embed });
-  console.log("eunoia listening on :" + PORT);
+  console.log(`eunoia listening on ${HOST}:${PORT}`);
   return { app, port: PORT };
 }
 
@@ -85,12 +89,13 @@ async function main() {
 // (e.g. tests exercising buildApp), neither holds, so main() — which opens the DB and prewarms the embedder —
 // does not run.
 const isStandalone = import.meta.url.includes("$bunfs") || /%7ebun|~bun/i.test(import.meta.url);
-let served: { port: number; fetch: (req: Request, ...rest: any[]) => Response | Promise<Response> } = {
+let served: { port: number; hostname: string; fetch: (req: Request, ...rest: any[]) => Response | Promise<Response> } = {
   port: PORT,
+  hostname: HOST,
   fetch: () => new Response("eunoia: not booted", { status: 503 }),
 };
 if (import.meta.main || isStandalone) {
   const { app, port } = await main();
-  served = { port, fetch: app.fetch };
+  served = { port, hostname: HOST, fetch: app.fetch };
 }
 export default served;
