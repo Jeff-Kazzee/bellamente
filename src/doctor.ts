@@ -4,7 +4,7 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { storageDirs, dirSizeBytes, diskUsedBytes, diskBudgetMb } from "./paths";
-import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, PROVIDER, onnxRelPath } from "./embed-common";
+import { EMBED_DIM, EMBED_TIER, LOCAL_MODEL, LOCAL_DTYPE, PROVIDER, profile, onnxRelPath } from "./embed-common";
 
 const MB = 1024 * 1024;
 const mb = (bytes: number) => (bytes / MB).toFixed(1) + " MB";
@@ -56,9 +56,10 @@ export async function runDoctor(): Promise<number> {
 
   // Config snapshot.
   console.log("Config:");
+  const engineDesc = profile.engine === "static" ? "static/inline" : `wasm/worker dtype=${LOCAL_DTYPE}`;
   console.log(
-    `  provider=${PROVIDER}  model=${LOCAL_MODEL}  dtype=${LOCAL_DTYPE}  dim=${EMBED_DIM}` +
-      `  wasmThreads=1  port=${process.env.PORT ?? 8080}`,
+    `  provider=${PROVIDER}  tier=${EMBED_TIER}  model=${LOCAL_MODEL}  engine=${engineDesc}  dim=${EMBED_DIM}` +
+      `  port=${process.env.PORT ?? 8080}`,
   );
   console.log("");
 
@@ -69,7 +70,9 @@ export async function runDoctor(): Promise<number> {
   // Honor EUNOIA_MODEL_DIR exactly like the embed engine.
   if (PROVIDER === "local") {
     const modelBase = process.env.EUNOIA_MODEL_DIR ?? dirs.models;
-    const weights = join(modelBase, ...onnxRelPath());
+    // Static (Model2Vec) weights are model.safetensors; the WASM engine's are the .onnx file.
+    const rel = profile.engine === "static" ? [...LOCAL_MODEL.split("/"), "model.safetensors"] : onnxRelPath();
+    const weights = join(modelBase, ...rel);
     let present = false;
     try { present = statSync(weights).size > 0; } catch {}
     check(present, `model weights cached: ${LOCAL_MODEL}`, present ? weights : "not yet downloaded (fetched on first run)");

@@ -3,13 +3,14 @@ import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { toVector, ORG_ID } from "./util";
+import { DEFAULT_SIMILARITY_THRESHOLD } from "./embed-common";
 
 type Ctx = { sql: DB; embed: Embed };
 
 export const Q = {
   RESULTS_PER_QUERY: 15,
   MAX_COMBINED_RESULTS: 25,
-  SIMILARITY_THRESHOLD: Number(process.env.SEARCH_THRESHOLD ?? 0.4),
+  SIMILARITY_THRESHOLD: Number(process.env.SEARCH_THRESHOLD ?? DEFAULT_SIMILARITY_THRESHOLD),
   SEARCH_TIMEOUT_MS: 10000,
   RRF_K: 60, // reciprocal-rank-fusion constant
 };

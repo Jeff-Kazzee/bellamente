@@ -1,0 +1,32 @@
+// Device-scaled embedder tier selection (the "don't crash old laptops" safety): e5-small on capable
+// machines, static Model2Vec on low-RAM machines, with explicit overrides winning.
+import { test, expect } from "bun:test";
+import { join } from "node:path";
+
+async function resolve(over: Record<string, string>): Promise<any> {
+  const base = { ...process.env } as Record<string, string>;
+  for (const k of ["EUNOIA_EMBED_TIER", "EUNOIA_EMBED_MIN_RAM_GB", "LOCAL_EMBED_MODEL", "EMBED_DIM"]) delete base[k];
+  const p = Bun.spawn([process.execPath, join(import.meta.dir, "embed-tier-probe.ts")], { env: { ...base, ...over }, stdout: "pipe", stderr: "pipe" });
+  const out = await new Response(p.stdout).text();
+  await p.exited;
+  return JSON.parse(out.trim());
+}
+
+test("auto: low total RAM -> light Model2Vec (never crashes); ample RAM -> e5 quality", async () => {
+  const light = await resolve({ EUNOIA_EMBED_MIN_RAM_GB: "999999" }); // any machine is 'below' -> light
+  expect(light).toMatchObject({ tier: "light", model: "minishlab/potion-retrieval-32M", dim: 512, engine: "static" });
+  expect(light.threshold).toBe(0.1);
+  const quality = await resolve({ EUNOIA_EMBED_MIN_RAM_GB: "0" }); // any machine is 'above' -> quality
+  expect(quality).toMatchObject({ tier: "quality", model: "Xenova/multilingual-e5-small", dim: 384, engine: "wasm" });
+  expect(quality.threshold).toBe(0.4);
+});
+
+test("EUNOIA_EMBED_TIER=quality overrides a low-RAM machine", async () => {
+  const forced = await resolve({ EUNOIA_EMBED_TIER: "quality", EUNOIA_EMBED_MIN_RAM_GB: "999999" });
+  expect(forced).toMatchObject({ tier: "quality", model: "Xenova/multilingual-e5-small", dim: 384 });
+});
+
+test("explicit LOCAL_EMBED_MODEL wins and EMBED_DIM auto-follows", async () => {
+  const pinned = await resolve({ LOCAL_EMBED_MODEL: "minishlab/potion-multilingual-128M", EUNOIA_EMBED_MIN_RAM_GB: "0" });
+  expect(pinned).toMatchObject({ model: "minishlab/potion-multilingual-128M", dim: 256, engine: "static" });
+});
