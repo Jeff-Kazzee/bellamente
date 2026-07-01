@@ -1,5 +1,6 @@
-// proxy.ts - OpenAI-compatible interceptor. Injects a memory-search tool + user context.
+// proxy.ts - Chat Completions-compatible interceptor. Injects a memory-search tool + user context.
 import { Hono } from "hono";
+import { isIP } from "node:net";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { searchMemories, Q, type MemoryResult } from "./search";
@@ -55,7 +56,7 @@ export function toolDescription() {
   };
 }
 
-function openAiToolDefinition() {
+function chatCompletionsToolDefinition() {
   return { type: "function", function: toolDescription() };
 }
 
@@ -168,10 +169,10 @@ function injectMemoryTool(body: any): boolean {
   const existing = body.tools.findIndex((t: any) => toolName(t) === MEMORY_TOOL_NAME);
   if (existing >= 0) {
     const tool = body.tools[existing];
-    if (tool?.type !== "function" || !tool?.function) body.tools[existing] = openAiToolDefinition();
+    if (tool?.type !== "function" || !tool?.function) body.tools[existing] = chatCompletionsToolDefinition();
     return true;
   }
-  body.tools.unshift(openAiToolDefinition());
+  body.tools.unshift(chatCompletionsToolDefinition());
   return false;
 }
 
@@ -188,6 +189,37 @@ function injectProfileBlock(body: any, block: string) {
   }
 }
 
+function hasMemoryTool(body: any): boolean {
+  return Array.isArray(body.tools) && body.tools.some((t: any) => toolName(t) === MEMORY_TOOL_NAME);
+}
+
+function suppressMemoryToolForStreaming(body: any): { memoryToolSuppressed: boolean; toolChoiceAdjusted: boolean } {
+  let memoryToolSuppressed = false;
+  if (Array.isArray(body.tools)) {
+    const nextTools = body.tools.filter((t: any) => toolName(t) !== MEMORY_TOOL_NAME);
+    memoryToolSuppressed = nextTools.length !== body.tools.length;
+    if (nextTools.length) body.tools = nextTools;
+    else delete body.tools;
+  }
+
+  let toolChoiceAdjusted = false;
+  const choice = body.tool_choice;
+  const forcedName =
+    choice && typeof choice === "object"
+      ? typeof choice?.function?.name === "string"
+        ? choice.function.name
+        : typeof choice?.name === "string"
+          ? choice.name
+          : undefined
+      : undefined;
+  if (forcedName === MEMORY_TOOL_NAME || (body.tool_choice === "required" && !Array.isArray(body.tools))) {
+    body.tool_choice = "none";
+    toolChoiceAdjusted = true;
+  }
+
+  return { memoryToolSuppressed, toolChoiceAdjusted };
+}
+
 type UpstreamConfig =
   | { ok: true; url: string; headers: Headers }
   | { ok: false; error: string; status: number; upstreamBase?: string };
@@ -197,28 +229,57 @@ function chatCompletionsUrl(base: string): string {
   return trimmed.endsWith("/chat/completions") ? trimmed : `${trimmed}/chat/completions`;
 }
 
+function normalizedHostname(url: URL): string {
+  return url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function isIpv4Loopback(host: string): boolean {
+  if (isIP(host) !== 4) return false;
+  return Number(host.split(".")[0]) === 127;
+}
+
+function hexWord(word: string): number | null {
+  if (!/^[0-9a-f]{1,4}$/i.test(word)) return null;
+  const value = Number.parseInt(word, 16);
+  return Number.isInteger(value) && value >= 0 && value <= 0xffff ? value : null;
+}
+
+function isIpv4MappedLoopback(host: string): boolean {
+  if (isIP(host) !== 6 || !host.startsWith("::ffff:")) return false;
+  const mapped = host.slice("::ffff:".length);
+  if (isIpv4Loopback(mapped)) return true;
+
+  const words = mapped.split(":");
+  if (words.length !== 2) return false;
+  const highWord = hexWord(words[0]);
+  const lowWord = hexWord(words[1]);
+  if (highWord == null || lowWord == null) return false;
+  return highWord >> 8 === 127;
+}
+
+function isLoopbackUpstream(url: URL): boolean {
+  const host = normalizedHostname(url);
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || isIpv4Loopback(host) || isIpv4MappedLoopback(host);
+}
+
 function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
-  const base = ctx.upstreamBaseUrl || process.env.EUNOIA_UPSTREAM_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  let url: string;
+  const base = ctx.upstreamBaseUrl || process.env.EUNOIA_UPSTREAM_BASE_URL || "http://127.0.0.1:11434/v1";
+  let parsed: URL;
   try {
-    url = new URL(chatCompletionsUrl(base)).toString();
+    parsed = new URL(chatCompletionsUrl(base));
   } catch {
     return { ok: false, status: 400, error: "Invalid upstream base URL", upstreamBase: base };
   }
+  const url = parsed.toString();
 
   const explicitAuth = c.req.header("x-eunoia-upstream-authorization");
-  const apiKey =
-    c.req.header("x-eunoia-upstream-api-key") ||
-    ctx.upstreamApiKey ||
-    process.env.EUNOIA_UPSTREAM_API_KEY ||
-    process.env.OPENAI_API_KEY ||
-    "";
-  const allowNoAuth = ctx.allowUnauthenticatedUpstream || process.env.EUNOIA_UPSTREAM_ALLOW_NO_AUTH === "1";
+  const apiKey = c.req.header("x-eunoia-upstream-api-key") || ctx.upstreamApiKey || process.env.EUNOIA_UPSTREAM_API_KEY || "";
+  const allowNoAuth = ctx.allowUnauthenticatedUpstream || process.env.EUNOIA_UPSTREAM_ALLOW_NO_AUTH === "1" || isLoopbackUpstream(parsed);
   if (!explicitAuth && !apiKey && !allowNoAuth) {
     return {
       ok: false,
       status: 502,
-      error: "Missing upstream API key. Set OPENAI_API_KEY/EUNOIA_UPSTREAM_API_KEY or send x-eunoia-upstream-api-key.",
+      error: "Missing upstream API key for non-local upstream. Set EUNOIA_UPSTREAM_API_KEY, send x-eunoia-upstream-api-key, or point EUNOIA_UPSTREAM_BASE_URL at a local server.",
       upstreamBase: base,
     };
   }
@@ -226,10 +287,6 @@ function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
   const headers = new Headers({ "content-type": "application/json" });
   if (explicitAuth) headers.set("authorization", explicitAuth);
   else if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
-  const org = c.req.header("x-eunoia-upstream-organization") || process.env.OPENAI_ORG_ID;
-  if (org) headers.set("openai-organization", org);
-  const project = c.req.header("x-eunoia-upstream-project") || process.env.OPENAI_PROJECT_ID;
-  if (project) headers.set("openai-project", project);
   return { ok: true, url, headers };
 }
 
@@ -341,6 +398,75 @@ function proxyResponse(
   return new Response(body, { status, headers });
 }
 
+function proxyStreamResponse(
+  upstreamRes: Response,
+  trace: {
+    traceId: string;
+    contextModified: boolean;
+    searchResults: number;
+    latencyMs: number;
+    passthrough?: boolean;
+  },
+  onDone: (info: { chunkCount: number; byteCount: number; error?: string }) => Promise<void>,
+) {
+  const headers = new Headers();
+  headers.set("content-type", upstreamRes.headers.get("content-type") || "text/event-stream");
+  headers.set("cache-control", "no-cache");
+  headers.set("x-eunoia-trace-id", trace.traceId);
+  headers.set("x-eunoia-conversation-id", trace.traceId);
+  headers.set("x-eunoia-context-modified", String(trace.contextModified));
+  headers.set("x-eunoia-search-results", String(trace.searchResults));
+  headers.set("x-eunoia-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
+  headers.set("x-eunoia-memory-round", "false");
+  headers.set("x-eunoia-streaming", "true");
+  if (trace.passthrough) headers.set("x-eunoia-tool-passthrough", "true");
+
+  if (!upstreamRes.body) {
+    void onDone({ chunkCount: 0, byteCount: 0 });
+    return new Response(null, { status: upstreamRes.status, headers });
+  }
+
+  const reader = upstreamRes.body.getReader();
+  let chunkCount = 0;
+  let byteCount = 0;
+  let finished = false;
+  const finish = async (error?: string) => {
+    if (finished) return;
+    finished = true;
+    await onDone({ chunkCount, byteCount, error });
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          await finish();
+          controller.close();
+          return;
+        }
+        if (value) {
+          chunkCount += 1;
+          byteCount += value.byteLength;
+          controller.enqueue(value);
+        }
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        await finish(error);
+        controller.error(e);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        await finish(reason == null ? "cancelled" : `cancelled: ${String(reason)}`);
+      }
+    },
+  });
+
+  return new Response(body, { status: upstreamRes.status, headers });
+}
+
 export function proxyRoutes(ctx: Ctx) {
   const app = new Hono();
 
@@ -359,28 +485,9 @@ export function proxyRoutes(ctx: Ctx) {
       new URL(c.req.url).searchParams.get("userId") ||
       undefined;
     const containerTag = c.req.header("x-eunoia-container-tag") || body.containerTag || DEFAULT_CONTAINER_TAG;
-    delete body.containerTag; // Eunoia routing hint, not an OpenAI chat-completions parameter.
+    delete body.containerTag; // Eunoia routing hint, not an upstream chat-completions parameter.
     const query = promptText(body);
 
-    if (body.stream === true) {
-      const latencyMs = Date.now() - started;
-      await recordTraceSafe(ctx.sql, {
-        id: traceId,
-        kind: "proxy",
-        status: "unsupported_stream",
-        userId,
-        containerTag,
-        query,
-        latencyMs,
-        request: requestSummary(body),
-      });
-      return proxyResponse(
-        JSON.stringify({ error: "Streaming proxy is not wired yet; send stream=false for Eunoia M3.", traceId }),
-        400,
-        "application/json",
-        { traceId, contextModified: false, searchResults: 0, latencyMs },
-      );
-    }
 
     // 1. passthrough if request already carries tool_result content
     if (hasToolResults(body)) {
@@ -430,6 +537,35 @@ export function proxyRoutes(ctx: Ctx) {
           passthrough: true,
         });
       }
+      if (body.stream === true && upstreamRes.ok) {
+        const initialLatencyMs = Date.now() - started;
+        return proxyStreamResponse(
+          upstreamRes,
+          { traceId, contextModified: false, searchResults: 0, latencyMs: initialLatencyMs, passthrough: true },
+          async ({ chunkCount, byteCount, error }) => {
+            const latencyMs = Date.now() - started;
+            await recordTraceSafe(ctx.sql, {
+              id: traceId,
+              kind: "proxy",
+              status: error ? "stream_error" : "streamed_passthrough",
+              userId,
+              containerTag,
+              query,
+              latencyMs,
+              request: requestSummary(body),
+              metadata: {
+                hasToolResults: true,
+                streaming: true,
+                upstreamStatus: upstreamRes.status,
+                chunkCount,
+                byteCount,
+                ...(error ? { error } : {}),
+              },
+            });
+          },
+        );
+      }
+
       const upstreamBody = await readUpstreamBody(upstreamRes);
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
@@ -452,8 +588,10 @@ export function proxyRoutes(ctx: Ctx) {
       });
     }
 
-    // 2. inject tool
-    const toolAlreadyPresent = injectMemoryTool(body);
+    // 2. inject tool unless this is a stream. Streaming gets profile context only until streamed tool reinvocation is wired.
+    const streaming = body.stream === true;
+    let toolAlreadyPresent = hasMemoryTool(body);
+    if (!streaming) toolAlreadyPresent = injectMemoryTool(body);
 
     // 3. inject profile
     const profile = await loadProfile(ctx.sql, containerTag);
@@ -461,9 +599,9 @@ export function proxyRoutes(ctx: Ctx) {
     injectProfileBlock(body, block);
 
     const contextInjected = [
-      ...(toolAlreadyPresent
-        ? []
-        : [traceTextItem("tool", MEMORY_TOOL_DESCRIPTION, { id: MEMORY_TOOL_NAME, name: MEMORY_TOOL_NAME })]),
+      ...(!streaming && !toolAlreadyPresent
+        ? [traceTextItem("tool", MEMORY_TOOL_DESCRIPTION, { id: MEMORY_TOOL_NAME, name: MEMORY_TOOL_NAME })]
+        : []),
       traceTextItem("profile", block.trim(), {
         staticCount: profile.static?.length ?? 0,
         dynamicCount: profile.dynamic?.length ?? 0,
@@ -490,6 +628,116 @@ export function proxyRoutes(ctx: Ctx) {
         200,
         "application/json",
         { traceId, contextModified: true, searchResults: 0, latencyMs, toolIntercept: MEMORY_TOOL_NAME },
+      );
+    }
+
+    if (streaming) {
+      const { memoryToolSuppressed, toolChoiceAdjusted } = suppressMemoryToolForStreaming(body);
+      const upstream = upstreamConfig(c, ctx);
+      if (!upstream.ok) {
+        const latencyMs = Date.now() - started;
+        await recordTraceSafe(ctx.sql, {
+          id: traceId,
+          kind: "proxy",
+          status: "upstream_config_error",
+          userId,
+          containerTag,
+          query,
+          latencyMs,
+          injectedCount: contextInjected.length,
+          injected: contextInjected,
+          request: requestSummary(body),
+          metadata: { error: upstream.error, upstreamBase: upstream.upstreamBase, streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+        });
+        return proxyResponse(JSON.stringify({ error: upstream.error, traceId }), upstream.status, "application/json", {
+          traceId,
+          contextModified: true,
+          searchResults: 0,
+          latencyMs,
+        });
+      }
+
+      let upstreamRes: Response;
+      try {
+        upstreamRes = await forwardUpstream(fetcher, upstream, body);
+      } catch (e) {
+        const latencyMs = Date.now() - started;
+        await recordTraceSafe(ctx.sql, {
+          id: traceId,
+          kind: "proxy",
+          status: "upstream_error",
+          userId,
+          containerTag,
+          query,
+          latencyMs,
+          injectedCount: contextInjected.length,
+          injected: contextInjected,
+          request: requestSummary(body),
+          metadata: { error: e instanceof Error ? e.message : String(e), streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+        });
+        return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
+          traceId,
+          contextModified: true,
+          searchResults: 0,
+          latencyMs,
+        });
+      }
+
+      if (!upstreamRes.ok) {
+        const upstreamBody = await readUpstreamBody(upstreamRes);
+        const latencyMs = Date.now() - started;
+        await recordTraceSafe(ctx.sql, {
+          id: traceId,
+          kind: "proxy",
+          status: "upstream_error",
+          userId,
+          containerTag,
+          query,
+          latencyMs,
+          injectedCount: contextInjected.length,
+          injected: contextInjected,
+          request: requestSummary(body),
+          metadata: { upstreamStatus: upstreamRes.status, streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+        });
+        return proxyResponse(upstreamBody.text, upstreamRes.status, upstreamRes.headers.get("content-type"), {
+          traceId,
+          contextModified: true,
+          searchResults: 0,
+          latencyMs,
+        });
+      }
+
+      const initialLatencyMs = Date.now() - started;
+      return proxyStreamResponse(
+        upstreamRes,
+        { traceId, contextModified: true, searchResults: 0, latencyMs: initialLatencyMs },
+        async ({ chunkCount, byteCount, error }) => {
+          const latencyMs = Date.now() - started;
+          await recordTraceSafe(ctx.sql, {
+            id: traceId,
+            kind: "proxy",
+            status: error ? "stream_error" : "streamed",
+            userId,
+            containerTag,
+            query,
+            latencyMs,
+            injectedCount: contextInjected.length,
+            injected: contextInjected,
+            request: requestSummary(body),
+            metadata: {
+              streaming: true,
+              memoryRound: false,
+              upstreamStatus: upstreamRes.status,
+              toolAlreadyPresent,
+              contextInjectedCount: contextInjected.length,
+              memoryToolSuppressed,
+              toolChoiceAdjusted,
+              chunkCount,
+              byteCount,
+              ...(error ? { error } : {}),
+            },
+          });
+        },
       );
     }
 

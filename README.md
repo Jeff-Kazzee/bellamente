@@ -2,7 +2,7 @@
 
 Eunoia is a local-first memory substrate for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
-OpenAI-compatible proxy for injecting relevant memory and profile context.
+Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
 
 The product thesis is simple: agents need a well-ordered mind that stays close
 to the user, remains inspectable, and can run without a hosted memory service.
@@ -20,7 +20,7 @@ recall traces, document ingestion, and profile-aware workflows.
   (initdb, `<=>` cosine, full-text, transactional writes, persistence across restart).
   `DATABASE_URL` stays as an advanced override for external Postgres.
 - M2 standalone binary: in progress. The HTTP server + embedded DB compile and run.
-- M3 proxy upstream-forward + tool-call interception: WIRED for buffered OpenAI-compatible chat completions. Streaming and non-OpenAI provider-specific shapes remain follow-ups.
+- M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers. `stream:true` requests now forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
 - Inspect API: recall/search/proxy traces are durable and readable via `/inspect`; proxy `answered` traces show which memories fed the final model response.
 
 ## Architecture (one process)
@@ -38,7 +38,7 @@ src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  POST/GET /memories
 src/search.ts    POST /search + searchMemories()  (cosine, per-model threshold, dedup, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
-src/proxy.ts     POST /v1/chat/completions   (buffered OpenAI-compatible proxy: tool/profile injection + memory tool loop)
+src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: buffered memory tool loop + traceable streaming forward)
 schema.sql       full pgvector DDL (applied at boot)
 docs/            PRD + 11 subsystem specs
 ```
@@ -86,7 +86,7 @@ bun run build      # -> ./eunoia / eunoia.exe
 - POST /search    - semantic recall (cosine, per-model similarity floor, emits trace headers)
 - GET  /inspect   - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
-- POST /v1/chat/completions - buffered OpenAI-compatible proxy with memory tool loop
+- POST /v1/chat/completions - local Chat Completions proxy with buffered memory tool loop and traceable streaming forward
 See docs/PRD.md and docs/08-api.md.
 
 ## Design principles
@@ -97,4 +97,4 @@ See docs/PRD.md and docs/08-api.md.
 - Small core: one process, one database handle, one embedding path, and route modules
   that call each other directly.
 - Agent-friendly surface: direct memory writes, semantic search, profile context, and
-  a proxy path that can become transparent memory for OpenAI-compatible clients.
+  a proxy path that can become transparent memory for `/v1/chat/completions`-compatible local clients.
