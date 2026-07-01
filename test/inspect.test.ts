@@ -8,18 +8,27 @@ import { searchRoutes } from "../src/search";
 import { inspectRoutes } from "../src/inspect";
 import { proxyRoutes } from "../src/proxy";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
+import type { Embed } from "../src/embed";
 
 const memId = "m".repeat(22);
 const spaceId = "s".repeat(22);
 const userVector = "[1,0,0,0]";
+const TEST_TIMEOUT_MS = 15000;
 
-async function makeCtx() {
+type TestCtxOpts = {
+  fetch?: typeof fetch;
+  upstreamBaseUrl?: string;
+  allowUnauthenticatedUpstream?: boolean;
+  embed?: Embed;
+};
+
+async function makeCtx(opts: TestCtxOpts = {}) {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
   const sql = makePgliteSql(pg);
   await sql.unsafe(schemaForDim(4));
-  const embed = async ({ values }: { values: string[] }) => values.map(() => [1, 0, 0, 0]);
+  const embed: Embed = opts.embed ?? (async ({ values }) => values.map(() => [1, 0, 0, 0]));
   await seedMemory(sql);
-  return { sql, embed, close: () => sql.end() };
+  return { sql, ...opts, embed, close: () => sql.end() };
 }
 
 async function seedMemory(sql: Sql) {
@@ -69,9 +78,8 @@ test("POST /search records an inspectable recall trace", async () => {
   } finally {
     await ctx.close();
   }
-});
-
-test("proxy injection emits trace headers and stores injected context", async () => {
+}, TEST_TIMEOUT_MS);
+test("proxy inject-only mode emits trace headers and stores injected context", async () => {
   const ctx = await makeCtx();
   try {
     await ctx.sql`
@@ -84,13 +92,18 @@ test("proxy injection emits trace headers and stores injected context", async ()
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-eunoia-user-id": "external-user-1" },
+      headers: {
+        "content-type": "application/json",
+        "x-eunoia-user-id": "external-user-1",
+        "x-eunoia-proxy-mode": "inject-only",
+      },
       body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Help me choose a theme" }] }),
     });
 
     expect(res.status).toBe(200);
     expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
     expect(res.headers.get("x-eunoia-tool-intercept")).toBe("searchMemory");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
     const body = await res.json();
     const traceId = body.traceId;
     expect(res.headers.get("x-eunoia-trace-id")).toBe(traceId);
@@ -101,7 +114,275 @@ test("proxy injection emits trace headers and stores injected context", async ()
     expect(trace.query).toContain("Help me choose a theme");
     expect(trace.injected.map((i: any) => i.type)).toEqual(["tool", "profile"]);
     expect(trace.injected[1].content).toContain("John prefers concise answers");
+    expect(trace.metadata.injectOnly).toBe(true);
   } finally {
     await ctx.close();
   }
-});
+}, TEST_TIMEOUT_MS);
+
+test("proxy forwards upstream, runs searchMemory tool calls, reinvokes, and records an answered trace", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const requestBody = JSON.parse(String(init?.body ?? "{}"));
+    upstreamCalls.push({ input: String(input), body: requestBody, headers: init?.headers });
+
+    if (upstreamCalls.length === 1) {
+      expect(requestBody.tools[0]).toMatchObject({ type: "function", function: { name: "searchMemory" } });
+      expect(requestBody.messages[0]).toMatchObject({ role: "system" });
+      expect(requestBody.messages[0].content).toContain("John prefers concise answers");
+      return new Response(
+        JSON.stringify({
+          id: "chatcmpl-tool",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call_memory_1",
+                    type: "function",
+                    function: { name: "searchMemory", arguments: JSON.stringify({ queries: ["which theme"] }) },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    expect(requestBody.tool_choice).toBe("none");
+    const toolMessage = requestBody.messages.find((m: any) => m.role === "tool");
+    expect(toolMessage).toMatchObject({ tool_call_id: "call_memory_1" });
+    const payload = JSON.parse(toolMessage.content);
+    expect(payload).toMatchObject({ type: "eunoia_memory_results", queries: ["which theme"] });
+    expect(payload.results[0]).toMatchObject({ id: memId, content: "John prefers dark mode" });
+
+    return new Response(
+      JSON.stringify({ id: "chatcmpl-final", choices: [{ message: { role: "assistant", content: "Use dark mode." } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    await ctx.sql`
+      UPDATE space SET metadata = ${ctx.sql.json({ profile: { static: ["John prefers concise answers"], dynamic: [] } })}
+      WHERE id = ${spaceId}`;
+
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-eunoia-user-id": "external-user-2" },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Help me choose a theme" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(2);
+    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
+    expect(res.headers.get("x-eunoia-tool-intercept")).toBe("searchMemory");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
+    expect(res.headers.get("x-eunoia-search-results")).toBe("1");
+    const body = await res.json();
+    expect(body.choices[0].message.content).toBe("Use dark mode.");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "answered", userId: "external-user-2", resultCount: 1, injectedCount: 1 });
+    expect(trace.queries).toEqual(["which theme"]);
+    expect(trace.retrieved[0]).toMatchObject({ type: "memory", id: memId, content: "John prefers dark mode" });
+    expect(trace.injected[0]).toMatchObject({ type: "memory", id: memId, content: "John prefers dark mode" });
+    expect(trace.metadata).toMatchObject({ memoryRound: true, toolCallCount: 1, upstreamStatus: 200, firstUpstreamStatus: 200, toolSearchTimedOut: false });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("proxy returns upstream external tool calls without running the memory loop", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    const requestBody = JSON.parse(String(init?.body ?? "{}"));
+    upstreamCalls.push(requestBody);
+    expect(requestBody.tools.map((tool: any) => tool.function?.name)).toEqual(["searchMemory", "lookupWeather"]);
+    return new Response(
+      JSON.stringify({
+        id: "chatcmpl-external-tool",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_weather_1",
+                  type: "function",
+                  function: { name: "lookupWeather", arguments: JSON.stringify({ city: "Denver" }) },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        messages: [{ role: "user", content: "What is the weather?" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookupWeather",
+              description: "Look up weather.",
+              parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(1);
+    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
+    expect(res.headers.get("x-eunoia-search-results")).toBe("0");
+    const body = await res.json();
+    expect(body.choices[0].message.tool_calls[0].function.name).toBe("lookupWeather");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls", resultCount: 0, injectedCount: 0 });
+    expect(trace.metadata).toMatchObject({ memoryRound: false, memoryToolCallCount: 0, externalToolCallCount: 1 });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+test("proxy passthrough forwards existing tool results without reinjecting", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    const requestBody = JSON.parse(String(init?.body ?? "{}"));
+    upstreamCalls.push(requestBody);
+    return new Response(
+      JSON.stringify({ id: "chatcmpl-pass", choices: [{ message: { role: "assistant", content: "Already handled." } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        messages: [
+          { role: "user", content: "Use the existing tool result" },
+          { role: "tool", tool_call_id: "call_existing", content: "{}" },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(1);
+    expect(upstreamCalls[0].tools).toBeUndefined();
+    expect(res.headers.get("x-eunoia-tool-passthrough")).toBe("true");
+    expect(res.headers.get("x-eunoia-context-modified")).toBe("false");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "passthrough", resultCount: 0, injectedCount: 0 });
+    expect(trace.metadata.hasToolResults).toBe(true);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("proxy records a tool_error trace when local memory search fails", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
+    return new Response(
+      JSON.stringify({
+        id: "chatcmpl-tool-error",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_memory_error",
+                  type: "function",
+                  function: { name: "searchMemory", arguments: JSON.stringify({ queries: ["which theme"] }) },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const failingEmbed: Embed = async () => {
+    throw new Error("embedding unavailable");
+  };
+
+  const ctx = await makeCtx({
+    fetch: fetcher,
+    upstreamBaseUrl: "https://upstream.example/v1",
+    allowUnauthenticatedUpstream: true,
+    embed: failingEmbed,
+  });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Help me choose a theme" }] }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(upstreamCalls).toHaveLength(1);
+    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
+    const body = await res.json();
+    expect(body.error).toBe("Memory tool search failed");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    expect(body.traceId).toBe(traceId);
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "tool_error", resultCount: 0, injectedCount: 0 });
+    expect(trace.queries).toEqual(["which theme"]);
+    expect(trace.metadata).toMatchObject({ memoryRound: true, toolCallCount: 1, completedToolMessageCount: 0, error: "embedding unavailable" });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
