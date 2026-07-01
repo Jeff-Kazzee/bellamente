@@ -14,8 +14,11 @@ recall traces, document ingestion, and profile-aware workflows.
 - Embeddings: LOCAL + worker-threaded by default (no cloud, no model server) -
   multilingual-e5-small via transformers.js (ONNX), 384 dimensions. OpenAI is an
   optional dev fallback.
-- M2 standalone binary: in progress. The HTTP server compiles; Windows native ONNX
-  packaging is still being hardened.
+- Database: EMBEDDED by default - PGlite (Postgres compiled to WASM) + pgvector, running
+  in-process inside the binary. No Docker, no server. Verified in the compiled binary
+  (initdb, `<=>` cosine, full-text, transactional writes, persistence across restart).
+  `DATABASE_URL` stays as an advanced override for external Postgres.
+- M2 standalone binary: in progress. The HTTP server + embedded DB compile and run.
 - M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection wired).
 
 ## Architecture (one process)
@@ -25,7 +28,8 @@ search/profile in-process.
 
 ```
 src/index.ts     entrypoint: singletons + embed prewarm + mount routes + bearer auth + listen
-src/db.ts        DB singleton (postgres.js; applies schema.sql at boot). M2 -> PGlite.
+src/db.ts        DB handle: embedded PGlite (Postgres in WASM) by default; DATABASE_URL = external-PG override; applies schema.sql at boot
+src/pg-shim.ts   porsager-compatible `sql` tag over PGlite (so the tuned SQL runs unchanged)
 src/embed.ts     embed({ values, taskType }) -> 384-d; local e5 (transformers.js) + OpenAI fallback
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  POST/GET /memories
@@ -38,11 +42,9 @@ docs/            PRD + 11 subsystem specs
 
 ## Quick start (dev)
 ```
-cp .env.example .env          # set EUNOIA_API_KEY (defaults are local-embeddings, no cloud)
+cp .env.example .env          # set EUNOIA_API_KEY (defaults: local embeddings + embedded DB, no cloud, no Docker)
 bun install
-bun pm trust --all            # allow onnxruntime-node native install
-docker run -d --name eunoia-pg -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=eunoia pgvector/pgvector:pg16
-bun run dev                   # first boot downloads the local embedding model and prewarms
+bun run dev                   # first boot creates the embedded DB, downloads the embedding model, and prewarms
 ```
 
 Example:

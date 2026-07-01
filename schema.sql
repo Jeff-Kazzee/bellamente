@@ -1,6 +1,9 @@
 -- eunoia schema (pgvector). Applied at boot, idempotent.
--- NOTE: vector(N) must equal EMBED_DIM (default 384 for multilingual-e5-small).
--- Changing the embedding model's dimension requires recreating these tables.
+-- NOTE: the vector(384) columns below are TEMPLATED — db.ts rewrites 384 -> EMBED_DIM before applying this
+-- schema. The literal 384 is just the default (multilingual-e5-small). On a FRESH database the columns are
+-- created at EMBED_DIM. On an EXISTING database, CREATE TABLE IF NOT EXISTS is a no-op, so the columns KEEP
+-- their original dimension — switching the model's dimension is NOT automatic; makeDb() detects the
+-- mismatch at boot and refuses to start, telling you to wipe the data dir (or migrate/re-embed) to change it.
 CREATE EXTENSION IF NOT EXISTS vector;
 
 DO $$ BEGIN

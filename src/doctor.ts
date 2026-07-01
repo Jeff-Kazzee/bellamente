@@ -9,6 +9,31 @@ import { EMBED_DIM, LOCAL_MODEL, LOCAL_DTYPE, PROVIDER, onnxRelPath } from "./em
 const MB = 1024 * 1024;
 const mb = (bytes: number) => (bytes / MB).toFixed(1) + " MB";
 
+// Redact the password in a DATABASE_URL for display. Uses the URL API, which correctly handles an
+// unencoded '@' inside the password (a naive first-'@' regex would print the password's tail).
+function redactUrl(u: string): string {
+  try {
+    const x = new URL(u);
+    if (x.password) x.password = "***";
+    return x.toString();
+  } catch {
+    return "(unparseable DATABASE_URL)";
+  }
+}
+
+// Is an Eunoia server already running (and thus holding the embedded DB's single-writer lock)?
+async function serverIsUp(port: number): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1000);
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function runDoctor(): Promise<number> {
   let problems = 0;
   const check = (ok: boolean, label: string, detail = "") => {
@@ -56,20 +81,38 @@ export async function runDoctor(): Promise<number> {
     console.log(`  -- disk used (data+cache): ${mb(used)}  (set EUNOIA_DISK_BUDGET_MB to enforce a cap)`);
   }
 
-  // DB reachable?
+  // DB check. Default = embedded PGlite; external Postgres when DATABASE_URL is set. Verify pgvector.
+  // - External: a READ-ONLY probe — do NOT call makeDb() here, which would apply the full schema DDL to
+  //   someone else's server (a "read-only" health check must not mutate).
+  // - Embedded: if a server is already running it holds the single-writer lock, so opening a second engine
+  //   is unsafe (and would be refused). Probe /health first; only open the DB directly when no server is up.
   const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.log("  -- DATABASE_URL not set (embedded PGlite DB is the follow-on; set it for external Postgres)");
-  } else {
-    try {
+  const dbLabel = url ? "database reachable + pgvector" : "embedded database ready + pgvector";
+  try {
+    if (url) {
+      const pg = (await import("postgres")).default;
+      const sql = pg(url, { max: 1, onnotice: () => {} });
+      try {
+        await sql`select 1`;
+        const ext = await sql`SELECT extname FROM pg_extension WHERE extname = 'vector'`;
+        check(ext.length > 0, dbLabel, ext.length > 0 ? redactUrl(url) : "pgvector not installed");
+      } finally {
+        await sql.end({ timeout: 1 });
+      }
+    } else if (await serverIsUp(Number(process.env.PORT ?? 8080))) {
+      check(true, dbLabel, `in use by the running server on :${process.env.PORT ?? 8080}`);
+    } else {
       const { makeDb } = await import("./db");
       const sql = await makeDb();
-      await sql`select 1`;
-      await sql.end({ timeout: 1 });
-      check(true, "database reachable", url.replace(/:\/\/[^@]*@/, "://***@"));
-    } catch (e: any) {
-      check(false, "database reachable", String(e?.message ?? e));
+      try {
+        const ext = await sql`SELECT extname FROM pg_extension WHERE extname = 'vector'`;
+        check(ext.length > 0, dbLabel, ext.length > 0 ? "PGlite at " + dirs.db : "pgvector not installed");
+      } finally {
+        await sql.end({ timeout: 1 });
+      }
     }
+  } catch (e: any) {
+    check(false, dbLabel, String(e?.message ?? e));
   }
 
   console.log("");
