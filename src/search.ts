@@ -75,19 +75,22 @@ export async function searchChunks({ sql, embed }: Ctx, opts: SearchOpts): Promi
     ? sql`AND d.container_tags @> ARRAY[${opts.containerTag}]::text[]`
     : sql``;
 
-  const vrows = await sql`
+  const rawVrows = await sql`
     SELECT c.id, c.content, c.document_id, c.metadata, d.title, d.filepath,
            1 - (c.embedding <=> ${v}::vector) AS similarity
     FROM chunk c JOIN document d ON d.id = c.document_id
     WHERE d.org_id = ${ORG_ID} AND c.embedding IS NOT NULL ${tagClause}
     ORDER BY c.embedding <=> ${v}::vector
     LIMIT ${N}`;
+  // The cosine floor applies to the VECTOR leg on both paths (it used to be skipped when keyword=true,
+  // silently letting sub-threshold vector hits through RRF). Keyword hits are exempt: a literal text match
+  // is its own relevance evidence, and ts_rank is not on the cosine scale.
+  const vrows = rawVrows.filter((r) => Number(r.similarity) >= threshold);
 
   if (!useKeyword) {
     return vrows
       .map((r): ChunkResult => ({ type: "chunk", id: r.id, content: r.content, similarity: Number(r.similarity), source: "vector",
         documentId: r.document_id, title: r.title ?? null, filepath: r.filepath ?? null, headingPath: (r.metadata?.headingPath as string) ?? null }))
-      .filter((r) => r.similarity >= threshold)
       .slice(0, limit);
   }
 
@@ -129,9 +132,25 @@ export async function search(ctx: Ctx, opts: SearchOpts): Promise<SearchResult[]
   const mode = opts.searchMode ?? "memories";
   if (mode === "documents") return searchChunks(ctx, opts);
   if (mode === "memories") return searchMemories(ctx, opts);
+  // Hybrid mode fuses two lists whose scores live on DIFFERENT scales: memories carry raw cosine
+  // similarity, chunks carry an RRF-derived ordering where keyword-only hits have similarity 0. Sorting
+  // the union by raw similarity buried every keyword hit at the bottom — so fuse by RANK (RRF) instead,
+  // which only assumes each list is ordered best-first.
   const limit = clampLimit(opts.limit);
   const [mem, chunks] = await Promise.all([searchMemories(ctx, opts), searchChunks(ctx, opts)]);
-  return [...mem, ...chunks].sort((a, b) => b.similarity - a.similarity).slice(0, Math.min(limit, Q.MAX_COMBINED_RESULTS));
+  const score = new Map<string, number>();
+  const byKey = new Map<string, SearchResult>();
+  for (const list of [mem, chunks] as SearchResult[][]) {
+    list.forEach((r, i) => {
+      const key = `${r.type}:${r.id}`;
+      score.set(key, (score.get(key) ?? 0) + 1 / (Q.RRF_K + i + 1));
+      if (!byKey.has(key)) byKey.set(key, r);
+    });
+  }
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, Math.min(limit, Q.MAX_COMBINED_RESULTS))
+    .map(([key]) => byKey.get(key)!);
 }
 
 export function searchRoutes(ctx: Ctx) {
