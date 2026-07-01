@@ -7,7 +7,15 @@ import { formatProfile, profileContextBlock, loadProfile } from "./profile";
 import { DEFAULT_CONTAINER_TAG, newId } from "./util";
 import { recordTraceSafe, traceItemsFromSearchResults, traceTextItem } from "./inspect";
 
-type Ctx = { sql: DB; embed: Embed };
+type FetchLike = typeof fetch;
+type Ctx = {
+  sql: DB;
+  embed: Embed;
+  fetch?: FetchLike;
+  upstreamBaseUrl?: string;
+  upstreamApiKey?: string;
+  allowUnauthenticatedUpstream?: boolean;
+};
 
 export const MEMORY_TOOL_NAME = "searchMemory";
 export const MIN_QUERIES_PER_CALL = 1;
@@ -20,27 +28,35 @@ type ToolSearchTraceOpts = {
   recordTrace?: boolean;
 };
 
+const MEMORY_TOOL_DESCRIPTION =
+  "Look up the user's saved memories and documents whenever you need context you do not already have - their preferences, facts about them, earlier conversations, or material they have stored. Call this at most once per turn: put every question you want answered into the `queries` array in a single call instead of invoking the tool repeatedly.";
+
+const MEMORY_TOOL_PARAMETERS = {
+  type: "object",
+  properties: {
+    queries: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "One or more search phrases to look up. Include every query you need here, because the tool runs only once per turn.",
+      minItems: MIN_QUERIES_PER_CALL,
+      maxItems: MAX_QUERIES_PER_CALL,
+    },
+  },
+  required: ["queries"],
+};
+
 // One call per turn; batch all needed memory lookups into the queries array.
 export function toolDescription() {
   return {
     name: MEMORY_TOOL_NAME,
-    description:
-      "Look up the user's saved memories and documents whenever you need context you do not already have - their preferences, facts about them, earlier conversations, or material they have stored. Call this at most once per turn: put every question you want answered into the `queries` array in a single call instead of invoking the tool repeatedly.",
-    parameters: {
-      type: "object",
-      properties: {
-        queries: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            "One or more search phrases to look up. Include every query you need here, because the tool runs only once per turn.",
-          minItems: MIN_QUERIES_PER_CALL,
-          maxItems: MAX_QUERIES_PER_CALL,
-        },
-      },
-      required: ["queries"],
-    },
+    description: MEMORY_TOOL_DESCRIPTION,
+    parameters: MEMORY_TOOL_PARAMETERS,
   };
+}
+
+function openAiToolDefinition() {
+  return { type: "function", function: toolDescription() };
 }
 
 // Run up to MAX_QUERIES_PER_CALL searches, merge by id keep max similarity, cap MAX_COMBINED_RESULTS.
@@ -98,7 +114,6 @@ export async function runToolSearch(ctx: Ctx, queries: string[], opts: ToolSearc
     throw e;
   }
 }
-
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -133,7 +148,197 @@ function requestSummary(body: any) {
     messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
     toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
     hasSystem: body.system != null,
+    stream: body.stream === true,
   };
+}
+
+function hasToolResults(body: any): boolean {
+  return (body.messages ?? []).some((m: any) => {
+    if (m?.role === "tool") return true;
+    return Array.isArray(m?.content) && m.content.some((p: any) => p?.type === "tool_result");
+  });
+}
+
+function toolName(tool: any): string | undefined {
+  return typeof tool?.function?.name === "string" ? tool.function.name : typeof tool?.name === "string" ? tool.name : undefined;
+}
+
+function injectMemoryTool(body: any): boolean {
+  body.tools = Array.isArray(body.tools) ? body.tools : [];
+  const existing = body.tools.findIndex((t: any) => toolName(t) === MEMORY_TOOL_NAME);
+  if (existing >= 0) {
+    const tool = body.tools[existing];
+    if (tool?.type !== "function" || !tool?.function) body.tools[existing] = openAiToolDefinition();
+    return true;
+  }
+  body.tools.unshift(openAiToolDefinition());
+  return false;
+}
+
+function injectProfileBlock(body: any, block: string) {
+  const system = body.messages.find((m: any) => m?.role === "system");
+  if (!system) {
+    body.messages.unshift({ role: "system", content: block.trim() });
+  } else if (typeof system.content === "string") {
+    system.content += block;
+  } else if (Array.isArray(system.content)) {
+    system.content.push({ type: "text", text: block.trim() });
+  } else {
+    system.content = block.trim();
+  }
+}
+
+type UpstreamConfig =
+  | { ok: true; url: string; headers: Headers }
+  | { ok: false; error: string; status: number; upstreamBase?: string };
+
+function chatCompletionsUrl(base: string): string {
+  const trimmed = base.replace(/\/+$/, "");
+  return trimmed.endsWith("/chat/completions") ? trimmed : `${trimmed}/chat/completions`;
+}
+
+function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
+  const base = ctx.upstreamBaseUrl || process.env.EUNOIA_UPSTREAM_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  let url: string;
+  try {
+    url = new URL(chatCompletionsUrl(base)).toString();
+  } catch {
+    return { ok: false, status: 400, error: "Invalid upstream base URL", upstreamBase: base };
+  }
+
+  const explicitAuth = c.req.header("x-eunoia-upstream-authorization");
+  const apiKey =
+    c.req.header("x-eunoia-upstream-api-key") ||
+    ctx.upstreamApiKey ||
+    process.env.EUNOIA_UPSTREAM_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    "";
+  const allowNoAuth = ctx.allowUnauthenticatedUpstream || process.env.EUNOIA_UPSTREAM_ALLOW_NO_AUTH === "1";
+  if (!explicitAuth && !apiKey && !allowNoAuth) {
+    return {
+      ok: false,
+      status: 502,
+      error: "Missing upstream API key. Set OPENAI_API_KEY/EUNOIA_UPSTREAM_API_KEY or send x-eunoia-upstream-api-key.",
+      upstreamBase: base,
+    };
+  }
+
+  const headers = new Headers({ "content-type": "application/json" });
+  if (explicitAuth) headers.set("authorization", explicitAuth);
+  else if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
+  const org = c.req.header("x-eunoia-upstream-organization") || process.env.OPENAI_ORG_ID;
+  if (org) headers.set("openai-organization", org);
+  const project = c.req.header("x-eunoia-upstream-project") || process.env.OPENAI_PROJECT_ID;
+  if (project) headers.set("openai-project", project);
+  return { ok: true, url, headers };
+}
+
+async function forwardUpstream(fetcher: FetchLike, config: Extract<UpstreamConfig, { ok: true }>, body: any) {
+  return fetcher(config.url, { method: "POST", headers: config.headers, body: JSON.stringify(body) });
+}
+
+async function readUpstreamBody(res: Response): Promise<{ text: string; json: any }> {
+  const text = await res.text();
+  try {
+    return { text, json: text ? JSON.parse(text) : null };
+  } catch {
+    return { text, json: null };
+  }
+}
+
+function parseToolArgs(value: unknown): string[] {
+  let parsed: any = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value || "{}");
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(parsed?.queries)
+    ? parsed.queries
+        .filter((q: unknown): q is string => typeof q === "string")
+        .map((q: string) => q.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function firstToolCallMessage(upstreamJson: any): any | null {
+  const message = upstreamJson?.choices?.[0]?.message;
+  return message && Array.isArray(message.tool_calls) ? message : null;
+}
+
+function isMemoryToolCall(call: any): boolean {
+  return (!call?.type || call.type === "function") && call?.function?.name === MEMORY_TOOL_NAME;
+}
+
+function externalToolCalls(upstreamJson: any): any[] {
+  const message = firstToolCallMessage(upstreamJson);
+  return message ? message.tool_calls.filter((call: any) => !isMemoryToolCall(call)) : [];
+}
+
+function firstMemoryToolCalls(upstreamJson: any): { id: string; queries: string[]; assistantMessage: any }[] {
+  const message = firstToolCallMessage(upstreamJson);
+  if (!message) return [];
+  const calls: { id: string; queries: string[]; assistantMessage: any }[] = [];
+  for (const call of message.tool_calls) {
+    if (!isMemoryToolCall(call)) continue;
+    const queries = parseToolArgs(call.function.arguments);
+    calls.push({ id: String(call.id || newId()), queries, assistantMessage: message });
+  }
+  return calls;
+}
+
+function toolResultPayload(queries: string[], results: MemoryResult[]) {
+  return {
+    type: "eunoia_memory_results",
+    queries,
+    results: results.map((r) => ({
+      type: r.type,
+      id: r.id,
+      content: r.memory,
+      version: r.version,
+      similarity: Number(r.similarity.toFixed(6)),
+    })),
+  };
+}
+
+function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
+  const merged = new Map<string, MemoryResult>();
+  for (const result of results) {
+    const prev = merged.get(result.id);
+    if (!prev || result.similarity > prev.similarity) merged.set(result.id, result);
+  }
+  return Array.from(merged.values())
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, Q.MAX_COMBINED_RESULTS);
+}
+
+function proxyResponse(
+  body: string,
+  status: number,
+  contentType: string | null,
+  trace: {
+    traceId: string;
+    contextModified: boolean;
+    searchResults: number;
+    latencyMs: number;
+    toolIntercept?: string;
+    memoryRound?: boolean;
+    passthrough?: boolean;
+  },
+) {
+  const headers = new Headers();
+  headers.set("content-type", contentType || "application/json");
+  headers.set("x-eunoia-trace-id", trace.traceId);
+  headers.set("x-eunoia-conversation-id", trace.traceId);
+  headers.set("x-eunoia-context-modified", String(trace.contextModified));
+  headers.set("x-eunoia-search-results", String(trace.searchResults));
+  headers.set("x-eunoia-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
+  headers.set("x-eunoia-memory-round", String(!!trace.memoryRound));
+  if (trace.toolIntercept) headers.set("x-eunoia-tool-intercept", trace.toolIntercept);
+  if (trace.passthrough) headers.set("x-eunoia-tool-passthrough", "true");
+  return new Response(body, { status, headers });
 }
 
 export function proxyRoutes(ctx: Ctx) {
@@ -143,85 +348,448 @@ export function proxyRoutes(ctx: Ctx) {
   app.post("/chat/completions", async (c) => {
     const started = Date.now();
     const traceId = newId();
-    const body = await c.req.json().catch(() => ({}));
+    const fetcher = ctx.fetch ?? fetch;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") return c.json({ error: "JSON request body is required" }, 400);
+    if (!Array.isArray(body.messages)) return c.json({ error: "messages array is required" }, 400);
+
     const userId =
       c.req.header("x-eunoia-user-id") ||
       (typeof body.user === "string" ? body.user : undefined) ||
       new URL(c.req.url).searchParams.get("userId") ||
       undefined;
+    const containerTag = c.req.header("x-eunoia-container-tag") || body.containerTag || DEFAULT_CONTAINER_TAG;
+    delete body.containerTag; // Eunoia routing hint, not an OpenAI chat-completions parameter.
     const query = promptText(body);
 
-    // 1. passthrough if request already carries tool_result content
-    const hasToolResults = (body.messages ?? []).some(
-      (m: any) => Array.isArray(m.content) && m.content.some((p: any) => p.type === "tool_result"),
-    );
-    if (hasToolResults) {
+    if (body.stream === true) {
       const latencyMs = Date.now() - started;
-      c.header("x-eunoia-tool-passthrough", "true");
-      c.header("x-eunoia-context-modified", "false");
-      c.header("x-eunoia-search-results", "0");
-      c.header("x-eunoia-trace-id", traceId);
-      c.header("x-eunoia-conversation-id", traceId);
       await recordTraceSafe(ctx.sql, {
         id: traceId,
         kind: "proxy",
-        status: "passthrough",
+        status: "unsupported_stream",
         userId,
-        containerTag: DEFAULT_CONTAINER_TAG,
+        containerTag,
         query,
         latencyMs,
         request: requestSummary(body),
-        metadata: { hasToolResults: true },
       });
-      return c.json({ note: "passthrough mode (upstream forward not wired - M3)", traceId });
+      return proxyResponse(
+        JSON.stringify({ error: "Streaming proxy is not wired yet; send stream=false for Eunoia M3.", traceId }),
+        400,
+        "application/json",
+        { traceId, contextModified: false, searchResults: 0, latencyMs },
+      );
+    }
+
+    // 1. passthrough if request already carries tool_result content
+    if (hasToolResults(body)) {
+      const upstream = upstreamConfig(c, ctx);
+      if (!upstream.ok) {
+        const latencyMs = Date.now() - started;
+        await recordTraceSafe(ctx.sql, {
+          id: traceId,
+          kind: "proxy",
+          status: "upstream_config_error",
+          userId,
+          containerTag,
+          query,
+          latencyMs,
+          request: requestSummary(body),
+          metadata: { error: upstream.error, upstreamBase: upstream.upstreamBase, hasToolResults: true },
+        });
+        return proxyResponse(JSON.stringify({ error: upstream.error, traceId }), upstream.status, "application/json", {
+          traceId,
+          contextModified: false,
+          searchResults: 0,
+          latencyMs,
+          passthrough: true,
+        });
+      }
+      let upstreamRes: Response;
+      try {
+        upstreamRes = await forwardUpstream(fetcher, upstream, body);
+      } catch (e) {
+        const latencyMs = Date.now() - started;
+        await recordTraceSafe(ctx.sql, {
+          id: traceId,
+          kind: "proxy",
+          status: "upstream_error",
+          userId,
+          containerTag,
+          query,
+          latencyMs,
+          request: requestSummary(body),
+          metadata: { hasToolResults: true, error: e instanceof Error ? e.message : String(e) },
+        });
+        return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
+          traceId,
+          contextModified: false,
+          searchResults: 0,
+          latencyMs,
+          passthrough: true,
+        });
+      }
+      const upstreamBody = await readUpstreamBody(upstreamRes);
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: upstreamRes.ok ? "passthrough" : "upstream_error",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        request: requestSummary(body),
+        metadata: { hasToolResults: true, upstreamStatus: upstreamRes.status },
+      });
+      return proxyResponse(upstreamBody.text, upstreamRes.status, upstreamRes.headers.get("content-type"), {
+        traceId,
+        contextModified: false,
+        searchResults: 0,
+        latencyMs,
+        passthrough: true,
+      });
     }
 
     // 2. inject tool
-    body.tools = body.tools ?? [];
-    const toolAlreadyPresent = body.tools.some((t: any) => t.name === MEMORY_TOOL_NAME);
-    if (!toolAlreadyPresent) {
-      body.tools.unshift(toolDescription());
-    }
+    const toolAlreadyPresent = injectMemoryTool(body);
 
     // 3. inject profile
-    const profile = await loadProfile(ctx.sql, DEFAULT_CONTAINER_TAG);
+    const profile = await loadProfile(ctx.sql, containerTag);
     const block = profileContextBlock(formatProfile(profile));
-    if (typeof body.system === "string") body.system += block;
-    else if (body.system && typeof body.system === "object" && "content" in body.system)
-      body.system.content += block;
-    else body.system = block.trim();
+    injectProfileBlock(body, block);
 
-    const injected = [
+    const contextInjected = [
       ...(toolAlreadyPresent
         ? []
-        : [traceTextItem("tool", toolDescription().description, { id: MEMORY_TOOL_NAME, name: MEMORY_TOOL_NAME })]),
+        : [traceTextItem("tool", MEMORY_TOOL_DESCRIPTION, { id: MEMORY_TOOL_NAME, name: MEMORY_TOOL_NAME })]),
       traceTextItem("profile", block.trim(), {
         staticCount: profile.static?.length ?? 0,
         dynamicCount: profile.dynamic?.length ?? 0,
       }),
     ];
 
-    // 4-7. forward upstream, intercept tool_calls, runToolSearch, re-invoke. TODO (M3).
+    if (c.req.header("x-eunoia-proxy-mode") === "inject-only" || process.env.EUNOIA_PROXY_INJECT_ONLY === "1") {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "context_injected",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        injectedCount: contextInjected.length,
+        injected: contextInjected,
+        request: requestSummary(body),
+        metadata: { toolAlreadyPresent, upstreamForwardWired: true, injectOnly: true },
+      });
+      return proxyResponse(
+        JSON.stringify({ note: "inject-only mode: tool + profile injected; upstream not called", traceId }),
+        200,
+        "application/json",
+        { traceId, contextModified: true, searchResults: 0, latencyMs, toolIntercept: MEMORY_TOOL_NAME },
+      );
+    }
+
+    const upstream = upstreamConfig(c, ctx);
+    if (!upstream.ok) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "upstream_config_error",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        injectedCount: contextInjected.length,
+        injected: contextInjected,
+        request: requestSummary(body),
+        metadata: { error: upstream.error, upstreamBase: upstream.upstreamBase, toolAlreadyPresent },
+      });
+      return proxyResponse(JSON.stringify({ error: upstream.error, traceId }), upstream.status, "application/json", {
+        traceId,
+        contextModified: true,
+        searchResults: 0,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+      });
+    }
+
+    let firstRes: Response;
+    try {
+      firstRes = await forwardUpstream(fetcher, upstream, body);
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "upstream_error",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        injectedCount: contextInjected.length,
+        injected: contextInjected,
+        request: requestSummary(body),
+        metadata: { error: e instanceof Error ? e.message : String(e), toolAlreadyPresent },
+      });
+      return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
+        traceId,
+        contextModified: true,
+        searchResults: 0,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+      });
+    }
+
+    const firstBody = await readUpstreamBody(firstRes);
+    if (!firstRes.ok) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "upstream_error",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        injectedCount: contextInjected.length,
+        injected: contextInjected,
+        request: requestSummary(body),
+        metadata: { upstreamStatus: firstRes.status, toolAlreadyPresent },
+      });
+      return proxyResponse(firstBody.text, firstRes.status, firstRes.headers.get("content-type"), {
+        traceId,
+        contextModified: true,
+        searchResults: 0,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+      });
+    }
+
+    const toolCalls = firstMemoryToolCalls(firstBody.json);
+    const externalCalls = externalToolCalls(firstBody.json);
+    if (externalCalls.length) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "upstream_tool_calls",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        request: requestSummary(body),
+        metadata: {
+          memoryRound: false,
+          upstreamStatus: firstRes.status,
+          toolAlreadyPresent,
+          contextInjectedCount: contextInjected.length,
+          memoryToolCallCount: toolCalls.length,
+          externalToolCallCount: externalCalls.length,
+        },
+      });
+      return proxyResponse(firstBody.text, firstRes.status, firstRes.headers.get("content-type"), {
+        traceId,
+        contextModified: true,
+        searchResults: 0,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+      });
+    }
+
+    if (!toolCalls.length) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "answered",
+        userId,
+        containerTag,
+        query,
+        latencyMs,
+        request: requestSummary(body),
+        metadata: { memoryRound: false, upstreamStatus: firstRes.status, toolAlreadyPresent, contextInjectedCount: contextInjected.length },
+      });
+      return proxyResponse(firstBody.text, firstRes.status, firstRes.headers.get("content-type"), {
+        traceId,
+        contextModified: true,
+        searchResults: 0,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+      });
+    }
+
+    let remainingQueries = MAX_QUERIES_PER_CALL;
+    let toolSearchTimedOut = false;
+    const toolMessages: any[] = [];
+    const allResults: MemoryResult[] = [];
+    const usedQueries: string[] = [];
+    try {
+      for (const call of toolCalls) {
+        const queries = call.queries.slice(0, Math.max(remainingQueries, 0));
+        remainingQueries -= queries.length;
+        usedQueries.push(...queries);
+        let results: MemoryResult[] = [];
+        if (queries.length) {
+          let timedOut = false;
+          const searchPromise = runToolSearch(ctx, queries, { userId, containerTag, recordTrace: false }).catch((e) => {
+            if (timedOut) {
+              console.warn("[proxy] memory tool search finished after timeout:", e instanceof Error ? e.message : String(e));
+              return [];
+            }
+            throw e;
+          });
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            results = await Promise.race([
+              searchPromise,
+              new Promise<MemoryResult[]>((resolve) => {
+                timer = setTimeout(() => {
+                  timedOut = true;
+                  toolSearchTimedOut = true;
+                  resolve([]);
+                }, Q.SEARCH_TIMEOUT_MS);
+              }),
+            ]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        }
+        allResults.push(...results);
+        toolMessages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify(toolResultPayload(queries, results)),
+        });
+      }
+    } catch (e) {
+      const partialResults = topMemoryResults(allResults);
+      const traceItems = traceItemsFromSearchResults(partialResults);
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "tool_error",
+        userId,
+        containerTag,
+        query,
+        queries: usedQueries,
+        searchMode: "memories",
+        resultCount: partialResults.length,
+        injectedCount: 0,
+        latencyMs,
+        retrieved: traceItems,
+        request: requestSummary(body),
+        metadata: {
+          memoryRound: true,
+          toolAlreadyPresent,
+          toolCallCount: toolCalls.length,
+          completedToolMessageCount: toolMessages.length,
+          firstUpstreamStatus: firstRes.status,
+          contextInjectedCount: contextInjected.length,
+          toolSearchTimedOut,
+          error: e instanceof Error ? e.message : String(e),
+        },
+      });
+      return proxyResponse(JSON.stringify({ error: "Memory tool search failed", traceId }), 500, "application/json", {
+        traceId,
+        contextModified: true,
+        searchResults: partialResults.length,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+        memoryRound: true,
+      });
+    }
+
+    const finalResults = topMemoryResults(allResults);
+    const traceItems = traceItemsFromSearchResults(finalResults);
+
+    const finalRequest = {
+      ...body,
+      messages: [...body.messages, toolCalls[0]!.assistantMessage, ...toolMessages],
+      tool_choice: "none",
+    };
+
+    let finalRes: Response;
+    try {
+      finalRes = await forwardUpstream(fetcher, upstream, finalRequest);
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      await recordTraceSafe(ctx.sql, {
+        id: traceId,
+        kind: "proxy",
+        status: "upstream_error",
+        userId,
+        containerTag,
+        query,
+        queries: usedQueries,
+        searchMode: "memories",
+        resultCount: finalResults.length,
+        injectedCount: finalResults.length,
+        latencyMs,
+        retrieved: traceItems,
+        injected: traceItems,
+        request: requestSummary(finalRequest),
+        metadata: {
+          memoryRound: true,
+          toolAlreadyPresent,
+          toolCallCount: toolMessages.length,
+          firstUpstreamStatus: firstRes.status,
+          contextInjectedCount: contextInjected.length,
+          toolSearchTimedOut,
+          error: e instanceof Error ? e.message : String(e),
+        },
+      });
+      return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
+        traceId,
+        contextModified: true,
+        searchResults: finalResults.length,
+        latencyMs,
+        toolIntercept: MEMORY_TOOL_NAME,
+        memoryRound: true,
+      });
+    }
+
+    const finalBody = await readUpstreamBody(finalRes);
     const latencyMs = Date.now() - started;
-    c.header("x-eunoia-tool-intercept", MEMORY_TOOL_NAME);
-    c.header("x-eunoia-context-modified", "true");
-    c.header("x-eunoia-search-results", "0");
-    c.header("x-eunoia-trace-id", traceId);
-    c.header("x-eunoia-conversation-id", traceId);
     await recordTraceSafe(ctx.sql, {
       id: traceId,
       kind: "proxy",
-      status: "context_injected",
+      status: finalRes.ok ? "answered" : "upstream_error",
       userId,
-      containerTag: DEFAULT_CONTAINER_TAG,
+      containerTag,
       query,
+      queries: usedQueries,
+      searchMode: "memories",
+      resultCount: finalResults.length,
+      injectedCount: finalResults.length,
       latencyMs,
-      injectedCount: injected.length,
-      injected,
-      request: requestSummary(body),
-      metadata: { toolAlreadyPresent, upstreamForwardWired: false },
+      retrieved: traceItems,
+      injected: traceItems,
+      request: requestSummary(finalRequest),
+      metadata: {
+        memoryRound: true,
+        toolAlreadyPresent,
+        toolCallCount: toolMessages.length,
+        upstreamStatus: finalRes.status,
+        firstUpstreamStatus: firstRes.status,
+        contextInjectedCount: contextInjected.length,
+        toolSearchTimedOut,
+      },
     });
-    return c.json({ note: "proxy core not wired (M3): tool + profile injected; upstream forward TODO", traceId });
+
+    return proxyResponse(finalBody.text, finalRes.status, finalRes.headers.get("content-type"), {
+      traceId,
+      contextModified: true,
+      searchResults: finalResults.length,
+      latencyMs,
+      toolIntercept: MEMORY_TOOL_NAME,
+      memoryRound: true,
+    });
   });
 
   return app;

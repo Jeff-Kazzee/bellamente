@@ -20,8 +20,8 @@ recall traces, document ingestion, and profile-aware workflows.
   (initdb, `<=>` cosine, full-text, transactional writes, persistence across restart).
   `DATABASE_URL` stays as an advanced override for external Postgres.
 - M2 standalone binary: in progress. The HTTP server + embedded DB compile and run.
-- M3 proxy upstream-forward + tool-call interception: TODO (tool + profile injection wired).
-- Inspect API: baseline recall/proxy traces are durable and readable via `/inspect`; headers expose trace IDs, result counts, and latency.
+- M3 proxy upstream-forward + tool-call interception: WIRED for buffered OpenAI-compatible chat completions. Streaming and non-OpenAI provider-specific shapes remain follow-ups.
+- Inspect API: recall/search/proxy traces are durable and readable via `/inspect`; proxy `answered` traces show which memories fed the final model response.
 
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
@@ -38,7 +38,7 @@ src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  POST/GET /memories
 src/search.ts    POST /search + searchMemories()  (cosine, per-model threshold, dedup, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
-src/proxy.ts     POST /v1/chat/completions   (tool + profile injection; forward = M3)
+src/proxy.ts     POST /v1/chat/completions   (buffered OpenAI-compatible proxy: tool/profile injection + memory tool loop)
 schema.sql       full pgvector DDL (applied at boot)
 docs/            PRD + 11 subsystem specs
 ```
@@ -86,7 +86,7 @@ bun run build      # -> ./eunoia / eunoia.exe
 - POST /search    - semantic recall (cosine, per-model similarity floor, emits trace headers)
 - GET  /inspect   - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
-- POST /v1/chat/completions - OpenAI-compatible proxy
+- POST /v1/chat/completions - buffered OpenAI-compatible proxy with memory tool loop
 See docs/PRD.md and docs/08-api.md.
 
 ## Design principles
