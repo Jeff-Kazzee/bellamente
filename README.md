@@ -1,5 +1,10 @@
 # eunoia
 
+> Rebrand direction, 2026-07-01: public-facing product work should explore
+> **Bellamente** with the tagline **Memoria Viva for your AI agents.** See
+> `BRAND.md`. Code identifiers, package names, env vars, and headers remain
+> `eunoia` / `EUNOIA_*` / `x-eunoia-*` until a deliberate migration plan exists.
+
 Eunoia is a local-first memory substrate for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
@@ -11,6 +16,10 @@ recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
+- Memory lifecycle: COMPLETE. Writes dedup exact duplicates and SUPERSEDE near-duplicates as new
+  versions (old versions stay inspectable); memories can be read with full version history, edited
+  (content edits create a new version), soft-forgotten (reversible), or hard-deleted — via API and
+  dashboard. Nothing is silently overwritten.
 - Embeddings: LOCAL + in-process, DEVICE-SCALED (no cloud, no model server). Capable machines use
   multilingual-e5-small (WASM worker, 384-d — best quality + multilingual); low-RAM machines auto-fall-back
   to a pure-TS static Model2Vec model (potion-retrieval-32M, ~440 MB, never crashes). The chosen model/dim
@@ -18,10 +27,14 @@ recall traces, document ingestion, and profile-aware workflows.
 - Database: EMBEDDED by default - PGlite (Postgres compiled to WASM) + pgvector, running
   in-process inside the binary. No Docker, no server. Verified in the compiled binary
   (initdb, `<=>` cosine, full-text, transactional writes, persistence across restart).
-  `DATABASE_URL` stays as an advanced override for external Postgres.
-- M2 standalone binary: in progress. The HTTP server + embedded DB compile and run.
-- M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers. `stream:true` requests now forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
+  `DATABASE_URL` stays as an advanced override for external Postgres. Schema changes ship as
+  append-only migrations applied at boot (schema_migrations), so upgrades never strand existing data.
+- M2 standalone binary: DONE (verified compiled binary on Windows + Linux; see docs/STATUS.md).
+- M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers, with upstream timeouts (EUNOIA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (EUNOIA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
+- Document ingestion: WIRED. POST /documents chunks + embeds markdown (structure-aware, token-budget
+  guarded); chunks are searchable via /search searchMode documents|hybrid (vector + full-text, RRF-fused).
 - Inspect API: recall/search/proxy traces are durable and readable via `/inspect`; proxy `answered` traces show which memories fed the final model response.
+- Server binds 127.0.0.1 by default (EUNOIA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
 
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
@@ -29,17 +42,20 @@ feature is a route module sharing `ctx = { sql, embed }`. The proxy calls
 search/profile in-process.
 
 ```
-src/index.ts     entrypoint: singletons + embed prewarm + mount routes + bearer auth + listen
-src/db.ts        DB handle: embedded PGlite (Postgres in WASM) by default; DATABASE_URL = external-PG override; applies schema.sql at boot
+src/index.ts     entrypoint: singletons + embed prewarm + mount routes + bearer auth + listen (loopback by default)
+src/db.ts        DB handle: embedded PGlite (Postgres in WASM) by default; DATABASE_URL = external-PG override; applies schema.sql + migrations at boot
+src/migrations.ts  append-only schema migrations (schema_migrations table; rules in the file header)
 src/pg-shim.ts   porsager-compatible `sql` tag over PGlite (so the tuned SQL runs unchanged)
 src/embed.ts     embed({ values, taskType }); device-scaled tier -> WASM worker (e5) or static engine; OpenAI fallback
 src/embed-model2vec.ts  pure-TS static Model2Vec ("potion") engine for the low-RAM tier (no worker, never crashes)
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
-src/memories.ts  POST/GET /memories
-src/search.ts    POST /search + searchMemories()  (cosine, per-model threshold, dedup, cap 25)
+src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write)
+src/documents.ts document ingestion: POST/GET/DELETE /documents (chunk -> embed -> store)
+src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget guarded)
+src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, per-model threshold, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
-src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: buffered memory tool loop + traceable streaming forward)
-schema.sql       full pgvector DDL (applied at boot)
+src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: buffered memory tool loop + traceable streaming forward, upstream timeouts)
+schema.sql       full pgvector DDL (applied at boot; changes to shipped tables go through src/migrations.ts)
 docs/            PRD + 11 subsystem specs
 ```
 
@@ -81,13 +97,28 @@ bun run build      # -> ./eunoia / eunoia.exe
 ```
 
 ## API
-- POST /memories  - create 1..100 memories
-- GET  /memories  - list latest, non-forgotten
-- POST /search    - semantic recall (cosine, per-model similarity floor, emits trace headers)
-- GET  /inspect   - recent recall/proxy traces and per-trace details
+- POST   /memories            - write 1..100 memories (exact dups -> "unchanged"; near-dups -> "superseded"
+                                new version; `dedupe:false` bypasses). Response reports per-item action.
+- GET    /memories            - list latest, non-forgotten
+- GET    /memories/:id        - one memory + its full version chain (forgotten included — inspection hides nothing)
+- PATCH  /memories/:id        - correct a memory (content change -> NEW version; flag-only -> in place)
+- POST   /memories/:id/forget - soft-forget the whole chain (reversible with {undo:true})
+- DELETE /memories/:id        - hard-delete the whole chain + provenance (the only physical removal)
+- POST   /documents           - ingest a markdown/text document (chunk -> embed -> searchable)
+- GET    /documents[/:id]     - list documents / one document + chunks with quality flags
+- DELETE /documents/:id       - delete a document + its chunks
+- POST   /search              - recall (memories: cosine; documents: cosine + full-text RRF; hybrid: rank-fused; emits trace headers)
+- GET    /inspect             - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
 - POST /v1/chat/completions - local Chat Completions proxy with buffered memory tool loop and traceable streaming forward
 See docs/PRD.md and docs/08-api.md.
+
+### Server + tuning env vars
+- `EUNOIA_HOST` (default `127.0.0.1`), `PORT` (default 8080).
+- `EUNOIA_SUPERSEDE_THRESHOLD` — cosine floor for supersede-on-write (default 0.95 transformer/OpenAI, 0.98 static tier).
+- `SEARCH_THRESHOLD` — recall similarity floor (per-model default).
+- `EUNOIA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
+- `EUNOIA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
 
 ## Design principles
 - Local-first by default: no hosted memory account, no model server, no cloud
