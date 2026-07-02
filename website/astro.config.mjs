@@ -1,8 +1,8 @@
 import { defineConfig } from "astro/config";
 
-// GitHub Pages (project site): served under /bellamente/. If the site moves to a
-// custom domain, drop `base` and update `site`.
+// Hosted on Vercel at the domain root (no base path — GitHub Pages' /bellamente prefix is gone,
+// which also removes the base-concatenation class of link bugs). Update `site` if a custom
+// domain replaces the vercel.app URL.
 export default defineConfig({
-  site: "https://jeff-kazzee.github.io",
-  base: "/bellamente",
+  site: "https://bellamente.vercel.app",
 });
