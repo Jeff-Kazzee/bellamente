@@ -11,9 +11,8 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
-**Pre-release.** Both v0.0.1 release blockers have shipped: streamed memory-tool reinvocation and
-capture v2 (LLM distillation through the local upstream). Release steps (binary rebuild, smoke,
-publishing) await sign-off; no artifacts are published and the repository stays private until then.
+**v0.0.1 — early release.** Usable, tested, honest — and not at all complete. The
+[ROADMAP](ROADMAP.md) is the real backlog; if a feature you need is on it, it does not exist yet.
 
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
 - Memory lifecycle: COMPLETE. Writes dedup exact duplicates and SUPERSEDE near-duplicates as new
