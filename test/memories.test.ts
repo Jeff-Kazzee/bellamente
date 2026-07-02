@@ -121,7 +121,7 @@ test("memories over the embed token budget are flagged embedTruncated in the res
 }, TEST_TIMEOUT_MS);
 
 test("POST supersedes a near-duplicate: new version, old flipped is_latest=false, chain readable", async () => {
-  process.env.EUNOIA_SUPERSEDE_THRESHOLD = "0.9";
+  process.env.BELLA_SUPERSEDE_THRESHOLD = "0.9";
   const { app, sql, close } = await makeApp();
   try {
     const first = await (await post(app, "/memories", { memories: [{ content: "John prefers dark mode" }] })).json();
@@ -154,7 +154,7 @@ test("POST supersedes a near-duplicate: new version, old flipped is_latest=false
     const raw = await (await post(app, "/memories", { dedupe: false, memories: [{ content: "John prefers light mode" }] })).json();
     expect(raw.memories[0].action).toBe("created");
   } finally {
-    delete process.env.EUNOIA_SUPERSEDE_THRESHOLD;
+    delete process.env.BELLA_SUPERSEDE_THRESHOLD;
     await close();
   }
 }, TEST_TIMEOUT_MS);

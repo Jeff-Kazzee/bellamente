@@ -58,7 +58,7 @@ export async function assertEmbeddingDim(sql: DB, dim: number): Promise<void> {
       throw new Error(
         `on-disk embedding dimension is ${found} but EMBED_DIM=${dim}. The existing tables keep their original ` +
           `dimension. If this appeared after a RAM/hardware/VM change, boot WITHOUT data loss by pinning the ` +
-          `previous embedder (set EUNOIA_EMBED_TIER or LOCAL_EMBED_MODEL back to the model that made the ${found}-d ` +
+          `previous embedder (set BELLA_EMBED_TIER or LOCAL_EMBED_MODEL back to the model that made the ${found}-d ` +
           `vectors). Otherwise delete the data dir (${dbDir()}) to recreate at ${dim}-d — that erases all memories.`,
       );
     }
@@ -78,7 +78,7 @@ export async function assertEmbeddingModel(sql: DB, model: string): Promise<void
       throw new Error(
         `on-disk embeddings were produced by [${other.join(", ")}] but the active embedding model is ${model}. ` +
           `Different models occupy different vector spaces even at equal dimension, so mixing them silently ` +
-          `corrupts recall. Pin the previous model (LOCAL_EMBED_MODEL / EUNOIA_EMBED_TIER) to keep using this ` +
+          `corrupts recall. Pin the previous model (LOCAL_EMBED_MODEL / BELLA_EMBED_TIER) to keep using this ` +
           `store, or delete the data dir (${dbDir()}) to re-embed at ${model} — that erases all memories.`,
       );
     }
@@ -104,7 +104,7 @@ export async function assertEmbeddingModel(sql: DB, model: string): Promise<void
 // Fails SAFE: worst case is a false refusal cleared by deleting the named file — never silent corruption.
 // Graceful shutdowns (SIGINT/SIGTERM/SIGHUP) release the lock via handlers, so a manual delete is only ever
 // needed after a true HARD crash (SIGKILL / power loss) that left a stale lock behind.
-export const DB_LOCK_ERR = "EUNOIA_DB_LOCKED";
+export const DB_LOCK_ERR = "BELLA_DB_LOCKED";
 function lockedError(message: string): Error {
   const e = new Error(message);
   (e as any).code = DB_LOCK_ERR;
@@ -132,7 +132,7 @@ function registerRelease(lockPath: string): () => void {
   };
   process.once("exit", release);
   // Node's 'exit' does NOT fire on a signal with no handler, so a bare Ctrl-C / `kill` would otherwise leave
-  // a stale lock. Release then exit on the common termination signals (Eunoia owns this process).
+  // a stale lock. Release then exit on the common termination signals (Bellamente owns this process).
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.once(sig, () => { release(); process.exit(0); });
   }

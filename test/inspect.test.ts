@@ -71,10 +71,10 @@ test("POST /search records an inspectable recall trace", async () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     expect(traceId).toBeTruthy();
     expect(body.traceId).toBe(traceId);
-    expect(res.headers.get("x-eunoia-search-results")).toBe("1");
+    expect(res.headers.get("x-bella-search-results")).toBe("1");
     expect(body.results[0].id).toBe(memId);
 
     const inspect = await app.request(`/inspect/${traceId}`);
@@ -107,19 +107,19 @@ test("proxy inject-only mode emits trace headers and stores injected context", a
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-eunoia-user-id": "external-user-1",
-        "x-eunoia-proxy-mode": "inject-only",
+        "x-bella-user-id": "external-user-1",
+        "x-bella-proxy-mode": "inject-only",
       },
       body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Help me choose a theme" }] }),
     });
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
-    expect(res.headers.get("x-eunoia-tool-intercept")).toBe("searchMemory");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
+    expect(res.headers.get("x-bella-context-modified")).toBe("true");
+    expect(res.headers.get("x-bella-tool-intercept")).toBe("searchMemory");
+    expect(res.headers.get("x-bella-memory-round")).toBe("false");
     const body = await res.json();
     const traceId = body.traceId;
-    expect(res.headers.get("x-eunoia-trace-id")).toBe(traceId);
+    expect(res.headers.get("x-bella-trace-id")).toBe(traceId);
 
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
@@ -162,7 +162,7 @@ test("proxy defaults to a local loopback upstream without auth", async () => {
     const body = await res.json();
     expect(body.choices[0].message.content).toBe("Local answer.");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "answered", resultCount: 0 });
@@ -247,7 +247,7 @@ test("proxy forwards upstream, runs searchMemory tool calls, reinvokes, and reco
     const toolMessage = requestBody.messages.find((m: any) => m.role === "tool");
     expect(toolMessage).toMatchObject({ tool_call_id: "call_memory_1" });
     const payload = JSON.parse(toolMessage.content);
-    expect(payload).toMatchObject({ type: "eunoia_memory_results", queries: ["which theme"] });
+    expect(payload).toMatchObject({ type: "bella_memory_results", queries: ["which theme"] });
     expect(payload.results[0]).toMatchObject({ id: memId, content: "John prefers dark mode" });
 
     return new Response(
@@ -268,20 +268,20 @@ test("proxy forwards upstream, runs searchMemory tool calls, reinvokes, and reco
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-eunoia-user-id": "external-user-2" },
+      headers: { "content-type": "application/json", "x-bella-user-id": "external-user-2" },
       body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Help me choose a theme" }] }),
     });
 
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(2);
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
-    expect(res.headers.get("x-eunoia-tool-intercept")).toBe("searchMemory");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
-    expect(res.headers.get("x-eunoia-search-results")).toBe("1");
+    expect(res.headers.get("x-bella-context-modified")).toBe("true");
+    expect(res.headers.get("x-bella-tool-intercept")).toBe("searchMemory");
+    expect(res.headers.get("x-bella-memory-round")).toBe("true");
+    expect(res.headers.get("x-bella-search-results")).toBe("1");
     const body = await res.json();
     expect(body.choices[0].message.content).toBe("Use dark mode.");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "answered", userId: "external-user-2", resultCount: 1, injectedCount: 1 });
@@ -322,22 +322,22 @@ test("proxy streams upstream responses with profile context and trace visibility
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-eunoia-user-id": "external-user-stream" },
+      headers: { "content-type": "application/json", "x-bella-user-id": "external-user-stream" },
       body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Help me choose a theme" }] }),
     });
 
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(1);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
-    expect(res.headers.get("x-eunoia-streaming")).toBe("true");
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
-    expect(res.headers.get("x-eunoia-tool-intercept")).toBeNull();
+    expect(res.headers.get("x-bella-streaming")).toBe("true");
+    expect(res.headers.get("x-bella-context-modified")).toBe("true");
+    expect(res.headers.get("x-bella-memory-round")).toBe("false");
+    expect(res.headers.get("x-bella-tool-intercept")).toBeNull();
     const streamText = await res.text();
     expect(streamText).toContain("dark mode");
     expect(streamText).toContain("data: [DONE]");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream", resultCount: 0, injectedCount: 2 });
@@ -393,23 +393,23 @@ test("proxy runs a streamed memory tool round and streams only the final answer"
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-eunoia-user-id": "external-user-stream-round" },
+      headers: { "content-type": "application/json", "x-bella-user-id": "external-user-stream-round" },
       body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Which theme should I use?" }] }),
     });
 
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(2);
-    expect(res.headers.get("x-eunoia-streaming")).toBe("true");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
-    expect(res.headers.get("x-eunoia-search-results")).toBe("1");
-    expect(res.headers.get("x-eunoia-tool-intercept")).toBe("searchMemory");
+    expect(res.headers.get("x-bella-streaming")).toBe("true");
+    expect(res.headers.get("x-bella-memory-round")).toBe("true");
+    expect(res.headers.get("x-bella-search-results")).toBe("1");
+    expect(res.headers.get("x-bella-tool-intercept")).toBe("searchMemory");
     const streamText = await res.text();
     expect(streamText).toContain("Use dark mode.");
     expect(streamText).toContain("data: [DONE]");
     expect(streamText).not.toContain("call_mem_1");
     expect(streamText).not.toContain("tool_calls");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream-round", resultCount: 1, injectedCount: 1 });
@@ -463,14 +463,14 @@ test("proxy passes streamed external tool calls through verbatim", async () => {
 
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(1);
-    expect(res.headers.get("x-eunoia-streaming")).toBe("true");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
+    expect(res.headers.get("x-bella-streaming")).toBe("true");
+    expect(res.headers.get("x-bella-memory-round")).toBe("false");
     const streamText = await res.text();
     expect(streamText).toContain("call_weather_1");
     expect(streamText).toContain("lookupWeather");
     expect(streamText).toContain("data: [DONE]");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls", resultCount: 0 });
@@ -522,12 +522,12 @@ test("proxy streamed memory round degrades to an answer when search fails", asyn
 
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(2);
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
-    expect(res.headers.get("x-eunoia-search-results")).toBe("0");
+    expect(res.headers.get("x-bella-memory-round")).toBe("true");
+    expect(res.headers.get("x-bella-search-results")).toBe("0");
     const streamText = await res.text();
     expect(streamText).toContain("Pick whichever theme you like.");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", resultCount: 0 });
@@ -570,13 +570,13 @@ test("proxy streams passthrough requests that already contain tool results", asy
     });
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("x-eunoia-streaming")).toBe("true");
-    expect(res.headers.get("x-eunoia-tool-passthrough")).toBe("true");
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("false");
+    expect(res.headers.get("x-bella-streaming")).toBe("true");
+    expect(res.headers.get("x-bella-tool-passthrough")).toBe("true");
+    expect(res.headers.get("x-bella-context-modified")).toBe("false");
     const streamText = await res.text();
     expect(streamText).toContain("Already handled");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed_passthrough", resultCount: 0, injectedCount: 0 });
@@ -641,13 +641,13 @@ test("proxy returns upstream external tool calls without running the memory loop
 
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(1);
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
-    expect(res.headers.get("x-eunoia-search-results")).toBe("0");
+    expect(res.headers.get("x-bella-context-modified")).toBe("true");
+    expect(res.headers.get("x-bella-memory-round")).toBe("false");
+    expect(res.headers.get("x-bella-search-results")).toBe("0");
     const body = await res.json();
     expect(body.choices[0].message.tool_calls[0].function.name).toBe("lookupWeather");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls", resultCount: 0, injectedCount: 0 });
@@ -688,11 +688,11 @@ test("proxy passthrough forwards existing tool results without reinjecting", asy
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(1);
     expect(upstreamCalls[0].tools).toBeUndefined();
-    expect(res.headers.get("x-eunoia-tool-passthrough")).toBe("true");
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("false");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
+    expect(res.headers.get("x-bella-tool-passthrough")).toBe("true");
+    expect(res.headers.get("x-bella-context-modified")).toBe("false");
+    expect(res.headers.get("x-bella-memory-round")).toBe("false");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "passthrough", resultCount: 0, injectedCount: 0 });
@@ -734,7 +734,7 @@ test("proxy degrades to empty memory results when local memory search fails", as
     const toolMessage = requestBody.messages.find((m: any) => m.role === "tool");
     expect(toolMessage).toMatchObject({ tool_call_id: "call_memory_error" });
     const payload = JSON.parse(toolMessage.content);
-    expect(payload).toMatchObject({ type: "eunoia_memory_results", error: "memory_search_unavailable", results: [] });
+    expect(payload).toMatchObject({ type: "bella_memory_results", error: "memory_search_unavailable", results: [] });
     return new Response(
       JSON.stringify({ id: "chatcmpl-degraded", choices: [{ message: { role: "assistant", content: "Answer without memory." } }] }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -765,12 +765,12 @@ test("proxy degrades to empty memory results when local memory search fails", as
     // with empty results (same as the timeout path) and the user still gets an answer.
     expect(res.status).toBe(200);
     expect(upstreamCalls).toHaveLength(2);
-    expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
-    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
+    expect(res.headers.get("x-bella-context-modified")).toBe("true");
+    expect(res.headers.get("x-bella-memory-round")).toBe("true");
     const body = await res.json();
     expect(body.choices[0].message.content).toBe("Answer without memory.");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "answered", resultCount: 0, injectedCount: 0 });
@@ -788,7 +788,7 @@ test("proxy degrades to empty memory results when local memory search fails", as
 }, TEST_TIMEOUT_MS);
 
 test("trace pruning is batched (every 25 writes) and bounds the table to the retention", async () => {
-  process.env.EUNOIA_TRACE_RETENTION = "5";
+  process.env.BELLA_TRACE_RETENTION = "5";
   const ctx = await makeCtx();
   try {
     const count = async () =>
@@ -798,13 +798,13 @@ test("trace pruning is batched (every 25 writes) and bounds the table to the ret
     await recordTrace(ctx.sql, { kind: "search", query: "q24" }); // 25th write triggers the prune
     expect(await count()).toBe(5); // ...and bounds the table to the retention
   } finally {
-    delete process.env.EUNOIA_TRACE_RETENTION;
+    delete process.env.BELLA_TRACE_RETENTION;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
 
-test("proxy aborts a hung upstream after EUNOIA_UPSTREAM_TIMEOUT_MS", async () => {
-  process.env.EUNOIA_UPSTREAM_TIMEOUT_MS = "50";
+test("proxy aborts a hung upstream after BELLA_UPSTREAM_TIMEOUT_MS", async () => {
+  process.env.BELLA_UPSTREAM_TIMEOUT_MS = "50";
   const fetcher: typeof fetch = (_input, init) =>
     new Promise((_, reject) => {
       // Simulate a hung upstream that only ends when the caller aborts.
@@ -829,19 +829,19 @@ test("proxy aborts a hung upstream after EUNOIA_UPSTREAM_TIMEOUT_MS", async () =
     const body = await res.json();
     expect(body.error).toBe("Upstream request failed");
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
     expect(String(trace.metadata.error)).toContain("timed out after 50ms");
   } finally {
-    delete process.env.EUNOIA_UPSTREAM_TIMEOUT_MS;
+    delete process.env.BELLA_UPSTREAM_TIMEOUT_MS;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
 
-test("proxy errors a stalled stream after EUNOIA_STREAM_IDLE_TIMEOUT_MS", async () => {
-  process.env.EUNOIA_STREAM_IDLE_TIMEOUT_MS = "50";
+test("proxy errors a stalled stream after BELLA_STREAM_IDLE_TIMEOUT_MS", async () => {
+  process.env.BELLA_STREAM_IDLE_TIMEOUT_MS = "50";
   const fetcher: typeof fetch = async () =>
     new Response(
       new ReadableStream<Uint8Array>({
@@ -874,13 +874,13 @@ test("proxy errors a stalled stream after EUNOIA_STREAM_IDLE_TIMEOUT_MS", async 
     }
     expect(streamFailed).toBe(true);
 
-    const traceId = res.headers.get("x-eunoia-trace-id");
+    const traceId = res.headers.get("x-bella-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "stream_error" });
     expect(String(trace.metadata.error)).toContain("stalled");
   } finally {
-    delete process.env.EUNOIA_STREAM_IDLE_TIMEOUT_MS;
+    delete process.env.BELLA_STREAM_IDLE_TIMEOUT_MS;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);

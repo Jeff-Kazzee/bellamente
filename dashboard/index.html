@@ -267,7 +267,7 @@
   const $ = (s, r=document) => r.querySelector(s);
   const el = (t, a={}, kids=[]) => { const n=document.createElement(t); for(const k in a){ if(k==="class")n.className=a[k]; else if(k==="html")n.innerHTML=a[k]; else if(k.startsWith("on")&&typeof a[k]==="function")n.addEventListener(k.slice(2),a[k]); else if(a[k]!=null)n.setAttribute(k,a[k]); } for(const c of [].concat(kids)) if(c!=null) n.append(c.nodeType?c:document.createTextNode(c)); return n; };
   const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const KEY_STORE = "eunoia.apikey";
+  const KEY_STORE = "bellamente.apikey";
   let apiKey = localStorage.getItem(KEY_STORE) || "";
   const base = location.origin;
 

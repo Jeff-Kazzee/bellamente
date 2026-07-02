@@ -3,7 +3,6 @@
 //  Env knobs:
 //    OUTFILE                 output binary  (default ./bella — the public CLI name, see BRAND.md)
 //    BUN_COMPILE_TARGET      Bun compile target, e.g. bun-linux-x64 / bun-darwin-arm64 (default: host)
-//    BELLA_NO_COMPAT_BINARY  set 1 to skip the legacy `eunoia` compat copy
 //
 //  What it does:
 //   - stubs the unused native `sharp` image dep (we are text-only)
@@ -23,7 +22,7 @@ const compile: Record<string, unknown> = {
   outfile: OUTFILE,
   // SECURITY: a standalone binary must NOT autoload bunfig.toml/.env from the current working directory,
   // or an attacker who controls the cwd could run arbitrary `preload` code (RCE) or override
-  // DATABASE_URL / EUNOIA_API_KEY / EUNOIA_*_DIR via a planted .env. The binary reads config from real
+  // DATABASE_URL / BELLA_API_KEY / BELLA_*_DIR via a planted .env. The binary reads config from real
   // process environment variables only (docs/10-config.md). These flags do not affect `bun run dev`.
   autoloadBunfig: false,
   autoloadDotenv: false,
@@ -59,17 +58,3 @@ const r = await Bun.build({
 });
 console.log("build success:", r.success, "| entry:", ENTRY, "| out:", OUTFILE, "| target:", TARGET ?? "host");
 if (!r.success) for (const m of r.logs) console.log(String(m));
-
-// Staged rebrand (BRAND.md): the public command is `bella`, but the old `eunoia` binary must keep
-// working until a deliberate migration retires it — so the default build also emits a byte-identical
-// compat copy. Skipped when OUTFILE is overridden (custom name = caller's business) or opted out.
-if (r.success && !process.env.OUTFILE && process.env.BELLA_NO_COMPAT_BINARY !== "1") {
-  const { copyFileSync, chmodSync, statSync } = await import("node:fs");
-  const isWin = TARGET ? TARGET.includes("windows") : process.platform === "win32";
-  const exe = isWin ? ".exe" : "";
-  const built = OUTFILE + exe;
-  const compat = import.meta.dir + "/eunoia" + exe;
-  copyFileSync(built, compat);
-  if (!isWin) chmodSync(compat, statSync(built).mode);
-  console.log("compat copy:", compat, "(legacy name; see BRAND.md staged migration)");
-}

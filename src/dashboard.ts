@@ -2,7 +2,7 @@
 // CSS + vanilla JS, no build step, no external assets -> stays WASM-clean and embeds in the single binary).
 //
 // The HTML shell is served PUBLIC (a browser can't attach a bearer header when you navigate to a page).
-// It carries NO secret: the page prompts for EUNOIA_API_KEY, keeps it in the browser (localStorage), and
+// It carries NO secret: the page prompts for BELLA_API_KEY, keeps it in the browser (localStorage), and
 // sends it on its own /inspect, /search, /memories calls — which remain bearer-authed. So mount this route
 // BEFORE the auth middleware in index.ts (same pattern as /health).
 import { Hono } from "hono";

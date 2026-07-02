@@ -1,4 +1,4 @@
--- eunoia schema (pgvector). Applied at boot, idempotent.
+-- bellamente schema (pgvector). Applied at boot, idempotent.
 -- NOTE: the vector(384) columns below are TEMPLATED — db.ts rewrites 384 -> EMBED_DIM before applying this
 -- schema. The literal 384 is just the default (multilingual-e5-small). On a FRESH database the columns are
 -- created at EMBED_DIM. On an EXISTING database, CREATE TABLE IF NOT EXISTS is a no-op, so the columns KEEP

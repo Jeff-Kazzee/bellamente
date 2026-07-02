@@ -18,8 +18,8 @@
 //   straight through. (All of these are verified against PGlite in test/pg-shim.test.ts.)
 import type { PGlite, Transaction } from "@electric-sql/pglite";
 
-const FRAG = Symbol("eunoia.pgshim.frag");
-const JSONW = Symbol("eunoia.pgshim.json");
+const FRAG = Symbol("bellamente.pgshim.frag");
+const JSONW = Symbol("bellamente.pgshim.json");
 const JSON_OID = 114; // pg_type OID for `json` — tells PGlite to serialize the value as JSON.
 
 type JsonW = { [JSONW]: true; value: unknown };

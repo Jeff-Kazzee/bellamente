@@ -2,19 +2,19 @@
 
 You are working on **Bellamente** ("Memoria Viva for your AI agents") — a local-first memory
 service for AI agents: Bun + TypeScript + Hono, embedded PGlite (Postgres-in-WASM) + pgvector,
-local embeddings, single-binary builds. The public brand is Bellamente and the CLI is `bella`;
-most internal identifiers still say `eunoia` ON PURPOSE (staged rebrand). Read this whole file
-before changing anything.
+local embeddings, single-binary builds. The brand is Bellamente EVERYWHERE — copy, CLI (`bella`),
+and machine identifiers. The pre-release working title was fully purged before v0.0.1 (Jeff's
+directive, 2026-07-01): do NOT reintroduce it in any identifier, comment, doc, or test. Read this
+whole file before changing anything.
 
 ## The one rule that outranks everything
 **Never break a machine contract.** These are frozen until a migration plan says otherwise:
-- Env vars: `BELLA_*` are the documented names, read via `brandEnv()` (src/env.ts), which honors the
-  legacy `EUNOIA_*` spelling PERMANENTLY. Never remove the legacy fallback; never read
-  `process.env.BELLA_X`/`process.env.EUNOIA_X` directly — always `brandEnv("X")`.
-- `x-eunoia-*` HTTP header names
-- the data directory (`envPaths("Eunoia")` in src/paths.ts) — renaming it orphans user memories
-- `service: "eunoia"` in `/health` (the doctor authenticity contract; `brand` carries the public name)
-- `"eunoia.apikey"` localStorage key in dashboard/index.html
+- Env vars: `BELLA_*`, read via `brandEnv()` (src/env.ts). Never read `process.env.BELLA_X`
+  directly — always `brandEnv("X")`. There are NO legacy aliases.
+- `x-bella-*` HTTP header names
+- the data directory (`envPaths("Bellamente")` in src/paths.ts) — renaming it orphans user memories
+- `service: "bellamente"` in `/health` (the doctor authenticity contract)
+- `"bellamente.apikey"` localStorage key in dashboard/index.html
 - API route paths and response field names
 Brand copy (things a HUMAN reads: README, dashboard text, console/error messages, docs) says
 Bellamente / `bella`. When unsure whether something is copy or contract: it's a contract — ask.
@@ -34,7 +34,7 @@ Bellamente / `bella`. When unsure whether something is copy or contract: it's a 
    - `git diff --check`   (no whitespace damage)
    - `bunx tsc --noEmit`  (typecheck clean)
    - `bun test`           (every test green — no skips, no "unrelated failure" excuses)
-   - `bun run build`      (binary compiles; emits ./bella + legacy ./eunoia copy)
+   - `bun run build`      (binary compiles; emits ./bella)
 5. Push the branch, open a PR into `dev`. Do not merge your own PR unless Jeff said to.
 6. Update `docs/BACKLOG.md` (check the box, one-line outcome + date) in the same PR.
 
@@ -52,8 +52,8 @@ Bellamente / `bella`. When unsure whether something is copy or contract: it's a 
   BACKLOG P2.14 before touching any of the clamp helpers).
 - Comments only where the WHY is non-obvious. No new dependencies without checking
   `~/dev/.shared/deny-list-npm.json` (verified location) and `bun audit` first.
-- New/changed user-visible strings say Bellamente/bella. New machine identifiers: ask before
-  inventing either `EUNOIA_*` or `BELLA_*` (naming is a migration decision).
+- New/changed user-visible strings say Bellamente/bella. New machine identifiers use `BELLA_*`;
+  ask before inventing a new one (naming is a migration decision).
 
 ## What "done" means
 The acceptance criteria in the BACKLOG item are met, all four gates pass, the behavior is proven
