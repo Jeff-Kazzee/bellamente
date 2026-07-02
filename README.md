@@ -1,17 +1,16 @@
-# eunoia
+# Bellamente
+Memoria Viva for your AI agents.
 
-> Rebrand direction, 2026-07-01: public-facing product work should explore
-> **Bellamente** with the tagline **Memoria Viva for your AI agents.** See
-> `BRAND.md`. Code identifiers, package names, env vars, and headers remain
-> `eunoia` / `EUNOIA_*` / `x-eunoia-*` until a deliberate migration plan exists.
+(formerly Eunoia — the internal identifiers keep that name during the staged
+migration; see Compatibility below)
 
-Eunoia is a local-first memory substrate for AI agents. It stores durable facts
+Bellamente is a local-first memory substrate for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
 
 The product thesis is simple: agents need a well-ordered mind that stays close
 to the user, remains inspectable, and can run without a hosted memory service.
-Eunoia keeps the core small enough to reason about while leaving room for richer
+Bellamente keeps the core small enough to reason about while leaving room for richer
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
@@ -78,7 +77,7 @@ curl -s localhost:8080/search -H "authorization: Bearer $EUNOIA_API_KEY" \
 ```
 
 ## Embeddings: local + device-scaled
-Eunoia picks the embedder by device RAM so it "just works" without crashing low-end machines:
+Bellamente picks the embedder by device RAM so it "just works" without crashing low-end machines:
 - **quality** (default, capable machines): `Xenova/multilingual-e5-small` (WASM worker, 384-d) — best
   quality + multilingual; query/passage prefixes, mean pooling, L2-normalized.
 - **light** (auto on < ~7 GB RAM): `minishlab/potion-retrieval-32M` — a pure-TS static Model2Vec model
@@ -92,8 +91,8 @@ Override with `EUNOIA_EMBED_TIER=quality|light`, `EUNOIA_EMBED_MIN_RAM_GB`, or p
 
 ## Build single binary (M2)
 ```
-bun run build      # -> ./eunoia / eunoia.exe
-./eunoia
+bun run build      # -> ./bella / bella.exe (+ legacy ./eunoia copy)
+./bella
 ```
 
 ## API
@@ -119,6 +118,18 @@ See docs/PRD.md and docs/08-api.md.
 - `SEARCH_THRESHOLD` — recall similarity floor (per-model default).
 - `EUNOIA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
 - `EUNOIA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
+
+## Compatibility (staged rebrand)
+This is a staged rebrand: public copy says Bellamente, but machine identifiers
+have not moved yet, on purpose.
+- Env vars stay `EUNOIA_*` (e.g. `EUNOIA_API_KEY`, `EUNOIA_HOST`).
+- Headers stay `x-eunoia-*`.
+- The data directory is unchanged.
+- `/health` still reports `service:"eunoia"` (plus a new `brand:"bellamente"` field).
+- The build emits a legacy `eunoia` / `eunoia.exe` binary copy alongside `bella`.
+
+These will migrate deliberately later, with a real compatibility plan — see
+`BRAND.md`.
 
 ## Design principles
 - Local-first by default: no hosted memory account, no model server, no cloud
