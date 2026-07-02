@@ -10,7 +10,24 @@ import "../styles/machina.css";
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Roadmap — Bellamente</title>
     <meta name="description" content="Where Bellamente is going. v0.0.1 is an early release — usable, local-first, and not at all complete." />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="canonical" href="https://bellamente.vercel.app/roadmap/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Bellamente" />
+    <meta property="og:title" content="Roadmap - Bellamente" />
+    <meta property="og:description" content="Where Bellamente is going. v0.0.1 is usable, local-first, honest, and not complete." />
+    <meta property="og:url" content="https://bellamente.vercel.app/roadmap/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Roadmap - Bellamente" />
+    <meta name="twitter:description" content="Where Bellamente is going. v0.0.1 is usable, local-first, honest, and not complete." />
+    <script type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "Roadmap - Bellamente",
+      "description": "Where Bellamente is going. v0.0.1 is usable, local-first, honest, and not complete.",
+      "url": "https://bellamente.vercel.app/roadmap/",
+      "publisher": { "@type": "Organization", "name": "The Little AI Co" },
+      "about": { "@type": "SoftwareApplication", "name": "Bellamente", "applicationCategory": "DeveloperApplication" }
+    })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap"
@@ -29,8 +46,10 @@ import "../styles/machina.css";
           <a class="db-logo" href="/">Bella<span>mente</span></a>
           <nav aria-label="primary">
             <a href="/">Home</a>
+            <a href="/docs">Docs</a>
+            <a href="/changelog">Changelog</a>
             <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/latest">Download</a>
+            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe">Download</a>
           </nav>
         </header>
 
@@ -44,6 +63,11 @@ import "../styles/machina.css";
             <b>Early software.</b> The memory core, the proxy, the traces, and the dashboard work today and
             are tested. Everything below is what's still missing. If a feature you need is on this list,
             it does not exist yet — no vaporware, no "coming soon" buttons that lie.
+          </div>
+          <div class="rm-banner" role="note">
+            <b>Roadmaps move.</b> This sequence is a promise of direction, not a rigid queue: items can
+            ship out of order, and multiple items may land together when one implementation clears several
+            gaps. When that happens, shipped work moves from this page to the <a href="/changelog">changelog</a>.
           </div>
         </section>
 

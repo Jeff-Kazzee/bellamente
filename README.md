@@ -14,6 +14,10 @@ recall traces, document ingestion, and profile-aware workflows.
 **v0.0.1 — early release.** Usable, tested, honest — and not at all complete. The
 [ROADMAP](ROADMAP.md) is the real backlog; if a feature you need is on it, it does not exist yet.
 
+**Docs:** [bellamente.vercel.app/docs](https://bellamente.vercel.app/docs/) — the same Markdown
+lives in this repo at [`website/src/pages/docs/`](website/src/pages/docs/) and redeploys on every
+change to `prod`.
+
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
 - Memory lifecycle: COMPLETE. Writes dedup exact duplicates and SUPERSEDE near-duplicates as new
   versions (old versions stay inspectable); memories can be read with full version history, edited

@@ -1,8 +1,36 @@
 ---
 // Bellamente — "La Macchina" (design B, the chosen direction; see design-preview.html for provenance).
 // Markup ported verbatim from the preview, minus the A/B switcher chrome. Memory with evidence:
-// the terminal is the hero. Shared design system: src/styles/machina.css (also used by /roadmap).
+// the terminal is the hero. Shared design system: src/styles/machina.css (also used by /roadmap and /changelog).
 import "../styles/machina.css";
+
+const downloads = [
+  {
+    label: "Windows x64",
+    detail: "bella-windows-x64.exe",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe",
+  },
+  {
+    label: "macOS Apple silicon",
+    detail: "bella-darwin-arm64",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-arm64",
+  },
+  {
+    label: "macOS Intel",
+    detail: "bella-darwin-x64",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-x64",
+  },
+  {
+    label: "Linux x64",
+    detail: "bella-linux-x64",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-linux-x64",
+  },
+  {
+    label: "SHA256 checksums",
+    detail: "SHA256SUMS.txt",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt",
+  },
+];
 ---
 
 <!doctype html>
@@ -15,7 +43,29 @@ import "../styles/machina.css";
       name="description"
       content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="canonical" href="https://bellamente.vercel.app/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Bellamente" />
+    <meta property="og:title" content="Bellamente - Memoria Viva for your AI agents" />
+    <meta property="og:description" content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine." />
+    <meta property="og:url" content="https://bellamente.vercel.app/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Bellamente - Memoria Viva for your AI agents" />
+    <meta name="twitter:description" content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine." />
+    <script type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Bellamente",
+      "alternateName": "bella",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows, macOS, Linux",
+      "description": "Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine.",
+      "url": "https://bellamente.vercel.app/",
+      "downloadUrl": "https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1",
+      "softwareVersion": "0.0.1",
+      "author": { "@type": "Organization", "name": "The Little AI Co" },
+      "publisher": { "@type": "Organization", "name": "The Little AI Co" }
+    })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap"
@@ -34,9 +84,11 @@ import "../styles/machina.css";
           <a class="db-logo" href="/">Bella<span>mente</span></a>
           <nav aria-label="primary">
             <a href="#db-proof">Proof</a>
+            <a href="/docs">Docs</a>
             <a href="/roadmap">Roadmap</a>
+            <a href="/changelog">Changelog</a>
             <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/latest">Download</a>
+            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe">Download</a>
           </nav>
         </header>
 
@@ -49,10 +101,18 @@ import "../styles/machina.css";
           </h1>
           <p class="tagline">Memoria Viva for your AI agents.</p>
           <div class="db-actions">
-            <a class="db-btn primary" href="https://github.com/Jeff-Kazzee/bellamente/releases/latest">Download v0.0.1</a>
-            <a class="db-btn ghost" href="https://github.com/Jeff-Kazzee/bellamente">Source on GitHub</a>
+            <a class="db-btn primary" href="https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe">Download for Windows</a>
+            <a class="db-btn ghost" href="https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1">Release notes</a>
           </div>
-          <p class="db-platnote">one binary · no Docker · no account · macOS/Linux soon</p>
+          <p class="db-platnote">one binary · no Docker · no account · Windows/macOS/Linux</p>
+          <div class="db-downloads" aria-label="Direct downloads">
+            {downloads.map((download) => (
+              <a class="db-download" href={download.href}>
+                <strong>{download.label}</strong>
+                <span>{download.detail}</span>
+              </a>
+            ))}
+          </div>
 
           <!-- signature: the terminal, typing itself -->
           <div class="db-term" aria-label="Terminal demo: starting bella, storing a memory, recalling it with a score">
@@ -128,18 +188,18 @@ import "../styles/machina.css";
           <h2>Field notes</h2>
           <article class="db-art">
             <span class="date">2026-07</span>
-            <h3><a href="#">Your agent's memory should be inspectable</a></h3>
-            <span class="read">6 min →</span>
+            <h3><a href="/changelog">Bellamente v0.0.1 is out</a></h3>
+            <span class="read">changelog →</span>
           </article>
           <article class="db-art">
             <span class="date">2026-07</span>
-            <h3><a href="#">Memoria Viva: what living memory means</a></h3>
-            <span class="read">4 min →</span>
+            <h3><a href="/roadmap">What ships next, and what may ship together</a></h3>
+            <span class="read">roadmap →</span>
           </article>
           <article class="db-art">
             <span class="date">2026-06</span>
-            <h3><a href="#">A proxy that never phones home</a></h3>
-            <span class="read">8 min →</span>
+            <h3><a href="https://github.com/Jeff-Kazzee/bellamente">A proxy that never phones home</a></h3>
+            <span class="read">source →</span>
           </article>
         </section>
 
@@ -155,4 +215,3 @@ import "../styles/machina.css";
     </main>
   </body>
 </html>
-

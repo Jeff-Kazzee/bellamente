@@ -95,6 +95,41 @@
     .db-art { grid-template-columns: 1fr; gap: 6px; }
   }
 
-/* roadmap: honesty banner */
+/* roadmap/changelog: honesty banners + download ledger */
 .rm-banner { margin-top: 28px; border: 1px solid var(--copper); border-radius: 10px; padding: 16px 18px; background: rgba(196,112,58,.08); color: var(--bone); font-size: 15.5px; max-width: 72ch; }
 .rm-banner b { color: var(--copper); }
+.db-downloads { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 18px 0 0; max-width: 980px; }
+.db-downloads.stacked { grid-template-columns: 1fr; margin: 0; }
+.db-download { border: 1px solid var(--edge); border-radius: 8px; padding: 12px 13px; background: rgba(8,27,22,.62); min-width: 0; }
+.db-download:hover { border-color: var(--patina); color: var(--bone); }
+.db-download strong { display: block; color: var(--bone); font-size: 13.5px; line-height: 1.25; }
+.db-download span { display: block; color: var(--bone-dim); font-family: "IBM Plex Mono", monospace; font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; margin-top: 4px; }
+@media (max-width: 880px) {
+  .db-downloads { grid-template-columns: 1fr; }
+}
+/* docs: prose article in the La Macchina system */
+.docs-wrap { max-width: 860px; margin: 0 auto; padding: 0 24px 90px; }
+.docs-article { color: var(--bone); font-size: 16px; }
+.docs-article h1 { font-size: clamp(32px, 4.5vw, 44px); text-transform: uppercase; line-height: 1.05; margin: 42px 0 10px; }
+.docs-article h2 { font-size: 22px; margin: 40px 0 10px; border-top: 1px solid var(--edge); padding-top: 26px; }
+.docs-article h3 { font-size: 17px; margin: 26px 0 8px; color: var(--bone); }
+.docs-article p, .docs-article li { color: var(--bone-dim); line-height: 1.7; }
+.docs-article li { margin: 6px 0; }
+.docs-article strong { color: var(--bone); }
+.docs-article a { color: var(--patina); } .docs-article a:hover { color: var(--bone); }
+.docs-article code { font-family: "IBM Plex Mono", monospace; font-size: .88em; background: var(--shadow); border: 1px solid var(--edge); border-radius: 5px; padding: 1px 6px; color: var(--bone); }
+.docs-article pre { background: var(--shadow); border: 1px solid var(--edge); border-radius: 10px; padding: 16px 18px; overflow-x: auto; font-family: "IBM Plex Mono", monospace; font-size: 13.5px; line-height: 1.7; }
+.docs-article pre code { background: none; border: 0; padding: 0; }
+.docs-article table { border-collapse: collapse; width: 100%; font-size: 14.5px; display: block; overflow-x: auto; }
+.docs-article th, .docs-article td { border: 1px solid var(--edge); padding: 8px 12px; text-align: left; color: var(--bone-dim); }
+.docs-article th { color: var(--copper); font-family: "IBM Plex Mono", monospace; font-size: 12.5px; letter-spacing: .06em; }
+.docs-article blockquote { margin: 16px 0; border-left: 3px solid var(--copper); padding: 4px 16px; background: rgba(196,112,58,.07); border-radius: 0 8px 8px 0; }
+.docs-nav { display: flex; gap: 14px; flex-wrap: wrap; font-family: "IBM Plex Mono", monospace; font-size: 13px; padding: 18px 0; border-bottom: 1px solid var(--edge); }
+.docs-nav a { color: var(--bone-dim); } .docs-nav a:hover, .docs-nav a[aria-current="page"] { color: var(--patina); }
+.pre-wrap { position: relative; margin: 16px 0; }
+.pre-wrap pre { margin: 0; }
+.pre-wrap .copy-btn { position: absolute; top: 8px; right: 8px; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--edge); background: var(--panel); color: var(--bone-dim); cursor: pointer; }
+.pre-wrap .copy-btn:hover { border-color: var(--copper); color: var(--bone); }
+.pre-wrap.prompt pre { border-color: var(--copper); padding-top: 40px; }
+.pre-wrap .prompt-tag { position: absolute; top: 0; left: 0; right: 0; font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .07em; color: var(--copper); background: rgba(196,112,58,.10); border-bottom: 1px solid var(--copper); border-radius: 10px 10px 0 0; padding: 6px 12px; }
+.pre-wrap.prompt .copy-btn { border-color: var(--copper); color: var(--copper); }

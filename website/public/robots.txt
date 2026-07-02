@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://bellamente.vercel.app/sitemap.xml
