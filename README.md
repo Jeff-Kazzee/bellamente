@@ -14,9 +14,9 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
-**Pre-release.** v0.0.1 sign-off is blocked on two items (specs in `docs/HANDOFF-CODEX.md`):
-streamed memory-tool reinvocation, and capture v2 (LLM distillation through the local upstream).
-No release artifacts are published and the repository stays private until both land.
+**Pre-release.** v0.0.1 sign-off is blocked on one remaining item (spec in `docs/HANDOFF-CODEX.md`):
+capture v2 (LLM distillation through the local upstream). Streamed memory-tool reinvocation shipped.
+No release artifacts are published and the repository stays private until it lands.
 
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
 - Memory lifecycle: COMPLETE. Writes dedup exact duplicates and SUPERSEDE near-duplicates as new
@@ -33,7 +33,7 @@ No release artifacts are published and the repository stays private until both l
   `DATABASE_URL` stays as an advanced override for external Postgres. Schema changes ship as
   append-only migrations applied at boot (schema_migrations), so upgrades never strand existing data.
 - M2 standalone binary: DONE (verified compiled binary on Windows + Linux; see docs/STATUS.md).
-- M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers, with upstream timeouts (BELLA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (BELLA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
+- M3 proxy upstream-forward + tool-call interception: WIRED for buffered AND streamed `/v1/chat/completions`-compatible local servers, with upstream timeouts (BELLA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (BELLA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests get the same memory tool round as buffered ones — the proxy classifies the upstream stream, runs `searchMemory` when the model calls it, re-invokes upstream with the results, and streams only the final answer to the client. Provider-specific shapes (Anthropic/Google) remain a follow-up.
 - Document ingestion: WIRED. POST /documents chunks + embeds markdown (structure-aware, token-budget
   guarded); chunks are searchable via /search searchMode documents|hybrid (vector + full-text, RRF-fused).
 - Auto-capture: the proxy remembers durable first-person facts from your chats — conservatively,
@@ -61,7 +61,7 @@ src/documents.ts document ingestion: POST/GET/DELETE /documents (chunk -> embed 
 src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget guarded)
 src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, per-model threshold, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
-src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: buffered memory tool loop + traceable streaming forward, upstream timeouts)
+src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: memory tool loop for buffered + streamed requests, upstream timeouts)
 schema.sql       full pgvector DDL (applied at boot; changes to shipped tables go through src/migrations.ts)
 docs/            PRD + 11 subsystem specs
 ```
@@ -117,7 +117,7 @@ bun run build      # -> ./bella / bella.exe (+ legacy ./eunoia copy)
 - POST   /search              - recall (memories: cosine; documents: cosine + full-text RRF; hybrid: rank-fused; emits trace headers)
 - GET    /inspect             - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
-- POST /v1/chat/completions - local Chat Completions proxy with buffered memory tool loop and traceable streaming forward
+- POST /v1/chat/completions - local Chat Completions proxy with the memory tool loop on buffered and streamed requests
 See docs/PRD.md and docs/08-api.md.
 
 ### Server + tuning env vars

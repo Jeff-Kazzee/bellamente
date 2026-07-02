@@ -300,7 +300,7 @@ test("proxy streams upstream responses with profile context and trace visibility
     const requestBody = JSON.parse(String(init?.body ?? "{}"));
     upstreamCalls.push(requestBody);
     expect(requestBody.stream).toBe(true);
-    expect(requestBody.tools).toBeUndefined();
+    expect(requestBody.tools.map((tool: any) => tool.function?.name)).toEqual(["searchMemory"]);
     expect(requestBody.messages[0]).toMatchObject({ role: "system" });
     expect(requestBody.messages[0].content).toContain("John prefers concise answers");
     return sseResponse([
@@ -340,9 +340,10 @@ test("proxy streams upstream responses with profile context and trace visibility
     const traceId = res.headers.get("x-eunoia-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
-    expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream", resultCount: 0, injectedCount: 1 });
-    expect(trace.injected[0]).toMatchObject({ type: "profile" });
-    expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: false, upstreamStatus: 200, contextInjectedCount: 1, memoryToolSuppressed: false });
+    expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream", resultCount: 0, injectedCount: 2 });
+    expect(trace.injected[0]).toMatchObject({ type: "tool" });
+    expect(trace.injected[1]).toMatchObject({ type: "profile" });
+    expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: false, upstreamStatus: 200, contextInjectedCount: 2, toolAlreadyPresent: false });
     expect(trace.metadata.chunkCount).toBe(3);
     expect(trace.metadata.byteCount).toBeGreaterThan(0);
   } finally {
@@ -350,15 +351,97 @@ test("proxy streams upstream responses with profile context and trace visibility
   }
 }, TEST_TIMEOUT_MS);
 
-test("proxy suppresses Eunoia memory tools on streaming requests", async () => {
+test("proxy runs a streamed memory tool round and streams only the final answer", async () => {
   const upstreamCalls: any[] = [];
   const fetcher: typeof fetch = async (_input, init) => {
     const requestBody = JSON.parse(String(init?.body ?? "{}"));
     upstreamCalls.push(requestBody);
     expect(requestBody.stream).toBe(true);
-    expect(requestBody.tools).toBeUndefined();
+    if (upstreamCalls.length === 1) {
+      expect(requestBody.tools.map((tool: any) => tool.function?.name)).toEqual(["searchMemory"]);
+      // function.arguments arrives as string fragments split mid-JSON across chunk boundaries.
+      return sseResponse([
+        'data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_mem_1","type":"function","function":{"name":"searchMemory","arguments":"{\\"quer"}}]},"finish_reason":null}]}\n\n',
+        'data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ies\\":[\\"which theme\\"]}"}}]},"finish_reason":null}]}\n\n',
+        'data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        "data: [DONE]\n\n",
+      ]);
+    }
     expect(requestBody.tool_choice).toBe("none");
-    return sseResponse(["data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Streaming without memory tool.\"},\"finish_reason\":\"stop\"}]}\n\n", "data: [DONE]\n\n"]);
+    const assistant = requestBody.messages.at(-2);
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.tool_calls[0]).toMatchObject({
+      id: "call_mem_1",
+      type: "function",
+      function: { name: "searchMemory", arguments: '{"queries":["which theme"]}' },
+    });
+    const toolMessage = requestBody.messages.at(-1);
+    expect(toolMessage.role).toBe("tool");
+    expect(toolMessage.tool_call_id).toBe("call_mem_1");
+    expect(JSON.parse(toolMessage.content).results[0].content).toBe("John prefers dark mode");
+    return sseResponse([
+      'data: {"id":"chatcmpl-answer","choices":[{"index":0,"delta":{"role":"assistant","content":"Use dark mode."},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+  };
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-eunoia-user-id": "external-user-stream-round" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Which theme should I use?" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(2);
+    expect(res.headers.get("x-eunoia-streaming")).toBe("true");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
+    expect(res.headers.get("x-eunoia-search-results")).toBe("1");
+    expect(res.headers.get("x-eunoia-tool-intercept")).toBe("searchMemory");
+    const streamText = await res.text();
+    expect(streamText).toContain("Use dark mode.");
+    expect(streamText).toContain("data: [DONE]");
+    expect(streamText).not.toContain("call_mem_1");
+    expect(streamText).not.toContain("tool_calls");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream-round", resultCount: 1, injectedCount: 1 });
+    expect(trace.queries).toEqual(["which theme"]);
+    expect(trace.retrieved[0]).toMatchObject({ type: "memory", id: memId, content: "John prefers dark mode" });
+    expect(trace.metadata).toMatchObject({
+      streaming: true,
+      memoryRound: true,
+      toolCallCount: 1,
+      upstreamStatus: 200,
+      firstUpstreamStatus: 200,
+      toolSearchTimedOut: false,
+      toolSearchFailed: false,
+    });
+    expect(trace.metadata.chunkCount).toBe(2);
+    expect(trace.metadata.byteCount).toBeGreaterThan(0);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("proxy passes streamed external tool calls through verbatim", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    const requestBody = JSON.parse(String(init?.body ?? "{}"));
+    upstreamCalls.push(requestBody);
+    expect(requestBody.tools.map((tool: any) => tool.function?.name)).toEqual(["searchMemory", "lookupWeather"]);
+    return sseResponse([
+      'data: {"id":"chatcmpl-ext","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_weather_1","type":"function","function":{"name":"lookupWeather","arguments":"{\\"city\\":\\"Denver\\"}"}}]},"finish_reason":null}]}\n\n',
+      'data: {"id":"chatcmpl-ext","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
   };
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
@@ -373,21 +456,83 @@ test("proxy suppresses Eunoia memory tools on streaming requests", async () => {
       body: JSON.stringify({
         model: "gpt-test",
         stream: true,
-        messages: [{ role: "user", content: "Help me choose a theme" }],
-        tools: [{ type: "function", function: { name: "searchMemory", description: "legacy memory", parameters: { type: "object" } } }],
-        tool_choice: { type: "function", function: { name: "searchMemory" } },
+        messages: [{ role: "user", content: "What is the weather in Denver?" }],
+        tools: [{ type: "function", function: { name: "lookupWeather", description: "Weather lookup", parameters: { type: "object" } } }],
       }),
     });
 
     expect(res.status).toBe(200);
-    await res.text();
     expect(upstreamCalls).toHaveLength(1);
+    expect(res.headers.get("x-eunoia-streaming")).toBe("true");
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("false");
+    const streamText = await res.text();
+    expect(streamText).toContain("call_weather_1");
+    expect(streamText).toContain("lookupWeather");
+    expect(streamText).toContain("data: [DONE]");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls", resultCount: 0 });
+    expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: false, upstreamStatus: 200 });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("proxy streamed memory round degrades to an answer when search fails", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    const requestBody = JSON.parse(String(init?.body ?? "{}"));
+    upstreamCalls.push(requestBody);
+    if (upstreamCalls.length === 1) {
+      return sseResponse([
+        'data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_mem_2","type":"function","function":{"name":"searchMemory","arguments":"{\\"queries\\":[\\"which theme\\"]}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+        "data: [DONE]\n\n",
+      ]);
+    }
+    const toolMessage = requestBody.messages.at(-1);
+    const payload = JSON.parse(toolMessage.content);
+    expect(payload.error).toBe("memory_search_unavailable");
+    expect(payload.results).toEqual([]);
+    return sseResponse([
+      'data: {"id":"chatcmpl-answer","choices":[{"index":0,"delta":{"role":"assistant","content":"Pick whichever theme you like."},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+  };
+
+  const ctx = await makeCtx({
+    fetch: fetcher,
+    upstreamBaseUrl: "https://upstream.example/v1",
+    allowUnauthenticatedUpstream: true,
+    embed: async () => {
+      throw new Error("embedder offline");
+    },
+  });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Which theme should I use?" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(2);
+    expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
+    expect(res.headers.get("x-eunoia-search-results")).toBe("0");
+    const streamText = await res.text();
+    expect(streamText).toContain("Pick whichever theme you like.");
 
     const traceId = res.headers.get("x-eunoia-trace-id");
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", resultCount: 0 });
-    expect(trace.metadata).toMatchObject({ streaming: true, toolAlreadyPresent: true, memoryToolSuppressed: true, toolChoiceAdjusted: true });
+    expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: true, toolSearchFailed: true });
+    expect(trace.metadata.toolSearchError).toContain("embedder offline");
   } finally {
     await ctx.close();
   }
