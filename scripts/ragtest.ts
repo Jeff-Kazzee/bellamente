@@ -8,9 +8,12 @@ import { makeEmbed } from "../src/embed";
 import { chunkMarkdown } from "../src/chunk";
 import { ingestDocument } from "../src/documents";
 import { searchChunks } from "../src/search";
+import { brandEnv } from "../src/env";
 
-const DOC_DIRS = (process.env.EUNOIA_RAGTEST_DIRS?.split(";").filter(Boolean) ?? [
-  "C:/Users/jeffk/dev/The Little AI Co Projects/eunoia/docs",
+// Default to the repo's own docs/ relative to this script — a hardcoded absolute path breaks the
+// moment the repo folder is renamed/moved (it is being renamed for the Bellamente rebrand).
+const DOC_DIRS = (brandEnv("RAGTEST_DIRS")?.split(";").filter(Boolean) ?? [
+  join(import.meta.dir, "..", "docs"),
 ]);
 const TAG = "docs";
 

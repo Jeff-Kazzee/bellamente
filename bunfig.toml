@@ -1,0 +1,14 @@
+# Dev: alias the native ONNX backend to the WASM one (mirrors build.ts) so `bun run` uses a single
+# onnxruntime-web instance for both the transformers.js tokenizer and inference (no native, no conflict).
+preload = ["./scripts/ort-alias-preload.ts"]
+
+# Coverage gate: every `bun test` computes coverage and FAILS below these floors. This is the
+# mechanical half of the test-first rule in AGENTS.md — new code cannot merge untested, no matter
+# which model wrote it. Floors are a RATCHET: raise them as gaps fill (target: 1.0); never lower.
+[test]
+coverage = true
+coverageSkipTestFiles = true
+coverageThreshold = { functions = 0.85, lines = 0.89 }
+# Initial calibration (2026-07-02, src-only after coverageSkipTestFiles): functions 84.48 / lines 89.17.
+# Remaining gap lives in embed.ts (worker dispatch), embed-common, db.ts lock/signal paths, index.ts
+# boot — tracked in docs/BACKLOG.md as the coverage-ratchet task.

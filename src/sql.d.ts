@@ -4,8 +4,30 @@ declare module "*.sql" {
   export default content;
 }
 
-// Build-time virtual module injected by build.ts (ort-embed-libs plugin). Lists the target's ORT
-// dependent shared libs as embedded files for src/runtime.ts to extract + preload. Absent in dev.
-declare module "eunoia:ort-libs" {
-  export const ortLibFiles: { name: string; src: string; preload?: boolean }[];
+// type:"file" imports return the (extracted) path string. Targeted so normal .mjs imports are unaffected.
+declare module "*ort-wasm-simd-threaded.wasm" {
+  const path: string;
+  export default path;
+}
+declare module "*ort-wasm-simd-threaded.mjs" {
+  const path: string;
+  export default path;
+}
+
+// Embedded PGlite runtime assets (type:"file" -> extracted path string), for the compiled binary.
+declare module "*pglite.wasm" {
+  const path: string;
+  export default path;
+}
+declare module "*initdb.wasm" {
+  const path: string;
+  export default path;
+}
+declare module "*pglite.data" {
+  const path: string;
+  export default path;
+}
+declare module "*vector.tar.gz" {
+  const path: string;
+  export default path;
 }

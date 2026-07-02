@@ -1,7 +1,7 @@
 // embed.ts - the embedding singleton + public surface (Spec 02).
-// Local path runs the model in a WORKER thread (src/embed-worker.ts) — off the HTTP event loop and
-// clear of the Bun-standalone main-thread native-ORT segfault. OpenAI dev-fallback stays inline
-// (network call, no native dep). Pure model/profile helpers live in src/embed-common.ts.
+// Local path runs the WASM embedding engine in a WORKER thread (src/embed-worker.ts) — keeping model
+// inference off the HTTP event loop. OpenAI dev-fallback stays inline (network call). Pure model/profile
+// helpers live in src/embed-common.ts.
 import {
   EMBED_DIM,
   PROVIDER,
@@ -13,6 +13,7 @@ import {
   type Embed,
   type TaskType,
 } from "./embed-common";
+import { brandEnv } from "./env";
 
 export { EMBED_DIM, isValidVector, embedModelName } from "./embed-common";
 export type { Embed, TaskType } from "./embed-common";
@@ -35,35 +36,45 @@ async function embedOpenAI(values: string[], taskType: TaskType): Promise<number
 // ---- Local worker client ---------------------------------------------------------------------
 type WorkerOut = { id: number; ok: true; vectors: number[][] } | { id: number; ok: false; error: string };
 
+type Pending = { resolve: (v: number[][]) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
+const EMBED_TIMEOUT_MS = Number(brandEnv("EMBED_TIMEOUT_MS") ?? 120_000);
+
 function makeLocalWorkerEmbed(): Embed {
   let worker: Worker | null = null;
   let seq = 0;
-  const pending = new Map<number, { resolve: (v: number[][]) => void; reject: (e: Error) => void }>();
+  const pending = new Map<number, Pending>();
 
-  const failAll = (err: Error) => {
-    for (const p of pending.values()) p.reject(err);
+  // Tear down the (hung/crashed) worker and reject every in-flight request so the next call respawns.
+  const recycle = (err: Error) => {
+    const dead = worker;
+    worker = null;
+    if (dead) { try { dead.terminate(); } catch {} }
+    for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err); }
     pending.clear();
   };
 
   const ensureWorker = (): Worker => {
     if (worker) return worker;
-    // The worker is bundled as a separate entrypoint (see build.ts). In a --compile binary it is
-    // emitted as embed-worker.js next to the entry; in dev (`bun run`) the real file is .ts. Reference
-    // the right extension per environment (Bun does not map .ts->.js for absolute /$bunfs paths).
-    const compiled = !!(globalThis as any).Bun?.embeddedFiles?.length;
-    const workerUrl = new URL(compiled ? "./embed-worker.js" : "./embed-worker.ts", import.meta.url).href;
-    const w = new Worker(workerUrl, { type: "module" });
+    // The worker is a separate --compile entrypoint (build.ts). Reference form differs by environment
+    // (empirically verified Win+Linux compiled + dev; Bun #16869/#15981): a BARE source specifier in a
+    // standalone binary, a URL-relative specifier in dev. Detect standalone via import.meta.url.
+    const standalone = import.meta.url.includes("$bunfs") || /%7ebun|~bun/i.test(import.meta.url);
+    const w = standalone
+      ? new Worker("./embed-worker.ts", { type: "module" })
+      : new Worker(new URL("./embed-worker.ts", import.meta.url), { type: "module" });
     w.onmessage = (ev: MessageEvent<WorkerOut>) => {
+      if (w !== worker) return; // ignore late messages from a replaced worker
       const m = ev.data;
       const p = pending.get(m.id);
       if (!p) return;
+      clearTimeout(p.timer);
       pending.delete(m.id);
       if (m.ok) p.resolve(m.vectors);
       else p.reject(new Error(m.error));
     };
     w.onerror = (ev: ErrorEvent) => {
-      failAll(new Error("embed worker crashed: " + (ev?.message ?? "unknown")));
-      worker = null; // allow a fresh worker on the next call
+      if (w !== worker) return; // ignore late errors from a replaced worker
+      recycle(new Error("embed worker crashed: " + (ev?.message ?? "unknown")));
     };
     worker = w;
     return w;
@@ -74,23 +85,41 @@ function makeLocalWorkerEmbed(): Embed {
     const w = ensureWorker();
     const id = ++seq;
     return new Promise<number[][]>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        // A hung worker won't serve anyone — recycle it so the next request gets a fresh one.
+        if (pending.has(id)) recycle(new Error(`embed worker timed out after ${EMBED_TIMEOUT_MS}ms`));
+      }, EMBED_TIMEOUT_MS);
+      pending.set(id, { resolve, reject, timer });
       w.postMessage({ id, type: "embed", values, taskType });
     });
   };
 }
 
 export function makeEmbed(): Embed {
-  return PROVIDER === "openai" ? ({ values, taskType }) => embedOpenAI(values, taskType) : makeLocalWorkerEmbed();
+  if (PROVIDER === "openai") return ({ values, taskType }) => embedOpenAI(values, taskType);
+  if (profile.engine === "static") return makeStaticEmbed();
+  return makeLocalWorkerEmbed();
+}
+
+// Static Model2Vec ("potion") runs INLINE — pure-TS, low-RAM, no worker and no native/WASM, so it cannot
+// hang (the multi-thread WASM failure) or OOM-crash. Loaded lazily on first use.
+function makeStaticEmbed(): Embed {
+  return async ({ values, taskType }) => {
+    if (values.length === 0) return [];
+    const { embedStatic } = await import("./embed-model2vec");
+    return embedStatic(values, taskType);
+  };
 }
 
 export async function prewarmEmbed(embed: Embed): Promise<void> {
   if (PROVIDER === "openai") return;
-  if (process.env.EUNOIA_SKIP_EMBEDDING_PREWARM === "1" || process.env.EUNOIA_SKIP_EMBEDDING_PREWARM === "true") {
+  const skip = brandEnv("SKIP_EMBEDDING_PREWARM");
+  if (skip === "1" || skip === "true") {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }
-  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (dtype=${LOCAL_DTYPE}, pooling=${profile.pooling}, dim=${EMBED_DIM}) in worker...`);
+  const where = profile.engine === "static" ? "static/inline" : `wasm/worker dtype=${LOCAL_DTYPE}`;
+  console.log(`[embeddings] prewarming ${LOCAL_MODEL} (${where}, pooling=${profile.pooling}, dim=${EMBED_DIM})...`);
   const t = Date.now();
   await embed({ values: ["warmup"], taskType: "RETRIEVAL_DOCUMENT" });
   console.log(`[embeddings] ready in ${Date.now() - t}ms`);

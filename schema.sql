@@ -1,6 +1,9 @@
--- eunoia schema (pgvector). Applied at boot, idempotent.
--- NOTE: vector(N) must equal EMBED_DIM (default 384 for multilingual-e5-small).
--- Changing the embedding model's dimension requires recreating these tables.
+-- bellamente schema (pgvector). Applied at boot, idempotent.
+-- NOTE: the vector(384) columns below are TEMPLATED — db.ts rewrites 384 -> EMBED_DIM before applying this
+-- schema. The literal 384 is just the default (multilingual-e5-small). On a FRESH database the columns are
+-- created at EMBED_DIM. On an EXISTING database, CREATE TABLE IF NOT EXISTS is a no-op, so the columns KEEP
+-- their original dimension — switching the model's dimension is NOT automatic; makeDb() detects the
+-- mismatch at boot and refuses to start, telling you to wipe the data dir (or migrate/re-embed) to change it.
 CREATE EXTENSION IF NOT EXISTS vector;
 
 DO $$ BEGIN
@@ -87,6 +90,25 @@ CREATE TABLE IF NOT EXISTS memory_document_source (
   PRIMARY KEY (memory_entry_id, document_id)
 );
 
+CREATE TABLE IF NOT EXISTS recall_trace (
+  id char(22) PRIMARY KEY,
+  org_id varchar(22) NOT NULL,
+  kind text NOT NULL,
+  status text NOT NULL DEFAULT 'ok',
+  user_id text,
+  container_tag varchar(255),
+  query text,
+  queries json NOT NULL DEFAULT '[]'::json,
+  search_mode text,
+  result_count integer NOT NULL DEFAULT 0,
+  injected_count integer NOT NULL DEFAULT 0,
+  latency_ms integer NOT NULL DEFAULT 0,
+  retrieved json NOT NULL DEFAULT '[]'::json,
+  injected json NOT NULL DEFAULT '[]'::json,
+  request json NOT NULL DEFAULT '{}'::json,
+  metadata json NOT NULL DEFAULT '{}'::json,
+  created_at timestamp NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS chunk (
   id char(22) PRIMARY KEY,
   document_id char(22) NOT NULL,
@@ -105,6 +127,25 @@ CREATE INDEX IF NOT EXISTS idx_memory_entry_embedding_hnsw
 CREATE INDEX IF NOT EXISTS idx_chunk_embedding_hnsw
   ON chunk USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_chunk_document ON chunk (document_id);
+CREATE INDEX IF NOT EXISTS idx_recall_trace_created
+  ON recall_trace (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recall_trace_kind_created
+  ON recall_trace (org_id, kind, created_at DESC);
 -- full-text leg for hybrid search; 'simple' = language-neutral (multilingual default)
 CREATE INDEX IF NOT EXISTS idx_chunk_content
   ON chunk USING gin (to_tsvector('simple', content));
+
+-- Hot-filter indexes (also shipped to existing installs as migration 001 — keep both in sync; see
+-- src/migrations.ts rules).
+CREATE INDEX IF NOT EXISTS idx_memory_entry_latest
+  ON memory_entry (org_id, is_latest, is_forgotten, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entry_space ON memory_entry (space_id);
+CREATE INDEX IF NOT EXISTS idx_memory_entry_root ON memory_entry (root_memory_id);
+CREATE INDEX IF NOT EXISTS idx_document_org ON document (org_id);
+CREATE INDEX IF NOT EXISTS idx_document_container_tags ON document USING gin (container_tags);
+CREATE INDEX IF NOT EXISTS idx_memory_document_source_document
+  ON memory_document_source (document_id);
+-- exact-dup write check: md5 keeps the key under the btree row-size cap for 10k-char memories
+CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
+  ON memory_entry (org_id, space_id, md5(memory))
+  WHERE is_latest = true AND is_forgotten = false;
