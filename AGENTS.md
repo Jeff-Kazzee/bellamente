@@ -78,7 +78,11 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    - `bunx tsc --noEmit`  (typecheck clean)
    - `bun test`           (every test green — no skips, no "unrelated failure" excuses)
    - `bun run build`      (binary compiles; emits ./bella)
-5. Push the branch, open a PR into `dev`. Do not merge your own PR unless Jeff said to.
+5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
+   NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the
+   designated reviewer (Fable) or Jeff merges, and NEVER while review follow-ups are still open
+   on the PR branch (PR #79 was merged mid-review and dev briefly shipped without a fix — PR #84
+   repaired it). Release surfaces (tags, releases, dev->prod, deploys) are reviewer/Jeff-only.
 6. Update `docs/BACKLOG.md` (check the box, one-line outcome + date) in the same PR.
 
 ## Code conventions (copy the existing patterns, do not invent)
