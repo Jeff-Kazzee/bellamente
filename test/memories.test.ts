@@ -82,6 +82,44 @@ test("POST creates memories with provenance; exact resubmission is 'unchanged' (
   }
 }, TEST_TIMEOUT_MS);
 
+test("exact duplicate WITH new flags applies them to the existing row (action 'updated')", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const first = await (await post(app, "/memories", { memories: [{ content: "John prefers dark mode" }] })).json();
+    const id = first.memories[0].id;
+
+    // The natural "refresh this fact's expiry" pattern used to be silently dropped while the
+    // response echoed the new forgetAfter as if it stuck.
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const res = await (await post(app, "/memories", {
+      memories: [{ content: "John prefers dark mode", forgetAfter: future, forgetReason: "short-lived" }],
+    })).json();
+    expect(res.memories[0]).toMatchObject({ action: "updated", id, version: 1 });
+    const [row] = await sql`SELECT forget_after, forget_reason FROM memory_entry WHERE id = ${id}`;
+    expect(row!.forget_after).not.toBeNull();
+    expect(row!.forget_reason).toBe("short-lived");
+    expect(await countRows(sql)).toBe(1); // still no new row
+
+    // A bare resubmit (no flags) stays "unchanged" and touches nothing.
+    const bare = await (await post(app, "/memories", { memories: [{ content: "John prefers dark mode" }] })).json();
+    expect(bare.memories[0].action).toBe("unchanged");
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("memories over the embed token budget are flagged embedTruncated in the response", async () => {
+  const { app, close } = await makeApp();
+  try {
+    const long = "한".repeat(600); // ~600 tokens > 480 budget; embedded whole, tail truncated by the model
+    const res = await (await post(app, "/memories", { memories: [{ content: long }, { content: "John lives in Denver" }] })).json();
+    expect(res.memories[0].embedTruncated).toBe(true);
+    expect(res.memories[1].embedTruncated).toBeUndefined();
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
 test("POST supersedes a near-duplicate: new version, old flipped is_latest=false, chain readable", async () => {
   process.env.EUNOIA_SUPERSEDE_THRESHOLD = "0.9";
   const { app, sql, close } = await makeApp();
@@ -96,9 +134,10 @@ test("POST supersedes a near-duplicate: new version, old flipped is_latest=false
 
     const [oldRow] = await sql`SELECT is_latest, version FROM memory_entry WHERE id = ${oldId}`;
     expect(oldRow).toMatchObject({ is_latest: false });
-    const [newRow] = await sql`SELECT is_latest, version, parent_memory_id, root_memory_id FROM memory_entry WHERE id = ${newId}`;
+    const [newRow] = await sql`SELECT is_latest, version, parent_memory_id, root_memory_id, source_count FROM memory_entry WHERE id = ${newId}`;
     expect(newRow).toMatchObject({ is_latest: true, parent_memory_id: oldId, root_memory_id: oldId });
     expect(Number(newRow!.version)).toBe(2);
+    expect(Number(newRow!.source_count)).toBe(2); // re-observation reinforces the fact
 
     // The chain is readable from EITHER id and shows both versions in order.
     const chain = await (await app.request(`/memories/${oldId}`)).json();
@@ -174,6 +213,15 @@ test("forget_after sweep durably forgets expired memories, leaves live ones alon
     expect(expired).toMatchObject({ is_forgotten: true, forget_reason: "temp note" }); // existing reason kept
     expect(live).toMatchObject({ is_forgotten: false });
     expect(await sweepExpiredMemories(sql)).toBe(0); // idempotent
+
+    // Un-forgetting an auto-expired memory clears forget_after — otherwise the NEXT sweep cycle
+    // would silently re-forget it within the hour, undoing the user's restore.
+    const [expiredRow] = await sql`SELECT id FROM memory_entry WHERE memory = ${"John lives in Denver"}`;
+    const undo = await (await post(app, `/memories/${expiredRow!.id}/forget`, { undo: true })).json();
+    expect(undo).toMatchObject({ forgotten: false });
+    const [restored] = await sql`SELECT is_forgotten, forget_after FROM memory_entry WHERE id = ${expiredRow!.id}`;
+    expect(restored).toMatchObject({ is_forgotten: false, forget_after: null });
+    expect(await sweepExpiredMemories(sql)).toBe(0); // the sweep no longer re-forgets it
   } finally {
     await close();
   }

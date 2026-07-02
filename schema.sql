@@ -145,3 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_document_org ON document (org_id);
 CREATE INDEX IF NOT EXISTS idx_document_container_tags ON document USING gin (container_tags);
 CREATE INDEX IF NOT EXISTS idx_memory_document_source_document
   ON memory_document_source (document_id);
+-- exact-dup write check: md5 keeps the key under the btree row-size cap for 10k-char memories
+CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
+  ON memory_entry (org_id, space_id, md5(memory))
+  WHERE is_latest = true AND is_forgotten = false;

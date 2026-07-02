@@ -16,6 +16,7 @@ import type { DB } from "./db";
 import type { Tx } from "./pg-shim";
 import { type Embed, isValidVector, embedModelName } from "./embed";
 import { PROVIDER, profile } from "./embed-common";
+import { estimateTokens, EMBED_TOKEN_BUDGET } from "./chunk";
 import { newId, toVector, ORG_ID, DEFAULT_CONTAINER_TAG } from "./util";
 
 type Ctx = { sql: DB; embed: Embed };
@@ -80,8 +81,9 @@ async function chainIds(sql: DB, row: any): Promise<string[]> {
   return rows.map((r) => r.id as string);
 }
 
-type WriteAction = "created" | "superseded" | "unchanged";
+type WriteAction = "created" | "superseded" | "unchanged" | "updated";
 type WriteResult = { id: string; action: WriteAction; version: number; supersededId?: string };
+type ProvidedFields = { isStatic: boolean; metadata: boolean; forgetAfter: boolean; forgetReason: boolean };
 
 // One memory write inside an open transaction: exact-dup check, near-dup supersede, or plain insert.
 // Runs PER ITEM inside the batch transaction so items in the same request dedupe against each other.
@@ -97,19 +99,41 @@ async function writeMemory(
     embedding: number[];
     model: string;
     dedupe: boolean;
+    provided: ProvidedFields;
   },
 ): Promise<WriteResult> {
   const v = toVector(args.embedding);
   if (args.dedupe) {
+    // md5 prefilter lets the partial expression index (migration 002) satisfy the lookup; the direct
+    // text equality stays as the actual correctness check (md5 collisions are theoretical, but free
+    // to guard against).
     const [exact] = await tx`
-      SELECT id, version FROM memory_entry
+      SELECT id, version, is_static, metadata, forget_after, forget_reason FROM memory_entry
       WHERE org_id = ${ORG_ID} AND space_id = ${args.spaceId} AND is_latest = true
-        AND is_forgotten = false AND memory = ${args.content}
+        AND is_forgotten = false AND md5(memory) = md5(${args.content}) AND memory = ${args.content}
       LIMIT 1`;
-    if (exact) return { id: exact.id, action: "unchanged", version: Number(exact.version) };
+    if (exact) {
+      // An exact-content resubmission may still carry NEW flags (the natural "refresh this fact's
+      // expiry" pattern). Silently dropping them while echoing them back lied to the caller — apply
+      // whatever was explicitly provided and report action "updated"; a bare resubmit stays "unchanged".
+      const p = args.provided;
+      if (!(p.isStatic || p.metadata || p.forgetAfter || p.forgetReason)) {
+        return { id: exact.id, action: "unchanged", version: Number(exact.version) };
+      }
+      const isStatic = p.isStatic ? args.isStatic : !!exact.is_static;
+      const metadata = p.metadata ? args.metadata : exact.metadata;
+      const forgetAfter = p.forgetAfter ? args.forgetAfter : exact.forget_after;
+      const forgetReason = p.forgetReason ? args.forgetReason : exact.forget_reason;
+      await tx`
+        UPDATE memory_entry
+        SET is_static = ${isStatic}, metadata = ${metadata ? tx.json(metadata) : null},
+            forget_after = ${forgetAfter}, forget_reason = ${forgetReason}, updated_at = now()
+        WHERE id = ${exact.id}`;
+      return { id: exact.id, action: "updated", version: Number(exact.version) };
+    }
 
     const [nearest] = await tx`
-      SELECT id, version, root_memory_id, 1 - (memory_embedding <=> ${v}::vector) AS similarity
+      SELECT id, version, root_memory_id, source_count, 1 - (memory_embedding <=> ${v}::vector) AS similarity
       FROM memory_entry
       WHERE org_id = ${ORG_ID} AND space_id = ${args.spaceId} AND is_latest = true
         AND is_forgotten = false AND memory_embedding IS NOT NULL
@@ -118,13 +142,15 @@ async function writeMemory(
     if (nearest && Number(nearest.similarity) >= supersedeThreshold()) {
       const id = newId();
       const root = nearest.root_memory_id ?? nearest.id;
+      // source_count = old + 1: a near-duplicate write is a RE-OBSERVATION of the fact, and the count
+      // survives the version chain as a reinforcement signal (PATCH corrections carry it unchanged).
       await tx`
         INSERT INTO memory_entry
           (id, org_id, space_id, memory, is_static, is_latest, version, parent_memory_id, root_memory_id,
            source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
         VALUES
           (${id}, ${ORG_ID}, ${args.spaceId}, ${args.content}, ${args.isStatic}, true, ${Number(nearest.version) + 1},
-           ${nearest.id}, ${root}, 1, ${tx.json({ updates: [nearest.id] })},
+           ${nearest.id}, ${root}, ${Number(nearest.source_count ?? 1) + 1}, ${tx.json({ updates: [nearest.id] })},
            ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
            ${v}::vector, ${args.model})`;
       await tx`UPDATE memory_entry SET is_latest = false, updated_at = now() WHERE id = ${nearest.id}`;
@@ -187,6 +213,18 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
         forgetAfter,
         forgetReason: forgetAfter ? (m.forgetReason ?? null) : null,
         embedding: v,
+        // Which fields the caller EXPLICITLY sent — an exact-dup hit applies these to the existing
+        // row instead of silently dropping them (see writeMemory).
+        provided: {
+          isStatic: m.isStatic !== undefined,
+          metadata: m.metadata !== undefined,
+          forgetAfter: m.forgetAfter !== undefined,
+          forgetReason: m.forgetReason !== undefined,
+        },
+        // Memories are embedded whole (never chunked); past the embedder's token limit the tail is
+        // truncated at embed time. Surface it — silently pretending the whole text is searchable
+        // is the failure mode this repo keeps hunting.
+        embedTruncated: estimateTokens(contents[i]!) > EMBED_TOKEN_BUDGET,
       }];
     });
     if (inputs.length === 0) return c.json({ documentId: null, memories: [] }, 201);
@@ -229,6 +267,7 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
         action: r.action,
         version: r.version,
         ...(r.supersededId ? { supersededId: r.supersededId } : {}),
+        ...(r.input.embedTruncated ? { embedTruncated: true } : {}),
         createdAt: new Date().toISOString(),
         forgetAfter: r.input.forgetAfter,
         forgetReason: r.input.forgetReason,
@@ -314,7 +353,12 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
         await tx`UPDATE memory_entry SET is_latest = false, updated_at = now() WHERE id = ${row.id}`;
       });
       const created = await loadMemory(sql, newVersionId);
-      return c.json({ memory: normalizeMemory(created), action: "versioned", supersededId: row.id });
+      return c.json({
+        memory: normalizeMemory(created),
+        action: "versioned",
+        supersededId: row.id,
+        ...(estimateTokens(body.content) > EMBED_TOKEN_BUDGET ? { embedTruncated: true } : {}),
+      });
     }
 
     await sql`
@@ -338,9 +382,12 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
     if (!row) return c.json({ error: "MemoryNotFound" }, 404);
     const ids = await chainIds(sql, row);
     const reason = undo ? null : (typeof body.reason === "string" ? body.reason : "forgotten via API");
+    // Undo also clears forget_after: restoring a memory whose expiry already elapsed would otherwise
+    // last only until the next sweep cycle silently re-forgets it — an un-forget must mean "keep it".
+    const forgetAfterClause = undo ? sql`, forget_after = NULL` : sql``;
     const rows = await sql`
       UPDATE memory_entry
-      SET is_forgotten = ${!undo}, forget_reason = ${reason}, updated_at = now()
+      SET is_forgotten = ${!undo}, forget_reason = ${reason}${forgetAfterClause}, updated_at = now()
       WHERE org_id = ${ORG_ID} AND id = ANY(${ids}::text[])
       RETURNING id`;
     return c.json({ forgotten: !undo, affected: rows.length, ids: rows.map((r) => r.id) });

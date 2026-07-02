@@ -35,6 +35,19 @@ export const MIGRATIONS: Migration[] = [
         ON memory_document_source (document_id);
     `,
   },
+  {
+    id: 2,
+    name: "dedup-md5-index",
+    // The exact-duplicate check filters on text equality; a plain btree on `memory` would exceed
+    // Postgres's index row-size cap for long memories (content allows 10k chars), so index the md5
+    // instead — the query pairs `md5(memory) = md5($content)` (index-seekable) with the direct
+    // equality check for correctness. Partial: only latest, non-forgotten rows are ever probed.
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
+        ON memory_entry (org_id, space_id, md5(memory))
+        WHERE is_latest = true AND is_forgotten = false;
+    `,
+  },
 ];
 
 /** Apply every migration not yet recorded in schema_migrations, in id order. Returns applied ids.
