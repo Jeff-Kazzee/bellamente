@@ -11,9 +11,9 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
-**Pre-release.** v0.0.1 sign-off is blocked on one remaining item (spec in `docs/HANDOFF-CODEX.md`):
-capture v2 (LLM distillation through the local upstream). Streamed memory-tool reinvocation shipped.
-No release artifacts are published and the repository stays private until it lands.
+**Pre-release.** Both v0.0.1 release blockers have shipped: streamed memory-tool reinvocation and
+capture v2 (LLM distillation through the local upstream). Release steps (binary rebuild, smoke,
+publishing) await sign-off; no artifacts are published and the repository stays private until then.
 
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
 - Memory lifecycle: COMPLETE. Writes dedup exact duplicates and SUPERSEDE near-duplicates as new
@@ -33,10 +33,13 @@ No release artifacts are published and the repository stays private until it lan
 - M3 proxy upstream-forward + tool-call interception: WIRED for buffered AND streamed `/v1/chat/completions`-compatible local servers, with upstream timeouts (BELLA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (BELLA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests get the same memory tool round as buffered ones — the proxy classifies the upstream stream, runs `searchMemory` when the model calls it, re-invokes upstream with the results, and streams only the final answer to the client. Provider-specific shapes (Anthropic/Google) remain a follow-up.
 - Document ingestion: WIRED. POST /documents chunks + embeds markdown (structure-aware, token-budget
   guarded); chunks are searchable via /search searchMode documents|hybrid (vector + full-text, RRF-fused).
-- Auto-capture: the proxy remembers durable first-person facts from your chats — conservatively,
-  through the standard dedup path, with a `capture` trace for every event and a sensitive-content
-  exclusion list (credentials/financial/medical are never stored). ON by default;
-  `BELLA_PROXY_CAPTURE=0` disables. Boot announces the capture state.
+- Auto-capture: the proxy remembers durable first-person facts from your chats — through the
+  standard dedup path, with a `capture` trace for every event and a sensitive-content exclusion
+  list (credentials/financial/medical are never stored). v2 adds LLM distillation through the SAME
+  local upstream (never a cloud call): extracted facts carry `metadata.distilled:true`, the trace
+  records `distill{used,latencyMs,error?}`, and ANY failure falls back to the v1 heuristics — a
+  distillation problem can never lose a capture. ON by default; `BELLA_PROXY_CAPTURE=0` disables
+  capture, `BELLA_CAPTURE_DISTILL=0` keeps capture but skips the LLM pass.
 - Inspect API: recall/search/proxy traces are durable and readable via `/inspect`; proxy `answered` traces show which memories fed the final model response.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
 

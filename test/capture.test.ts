@@ -162,6 +162,7 @@ test("BELLA_PROXY_CAPTURE=0 disables capture entirely: no memory write AND no ca
 }, TEST_TIMEOUT_MS);
 
 test("captureFromTurn flattens array message parts and reads only the LAST user message", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0"; // this test pins the v1 heuristic path; no upstream stub is wired
   const { sql, close } = await makeCtx();
   try {
     const ctx = { sql, embed };
@@ -205,11 +206,13 @@ test("captureFromTurn flattens array message parts and reads only the LAST user 
     expect(Number(traces[0]!.n)).toBe(1); // still just the one trace from the real capture
     expect(Number((await sql`SELECT count(*)::int AS n FROM memory_entry`)[0]!.n)).toBe(2);
   } finally {
+    delete process.env.BELLA_CAPTURE_DISTILL;
     await close();
   }
 }, TEST_TIMEOUT_MS);
 
 test("a failing capture write resolves quietly and records an error capture trace (never breaks the turn)", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0"; // v1 write-failure path; no upstream stub is wired
   const { sql, close } = await makeCtx();
   try {
     const failingEmbed: Embed = async () => {
@@ -240,6 +243,194 @@ test("a failing capture write resolves quietly and records an error capture trac
     // ...and nothing was stored.
     expect(Number((await sql`SELECT count(*)::int AS n FROM memory_entry`)[0]!.n)).toBe(0);
   } finally {
+    delete process.env.BELLA_CAPTURE_DISTILL;
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// --- capture v2: LLM distillation through the local upstream (TDD — spec: HANDOFF-CODEX §BLOCKER 2) ---
+
+function distillCtx(sql: Sql, replies: Array<string | Error>, calls: any[]) {
+  const fetcher: typeof fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    calls.push(body);
+    const reply = replies[Math.min(calls.length - 1, replies.length - 1)]!;
+    if (reply instanceof Error) throw reply;
+    return new Response(
+      JSON.stringify({ id: "chatcmpl-distill", choices: [{ message: { role: "assistant", content: reply } }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  return { sql, embed, fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true };
+}
+
+test("distillation stores model-extracted facts with metadata.distilled and a distill trace", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, ['["Jeff prefers dark mode","Jeff uses Bun for tooling"]'], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I prefer dark mode. Setup notes below." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-1",
+      model: "gpt-test",
+    });
+
+    // exactly ONE distillation call, shaped for extraction: pinned system prompt, temperature 0, same model
+    expect(calls).toHaveLength(1);
+    expect(calls[0].model).toBe("gpt-test");
+    expect(calls[0].temperature).toBe(0);
+    expect(calls[0].messages[0].role).toBe("system");
+    expect(String(calls[0].messages[0].content)).toContain("JSON array");
+    expect(calls[0].messages.at(-1).content).toBe("I prefer dark mode. Setup notes below.");
+
+    const rows = await sql`SELECT memory, is_inference, metadata FROM memory_entry ORDER BY memory`;
+    expect(rows.map((r) => r.memory)).toEqual(["Jeff prefers dark mode", "Jeff uses Bun for tooling"]);
+    for (const row of rows) {
+      expect(row.is_inference).toBe(true);
+      expect(row.metadata?.distilled).toBe(true);
+      expect(row.metadata?.source).toBe("proxy_capture");
+    }
+
+    const [trace] = await sql`SELECT status, result_count, metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(trace!.status).toBe("ok");
+    expect(Number(trace!.result_count)).toBe(2);
+    expect(trace!.metadata?.distill?.used).toBe(true);
+    expect(typeof trace!.metadata?.distill?.latencyMs).toBe("number");
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("a fenced ```json block from the model parses too", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, ['Here you go:\n```json\n["Jeff runs Windows 11"]\n```'], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I run Windows 11 on my main machine." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-fence",
+      model: "gpt-test",
+    });
+    const rows = await sql`SELECT memory, metadata FROM memory_entry`;
+    expect(rows.map((r) => r.memory)).toEqual(["Jeff runs Windows 11"]);
+    expect(rows[0]!.metadata?.distilled).toBe(true);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("garbage from the model falls back to heuristics — distillation never loses a capture", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, ["Sure! I would be happy to help, but I cannot produce that."], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I prefer metric units." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-garbage",
+      model: "gpt-test",
+    });
+
+    expect(calls).toHaveLength(1);
+    const rows = await sql`SELECT memory, metadata FROM memory_entry`;
+    expect(rows.map((r) => r.memory)).toEqual(["I prefer metric units."]); // the heuristic capture survived
+    expect(rows[0]!.metadata?.distilled).toBeUndefined();
+
+    const [trace] = await sql`SELECT status, metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(trace!.status).toBe("ok");
+    expect(trace!.metadata?.distill?.used).toBe(false);
+    expect(String(trace!.metadata?.distill?.error ?? "")).not.toBe("");
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("an upstream failure during distillation also falls back to heuristics with distill.error", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, [new Error("upstream refused (test)")], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I prefer metric units." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-upfail",
+      model: "gpt-test",
+    });
+
+    expect(calls).toHaveLength(1);
+    const rows = await sql`SELECT memory FROM memory_entry`;
+    expect(rows.map((r) => r.memory)).toEqual(["I prefer metric units."]);
+    const [trace] = await sql`SELECT metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(trace!.metadata?.distill?.used).toBe(false);
+    expect(String(trace!.metadata?.distill?.error ?? "")).toContain("upstream refused");
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("SENSITIVE_RE is re-applied to every DISTILLED statement (the model may paraphrase a secret back in)", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, ['["The user\'s password is hunter2","Jeff prefers green tea"]'], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I prefer green tea when working." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-sensitive",
+      model: "gpt-test",
+    });
+    const rows = await sql`SELECT memory FROM memory_entry`;
+    expect(rows.map((r) => r.memory)).toEqual(["Jeff prefers green tea"]); // the credential never lands
+    const [trace] = await sql`SELECT result_count, metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(Number(trace!.result_count)).toBe(1);
+    expect(trace!.metadata?.distill?.used).toBe(true);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("distilled facts are capped at 5 per turn", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const seven = JSON.stringify(["f1 fact", "f2 fact", "f3 fact", "f4 fact", "f5 fact", "f6 fact", "f7 fact"]);
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, [seven], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I use a lot of tools every day." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-cap",
+      model: "gpt-test",
+    });
+    const rows = await sql`SELECT count(*)::int AS n FROM memory_entry`;
+    expect(Number(rows[0]!.n)).toBe(5);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("BELLA_CAPTURE_DISTILL=0 means heuristics only: zero upstream calls", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0";
+  const { sql, close } = await makeCtx();
+  try {
+    const calls: any[] = [];
+    const ctx = distillCtx(sql, ['["should never be requested"]'], calls);
+    await captureFromTurn(ctx as any, {
+      messages: [{ role: "user", content: "I prefer metric units." }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "trace-distill-off",
+      model: "gpt-test",
+    });
+
+    expect(calls).toHaveLength(0); // no second upstream call, period
+    const rows = await sql`SELECT memory, metadata FROM memory_entry`;
+    expect(rows.map((r) => r.memory)).toEqual(["I prefer metric units."]);
+    expect(rows[0]!.metadata?.distilled).toBeUndefined();
+    const [trace] = await sql`SELECT metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(trace!.metadata?.distill).toBeUndefined();
+  } finally {
+    delete process.env.BELLA_CAPTURE_DISTILL;
     await close();
   }
 }, TEST_TIMEOUT_MS);

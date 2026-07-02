@@ -134,6 +134,7 @@ test("proxy inject-only mode emits trace headers and stores injected context", a
 }, TEST_TIMEOUT_MS);
 
 test("proxy defaults to a local loopback upstream without auth", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0"; // asserts EXACT upstream call counts; capture's distill call would add one
   const upstreamCalls: any[] = [];
   const fetcher: typeof fetch = async (input, init) => {
     upstreamCalls.push({ input: String(input), headers: init?.headers, body: JSON.parse(String(init?.body ?? "{}")) });
@@ -168,11 +169,13 @@ test("proxy defaults to a local loopback upstream without auth", async () => {
     expect(trace).toMatchObject({ kind: "proxy", status: "answered", resultCount: 0 });
     expect(trace.metadata).toMatchObject({ memoryRound: false, upstreamStatus: 200 });
   } finally {
+    delete process.env.BELLA_CAPTURE_DISTILL;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
 
 test("proxy treats 127/8 and mapped loopback upstreams as local without auth", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0"; // asserts EXACT upstream call counts; capture's distill call would add one
   const cases = [
     { base: "http://127.0.1.1:11434/v1", expected: "http://127.0.1.1:11434/v1/chat/completions" },
     { base: "http://[::ffff:127.0.0.1]:11434/v1", expected: "http://[::ffff:7f00:1]:11434/v1/chat/completions" },
@@ -209,8 +212,10 @@ test("proxy treats 127/8 and mapped loopback upstreams as local without auth", a
       await ctx.close();
     }
   }
+  delete process.env.BELLA_CAPTURE_DISTILL;
 }, TEST_TIMEOUT_MS);
 test("proxy forwards upstream, runs searchMemory tool calls, reinvokes, and records an answered trace", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0"; // asserts EXACT upstream call counts; capture's distill call would add one
   const upstreamCalls: any[] = [];
   const fetcher: typeof fetch = async (input, init) => {
     const requestBody = JSON.parse(String(init?.body ?? "{}"));
@@ -290,6 +295,7 @@ test("proxy forwards upstream, runs searchMemory tool calls, reinvokes, and reco
     expect(trace.injected[0]).toMatchObject({ type: "memory", id: memId, content: "John prefers dark mode" });
     expect(trace.metadata).toMatchObject({ memoryRound: true, toolCallCount: 1, upstreamStatus: 200, firstUpstreamStatus: 200, toolSearchTimedOut: false });
   } finally {
+    delete process.env.BELLA_CAPTURE_DISTILL;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
@@ -703,6 +709,7 @@ test("proxy passthrough forwards existing tool results without reinjecting", asy
 }, TEST_TIMEOUT_MS);
 
 test("proxy degrades to empty memory results when local memory search fails", async () => {
+  process.env.BELLA_CAPTURE_DISTILL = "0"; // asserts EXACT upstream call counts; capture's distill call would add one
   const upstreamCalls: any[] = [];
   const fetcher: typeof fetch = async (_input, init) => {
     const requestBody = JSON.parse(String(init?.body ?? "{}"));
@@ -783,6 +790,7 @@ test("proxy degrades to empty memory results when local memory search fails", as
       toolSearchTimedOut: false,
     });
   } finally {
+    delete process.env.BELLA_CAPTURE_DISTILL;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
