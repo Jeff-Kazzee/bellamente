@@ -1,0 +1,536 @@
+<!doctype html>
+<!--
+  Bellamente — website design preview. TWO complete design directions in one document.
+  Toggle with the fixed switcher (bottom center) or press 1 / 2.
+
+  PORTING TO ASTRO
+  - Each direction is one self-contained <main data-design="a|b"> subtree; its CSS is fully
+    namespaced (.da-* for A, .db-* for B) — copy the subtree + its CSS block into Astro
+    components (Nav / Hero / Pillars / Proxy / Install / Articles / Footer are marked with
+    <!— section: … —> comments).
+  - Fonts (Google): A = Young Serif + Albert Sans + Spline Sans Mono; B = Archivo + IBM Plex Mono.
+  - The switcher + its script are preview-only chrome: delete on port.
+  - Brand SVG sources live in docs/brand/ (local); the marks below are drawn inline for
+    self-containment and can be swapped for the real assets.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bellamente — Memoria Viva for your AI agents</title>
+<meta name="description" content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Albert+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Spline+Sans+Mono:wght@400;500&family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  /* ============ preview chrome (delete on port) ============ */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  [data-design] { display: none; }
+  body[data-show="a"] main[data-design="a"] { display: block; }
+  body[data-show="b"] main[data-design="b"] { display: block; }
+  .switcher {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 99;
+    display: flex; gap: 4px; padding: 5px; border-radius: 999px;
+    background: rgba(20, 24, 28, .88); backdrop-filter: blur(8px);
+    box-shadow: 0 8px 30px rgba(0,0,0,.35); font: 500 13px/1 "Albert Sans", sans-serif;
+  }
+  .switcher button {
+    border: 0; border-radius: 999px; padding: 9px 16px; cursor: pointer;
+    background: transparent; color: #cfd6dd; letter-spacing: .02em;
+  }
+  .switcher button[aria-pressed="true"] { background: #fff; color: #16263f; }
+  .switcher button:focus-visible { outline: 2px solid #e39b2d; outline-offset: 2px; }
+
+  /* =========================================================================
+     DESIGN A — "La Traccia" · porcelain / ink-blue / amber recall-glow
+     Memory with grace: the recall trace is the hero.
+     ========================================================================= */
+  .da {
+    --paper: #fafaf7; --porcelain: #eef1f0; --ink: #16263f; --blu: #2c4e80;
+    --amber: #e39b2d; --amber-soft: #f6dfb4; --mist: #d7dfe3; --dim: #6b7889;
+    background:
+      radial-gradient(1100px 500px at 70% -5%, rgba(227,155,45,.07), transparent 60%),
+      var(--paper);
+    color: var(--ink);
+    font: 400 17px/1.65 "Albert Sans", sans-serif;
+  }
+  .da ::selection { background: var(--amber-soft); }
+  .da .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .da h1, .da h2 { font-family: "Young Serif", serif; font-weight: 400; margin: 0; }
+  .da .mono { font-family: "Spline Sans Mono", monospace; }
+  .da a { color: var(--blu); text-decoration: none; }
+  .da a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .da a:focus-visible, .da button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
+
+  /* section: nav */
+  .da-nav { display: flex; align-items: center; justify-content: space-between; padding: 26px 0; }
+  .da-logo { display: flex; align-items: baseline; gap: 10px; font-family: "Young Serif", serif; font-size: 22px; color: var(--ink); }
+  .da-logo .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--amber); align-self: center; }
+  .da-nav nav { display: flex; gap: 26px; font-size: 15px; font-weight: 500; }
+  .da-nav .cta { color: var(--paper); background: var(--ink); padding: 9px 16px; border-radius: 999px; }
+  .da-nav .cta:hover { background: var(--blu); text-decoration: none; }
+
+  /* section: hero — the living trace */
+  .da-hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 48px; align-items: center; padding: 64px 0 72px; }
+  .da-eyebrow { font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin-bottom: 18px; }
+  .da-hero h1 { font-size: clamp(38px, 5vw, 56px); line-height: 1.12; letter-spacing: -.01em; }
+  .da-hero h1 em { font-style: normal; color: var(--blu); }
+  .da-hero .sub { margin: 22px 0 30px; font-size: 18px; color: #35435a; max-width: 44ch; }
+  .da-hero .sub b { font-weight: 600; color: var(--ink); }
+  .da-actions { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .da-btn { display: inline-block; font-weight: 600; font-size: 15.5px; padding: 13px 22px; border-radius: 999px; }
+  .da-btn.primary { background: var(--ink); color: var(--paper); }
+  .da-btn.primary:hover { background: var(--blu); text-decoration: none; }
+  .da-btn.ghost { color: var(--ink); border: 1.5px solid var(--mist); }
+  .da-btn.ghost:hover { border-color: var(--blu); text-decoration: none; }
+  .da-platnote { font-size: 13px; color: var(--dim); margin-top: 12px; }
+
+  /* the trace itself */
+  .da-trace { position: relative; padding: 26px 22px; background: #fff; border: 1px solid var(--mist); border-radius: 18px; box-shadow: 0 18px 50px rgba(22,38,63,.08); }
+  .da-trace .q { display: inline-flex; align-items: center; gap: 9px; font-size: 14.5px; background: var(--porcelain); border: 1px solid var(--mist); padding: 9px 14px; border-radius: 999px; }
+  .da-trace .q .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: da-pulse 2.4s ease-in-out infinite; }
+  .da-trace svg.lines { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  .da-trace .mem { display: grid; gap: 10px; margin-top: 46px; }
+  .da-card { display: flex; justify-content: space-between; align-items: center; gap: 14px; border: 1px solid var(--mist); border-radius: 12px; padding: 12px 15px; font-size: 15px; background: #fff; }
+  .da-card .score { font-family: "Spline Sans Mono", monospace; font-size: 13.5px; color: var(--ink); background: var(--amber-soft); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  .da-card.hit-1 { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(227,155,45,.14); }
+  .da-card.below { opacity: .45; }
+  .da-card.below .score { background: var(--porcelain); color: var(--dim); }
+  .da-card .why { font-size: 12.5px; color: var(--dim); }
+  .da-trace .meta { margin-top: 18px; display: flex; gap: 18px; font-family: "Spline Sans Mono", monospace; font-size: 12.5px; color: var(--dim); flex-wrap: wrap; }
+  @keyframes da-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(227,155,45,.5);} 50% { box-shadow: 0 0 0 7px rgba(227,155,45,0);} }
+  .da-line { stroke: var(--amber); stroke-width: 1.6; fill: none; stroke-dasharray: 6 5; animation: da-flow 1.6s linear infinite; }
+  .da-line.faint { stroke: var(--mist); animation: none; }
+  @keyframes da-flow { to { stroke-dashoffset: -22; } }
+  @media (prefers-reduced-motion: reduce) { .da-line, .da-trace .q .pulse { animation: none !important; } }
+
+  /* section: pillars */
+  .da-pillars { padding: 30px 0 20px; border-top: 1px solid var(--mist); }
+  .da-pillars .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; padding: 34px 0 44px; }
+  .da-pillars h2 { font-size: 28px; padding-top: 40px; }
+  .da-pill h3 { font-family: "Young Serif", serif; font-weight: 400; font-size: 20px; margin: 14px 0 8px; }
+  .da-pill p { margin: 0; font-size: 15.5px; color: #35435a; }
+  .da-pill .glyph { width: 40px; height: 40px; }
+
+  /* section: proxy */
+  .da-proxy { background: var(--ink); color: var(--paper); border-radius: 24px; padding: 52px 48px; margin: 30px 0 70px; display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center; }
+  .da-proxy h2 { color: var(--paper); font-size: 30px; }
+  .da-proxy p { color: #c3cede; font-size: 16px; }
+  .da-proxy .flow { font-family: "Spline Sans Mono", monospace; font-size: 14px; display: grid; gap: 10px; }
+  .da-proxy .hop { display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 11px 14px; }
+  .da-proxy .hop .tag { color: var(--amber); }
+
+  /* section: install */
+  .da-install { display: grid; grid-template-columns: minmax(0,5fr) minmax(0,6fr); gap: 44px; align-items: center; padding: 10px 0 70px; }
+  .da-install h2 { font-size: 30px; }
+  .da-install p { color: #35435a; font-size: 16px; }
+  .da-term { background: #101a2b; color: #dfe6ee; border-radius: 14px; padding: 20px 22px; font-family: "Spline Sans Mono", monospace; font-size: 14px; line-height: 1.75; overflow-x: auto; }
+  .da-term .c { color: #7a8aa3; } .da-term .a { color: var(--amber); } .da-term .g { color: #7fc8a9; }
+
+  /* section: articles */
+  .da-articles { padding: 0 0 80px; }
+  .da-articles h2 { font-size: 30px; margin-bottom: 26px; }
+  .da-articles .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .da-art { border: 1px solid var(--mist); border-radius: 16px; padding: 22px; background: #fff; display: flex; flex-direction: column; gap: 10px; }
+  .da-art .kicker { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--amber); font-weight: 700; }
+  .da-art h3 { font-family: "Young Serif", serif; font-weight: 400; font-size: 19px; margin: 0; line-height: 1.35; }
+  .da-art p { margin: 0; font-size: 14.5px; color: #35435a; flex: 1; }
+  .da-art .meta { font-size: 13px; color: var(--dim); }
+
+  /* section: footer */
+  .da-footer { border-top: 1px solid var(--mist); padding: 30px 0 90px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; font-size: 14px; color: var(--dim); }
+  .da-footer .fine { max-width: 60ch; }
+
+  @media (max-width: 880px) {
+    .da-hero, .da-proxy, .da-install { grid-template-columns: 1fr; }
+    .da-pillars .grid, .da-articles .grid { grid-template-columns: 1fr; }
+    .da-proxy { padding: 36px 26px; }
+  }
+
+  /* =========================================================================
+     DESIGN B — "La Macchina" · verdigris / bone / oxidized copper
+     Memory with evidence: the terminal is the hero.
+     ========================================================================= */
+  .db {
+    --deep: #0f2a24; --panel: #14332c; --edge: #22463d; --bone: #ede6d6;
+    --bone-dim: #b8b2a2; --copper: #c4703a; --patina: #4fa487; --shadow: #081b16;
+    background:
+      linear-gradient(180deg, #0c2620 0%, var(--deep) 30%),
+      var(--deep);
+    color: var(--bone);
+    font: 400 16.5px/1.65 "Archivo", sans-serif;
+  }
+  .db ::selection { background: rgba(196,112,58,.45); }
+  .db .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .db h1, .db h2 { font-family: "Archivo", sans-serif; font-variation-settings: "wdth" 115; font-weight: 800; margin: 0; letter-spacing: -.005em; }
+  .db .mono { font-family: "IBM Plex Mono", monospace; }
+  .db a { color: var(--patina); text-decoration: none; }
+  .db a:hover { color: var(--bone); }
+  .db a:focus-visible, .db button:focus-visible { outline: 2px solid var(--copper); outline-offset: 3px; border-radius: 4px; }
+
+  /* section: nav */
+  .db-nav { display: flex; align-items: center; justify-content: space-between; padding: 24px 0; border-bottom: 1px solid var(--edge); }
+  .db-logo { font-family: "Archivo", sans-serif; font-variation-settings: "wdth" 120; font-weight: 900; font-size: 19px; letter-spacing: .06em; text-transform: uppercase; color: var(--bone); }
+  .db-logo span { color: var(--copper); }
+  .db-nav nav { display: flex; gap: 24px; font-size: 14.5px; font-weight: 500; }
+  .db-nav .cta { color: var(--deep); background: var(--copper); padding: 9px 16px; border-radius: 6px; font-weight: 700; }
+  .db-nav .cta:hover { color: var(--deep); filter: brightness(1.1); }
+
+  /* section: hero — the terminal */
+  .db-hero { padding: 70px 0 30px; text-align: left; }
+  .db-kicker { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--patina); letter-spacing: .1em; margin-bottom: 16px; }
+  .db-hero h1 { font-size: clamp(40px, 6vw, 72px); line-height: 1.02; text-transform: uppercase; max-width: 18ch; }
+  .db-hero h1 .thin { font-variation-settings: "wdth" 80; font-weight: 400; color: var(--bone-dim); display: block; font-size: .5em; letter-spacing: .04em; text-transform: none; margin-top: 14px; }
+  .db-hero .tagline { font-family: "IBM Plex Mono", monospace; font-style: italic; color: var(--copper); font-size: 17px; margin: 20px 0 0; }
+  .db-actions { display: flex; gap: 14px; margin: 34px 0 8px; flex-wrap: wrap; }
+  .db-btn { font-weight: 700; font-size: 15px; padding: 13px 22px; border-radius: 8px; }
+  .db-btn.primary { background: var(--copper); color: var(--deep); }
+  .db-btn.primary:hover { color: var(--deep); filter: brightness(1.1); }
+  .db-btn.ghost { border: 1.5px solid var(--edge); color: var(--bone); }
+  .db-btn.ghost:hover { border-color: var(--patina); color: var(--bone); }
+  .db-platnote { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--bone-dim); }
+
+  .db-term { margin: 44px 0 0; background: var(--shadow); border: 1px solid var(--edge); border-radius: 12px; overflow: hidden; box-shadow: 0 30px 70px rgba(0,0,0,.45); }
+  .db-term .bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--edge); font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--bone-dim); }
+  .db-term .bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--edge); }
+  .db-term .bar i:first-child { background: var(--copper); }
+  .db-term pre { margin: 0; padding: 22px 24px 26px; font-family: "IBM Plex Mono", monospace; font-size: 14.5px; line-height: 1.85; overflow-x: auto; color: var(--bone); }
+  .db-term .p { color: var(--patina); } .db-term .cm { color: #6f8b80; } .db-term .cp { color: var(--copper); }
+  .db-term .cursor { display: inline-block; width: 8px; height: 17px; background: var(--copper); vertical-align: -3px; animation: db-blink 1.1s steps(1) infinite; }
+  @keyframes db-blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .db-term .cursor { animation: none; } }
+
+  /* section: pillars (ledger rows, not cards) */
+  .db-pillars { padding: 70px 0 20px; }
+  .db-row { display: grid; grid-template-columns: 190px 1fr 1fr; gap: 28px; padding: 30px 0; border-top: 1px solid var(--edge); align-items: baseline; }
+  .db-row .k { font-family: "IBM Plex Mono", monospace; color: var(--copper); font-size: 13.5px; letter-spacing: .08em; }
+  .db-row h3 { font-family: "Archivo", sans-serif; font-variation-settings: "wdth" 110; font-weight: 700; font-size: 21px; margin: 0; color: var(--bone); }
+  .db-row p { margin: 0; color: var(--bone-dim); font-size: 15.5px; }
+  .db-row .proof { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--patina); display: block; margin-top: 10px; }
+
+  /* section: proxy */
+  .db-proxy { margin: 60px 0; border: 1px solid var(--edge); border-radius: 14px; padding: 44px; background: var(--panel); display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+  .db-proxy h2 { font-size: 28px; }
+  .db-proxy p { color: var(--bone-dim); }
+  .db-flow { font-family: "IBM Plex Mono", monospace; font-size: 13.5px; display: grid; gap: 0; }
+  .db-flow .hop { padding: 13px 16px; border: 1px solid var(--edge); background: var(--shadow); }
+  .db-flow .hop:first-child { border-radius: 10px 10px 0 0; }
+  .db-flow .hop:last-child { border-radius: 0 0 10px 10px; }
+  .db-flow .hop + .hop { border-top: 0; }
+  .db-flow .hop b { color: var(--copper); font-weight: 500; }
+
+  /* section: articles */
+  .db-articles { padding: 10px 0 70px; }
+  .db-articles h2 { font-size: 28px; margin-bottom: 8px; }
+  .db-art { display: grid; grid-template-columns: 110px 1fr auto; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--edge); align-items: baseline; }
+  .db-art .date { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--bone-dim); }
+  .db-art h3 { margin: 0; font-size: 19px; font-weight: 700; font-variation-settings: "wdth" 108; }
+  .db-art h3 a { color: var(--bone); }
+  .db-art h3 a:hover { color: var(--copper); }
+  .db-art .read { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--patina); white-space: nowrap; }
+
+  /* section: footer */
+  .db-footer { border-top: 1px solid var(--edge); padding: 28px 0 96px; display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--bone-dim); }
+  .db-footer .fine { max-width: 66ch; }
+
+  @media (max-width: 880px) {
+    .db-proxy { grid-template-columns: 1fr; padding: 30px 22px; }
+    .db-row { grid-template-columns: 1fr; gap: 10px; }
+    .db-art { grid-template-columns: 1fr; gap: 6px; }
+  }
+</style>
+</head>
+<body data-show="a">
+
+<!-- ======================= DESIGN A: LA TRACCIA ======================= -->
+<main data-design="a" class="da">
+  <div class="wrap">
+
+    <!-- section: nav -->
+    <header class="da-nav">
+      <a class="da-logo" href="#"><span class="dot" aria-hidden="true"></span>Bellamente</a>
+      <nav aria-label="primary">
+        <a href="#da-how">How it works</a>
+        <a href="#da-articles">Articles</a>
+        <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
+        <a class="cta" href="#da-install">Download</a>
+      </nav>
+    </header>
+
+    <!-- section: hero -->
+    <section class="da-hero">
+      <div>
+        <p class="da-eyebrow">Memoria Viva for your AI agents</p>
+        <h1>Your agent remembers. <em>Now you can see how.</em></h1>
+        <p class="sub">Bellamente is <b>living memory</b> that runs on your machine: every fact your
+          agent recalls is visible, scored, and yours to correct — and nothing ever leaves your computer.</p>
+        <div class="da-actions">
+          <a class="da-btn primary" href="#da-install" aria-disabled="true">Download — coming with v0.0.1</a>
+          <a class="da-btn ghost" href="#da-how">See a recall trace</a>
+        </div>
+        <p class="da-platnote">Free &amp; open source · macOS and Linux builds coming soon</p>
+      </div>
+
+      <!-- signature: the living recall trace -->
+      <figure class="da-trace" id="da-how" aria-label="A recall trace: a question matched against stored memories with similarity scores">
+        <span class="q"><span class="pulse" aria-hidden="true"></span>&ldquo;what theme does John prefer?&rdquo;</span>
+        <svg class="lines" viewBox="0 0 560 300" preserveAspectRatio="none" aria-hidden="true">
+          <path class="da-line" d="M120 38 C 60 100, 60 120, 70 140"/>
+          <path class="da-line" d="M150 42 C 120 120, 110 160, 90 205" style="animation-delay:.4s"/>
+          <path class="da-line faint" d="M180 44 C 170 150, 160 220, 120 268"/>
+        </svg>
+        <div class="mem">
+          <div class="da-card hit-1">
+            <span>John prefers dark mode <span class="why">· v2, corrected yesterday</span></span>
+            <span class="score">0.94</span>
+          </div>
+          <div class="da-card">
+            <span>John uses a 13&Prime; laptop <span class="why">· v1</span></span>
+            <span class="score">0.87</span>
+          </div>
+          <div class="da-card below">
+            <span>John lives in Boulder <span class="why">· below the 0.40 floor — not injected</span></span>
+            <span class="score">0.31</span>
+          </div>
+        </div>
+        <figcaption class="meta">
+          <span>trace 9fQ2…</span><span>12 ms</span><span>2 of 3 injected</span><span>local · 127.0.0.1</span>
+        </figcaption>
+      </figure>
+    </section>
+
+    <!-- section: pillars -->
+    <section class="da-pillars">
+      <h2>Memory with grace, evidence, and consent</h2>
+      <div class="grid">
+        <div class="da-pill">
+          <svg class="glyph" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="14" stroke="#2c4e80" stroke-width="2"/><circle cx="20" cy="20" r="5" fill="#e39b2d"/></svg>
+          <h3>See every recall</h3>
+          <p>When your agent answers, Bellamente shows which memories fed that answer — with similarity
+             scores, latency, and what fell below the floor. The trace is the product.</p>
+        </div>
+        <div class="da-pill">
+          <svg class="glyph" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M8 28 L20 12 L32 28" stroke="#2c4e80" stroke-width="2"/><path d="M14 28 L20 20 L26 28" stroke="#e39b2d" stroke-width="2"/></svg>
+          <h3>Correct without erasing</h3>
+          <p>Edit a memory and the old version stays in its history. Forgetting is reversible,
+             deleting is explicit, and nothing is ever silently overwritten.</p>
+        </div>
+        <div class="da-pill">
+          <svg class="glyph" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="9" y="13" width="22" height="18" rx="3" stroke="#2c4e80" stroke-width="2"/><path d="M14 13 V10 a6 6 0 0 1 12 0 v3" stroke="#e39b2d" stroke-width="2"/></svg>
+          <h3>Yours, locally</h3>
+          <p>One binary. Embedded Postgres and local embeddings. Binds to 127.0.0.1 by default.
+             No account, no cloud, no telemetry.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- section: proxy -->
+    <section class="da-proxy">
+      <div>
+        <h2>Memory for any chat client, with zero code changes</h2>
+        <p>Point your OpenAI-compatible client at <span class="mono">bella</span> instead of your model
+           server. Bellamente injects the right memories on the way in and records a trace on the way
+           out — your app never knows it got smarter.</p>
+      </div>
+      <div class="flow" role="img" aria-label="Request flow: your agent, through Bellamente, to your local model">
+        <div class="hop"><span class="tag">1</span> your agent → <b>bella</b> :8080/v1</div>
+        <div class="hop"><span class="tag">2</span> + memories injected · trace recorded</div>
+        <div class="hop"><span class="tag">3</span> → your local model (Ollama, LM Studio, vLLM…)</div>
+      </div>
+    </section>
+
+    <!-- section: install -->
+    <section class="da-install" id="da-install">
+      <div>
+        <h2>Running in under a minute</h2>
+        <p>Download one file, set one key, start. First run downloads a local embedding model —
+           after that, everything works offline. The dashboard shows every memory and every trace.</p>
+      </div>
+      <pre class="da-term"><span class="c"># 1. set your key (any secret string)</span>
+<span class="a">export</span> BELLA_API_KEY=your-secret
+
+<span class="c"># 2. start the memory server</span>
+./bella serve
+<span class="g">bellamente listening on 127.0.0.1:8080</span>
+
+<span class="c"># 3. open the dashboard</span>
+http://127.0.0.1:8080</pre>
+    </section>
+
+    <!-- section: articles -->
+    <section class="da-articles" id="da-articles">
+      <h2>From the notebook</h2>
+      <div class="grid">
+        <article class="da-art">
+          <span class="kicker">Trust</span>
+          <h3><a href="#">Your agent's memory should be inspectable</a></h3>
+          <p>Most memory layers are black boxes: facts go in, answers come out. Here's why we built
+             the trace first, and everything else around it.</p>
+          <span class="meta">Jul 2026 · 6 min</span>
+        </article>
+        <article class="da-art">
+          <span class="kicker">Brand</span>
+          <h3><a href="#">Memoria Viva: what living memory means</a></h3>
+          <p>Memory that versions itself, forgets on request, and shows its work — a tour of the ideas
+             behind the name.</p>
+          <span class="meta">Jul 2026 · 4 min</span>
+        </article>
+        <article class="da-art">
+          <span class="kicker">Engineering</span>
+          <h3><a href="#">A proxy that never phones home</a></h3>
+          <p>How Bellamente adds memory to any chat client without an SDK — and why the whole loop
+             stays on 127.0.0.1.</p>
+          <span class="meta">Jun 2026 · 8 min</span>
+        </article>
+      </div>
+    </section>
+
+    <!-- section: footer -->
+    <footer class="da-footer">
+      <span>© 2026 The Little AI Co · Bellamente</span>
+      <span class="fine">Formerly Eunoia — the <span class="mono">eunoia</span> binary and
+        <span class="mono">EUNOIA_*</span> variables keep working. <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a></span>
+    </footer>
+  </div>
+</main>
+
+<!-- ======================= DESIGN B: LA MACCHINA ======================= -->
+<main data-design="b" class="db">
+  <div class="wrap">
+
+    <!-- section: nav -->
+    <header class="db-nav">
+      <a class="db-logo" href="#">Bella<span>mente</span></a>
+      <nav aria-label="primary">
+        <a href="#db-proof">Proof</a>
+        <a href="#db-articles">Articles</a>
+        <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
+        <a class="cta" href="#db-hero">Download</a>
+      </nav>
+    </header>
+
+    <!-- section: hero -->
+    <section class="db-hero" id="db-hero">
+      <p class="db-kicker">$ local-first memory for AI agents</p>
+      <h1>Memory you can read.
+        <span class="thin">Every recall scored. Every correction versioned. Every byte on your machine.</span>
+      </h1>
+      <p class="tagline">Memoria Viva for your AI agents.</p>
+      <div class="db-actions">
+        <a class="db-btn primary" href="#db-hero" aria-disabled="true">Download — coming with v0.0.1</a>
+        <a class="db-btn ghost" href="https://github.com/Jeff-Kazzee/bellamente">Source on GitHub</a>
+      </div>
+      <p class="db-platnote">one binary · no Docker · no account · macOS/Linux soon</p>
+
+      <!-- signature: the terminal, typing itself -->
+      <div class="db-term" aria-label="Terminal demo: starting bella, storing a memory, recalling it with a score">
+        <div class="bar"><i></i><i></i><i></i>&nbsp;bella — 127.0.0.1</div>
+        <pre id="db-typer"><span class="p">$</span> bella serve
+<span class="cm">bellamente listening on 127.0.0.1:8080</span>
+
+<span class="p">$</span> curl -s :8080/memories -H <span class="cp">"authorization: Bearer $BELLA_API_KEY"</span> \
+    -d <span class="cp">'{"memories":[{"content":"Jeff prefers dark mode"}]}'</span>
+<span class="cm">created · v1 · a7Kd…</span>
+
+<span class="p">$</span> curl -s :8080/search -d <span class="cp">'{"q":"what theme does Jeff like?"}'</span>
+<span class="cm">0.94 · "Jeff prefers dark mode" · 12ms · trace 9fQ2…</span> <span class="cursor" aria-hidden="true"></span></pre>
+      </div>
+    </section>
+
+    <!-- section: pillars as evidence ledger -->
+    <section class="db-pillars" id="db-proof">
+      <div class="db-row">
+        <span class="k">INSPECT</span>
+        <div>
+          <h3>The trace is the product</h3>
+          <p>Every recall is durably logged: what was searched, what matched, at what score, in how
+             many milliseconds — and what fell below the floor.</p>
+        </div>
+        <div><span class="proof">GET /inspect → scores, latency, provenance</span></div>
+      </div>
+      <div class="db-row">
+        <span class="k">CORRECT</span>
+        <div>
+          <h3>Nothing silently overwritten</h3>
+          <p>Edits create new versions with the old ones kept in the chain. Forgetting is reversible
+             and audited. Hard delete is the only eraser, and it says so.</p>
+        </div>
+        <div><span class="proof">PATCH /memories/:id → v2 (v1 kept)</span></div>
+      </div>
+      <div class="db-row">
+        <span class="k">LOCAL</span>
+        <div>
+          <h3>Your machine is the cloud</h3>
+          <p>Embedded Postgres + pgvector, local embedding models, loopback binding by default.
+             There is no server to trust because there is no server.</p>
+        </div>
+        <div><span class="proof">bind 127.0.0.1 · 0 telemetry · 1 binary</span></div>
+      </div>
+    </section>
+
+    <!-- section: proxy -->
+    <section class="db-proxy">
+      <div>
+        <h2>Drop-in memory for any OpenAI-compatible client</h2>
+        <p>Change one base URL. Bellamente sits between your agent and your local model, injecting
+           relevant memories into the request and writing a trace of exactly what it did. No SDK.
+           No code changes. No network egress.</p>
+      </div>
+      <div class="db-flow" role="img" aria-label="Request flow diagram">
+        <div class="hop">your agent <b>→ http://127.0.0.1:8080/v1</b></div>
+        <div class="hop">bella: search memories · inject top hits · <b>record trace</b></div>
+        <div class="hop">→ your model server (Ollama · LM Studio · llama.cpp · vLLM)</div>
+        <div class="hop">← answer, with <b>x-eunoia-trace-id</b> for the receipt</div>
+      </div>
+    </section>
+
+    <!-- section: articles -->
+    <section class="db-articles" id="db-articles">
+      <h2>Field notes</h2>
+      <article class="db-art">
+        <span class="date">2026-07</span>
+        <h3><a href="#">Your agent's memory should be inspectable</a></h3>
+        <span class="read">6 min →</span>
+      </article>
+      <article class="db-art">
+        <span class="date">2026-07</span>
+        <h3><a href="#">Memoria Viva: what living memory means</a></h3>
+        <span class="read">4 min →</span>
+      </article>
+      <article class="db-art">
+        <span class="date">2026-06</span>
+        <h3><a href="#">A proxy that never phones home</a></h3>
+        <span class="read">8 min →</span>
+      </article>
+    </section>
+
+    <!-- section: footer -->
+    <footer class="db-footer">
+      <span>© 2026 The Little AI Co · BELLAMENTE</span>
+      <span class="fine">formerly eunoia — the legacy binary + EUNOIA_* env vars keep working ·
+        <a href="https://github.com/Jeff-Kazzee/bellamente">github.com/Jeff-Kazzee/bellamente</a></span>
+    </footer>
+  </div>
+</main>
+
+<!-- preview chrome: delete on port -->
+<div class="switcher" role="tablist" aria-label="Design preview switcher">
+  <button role="tab" aria-pressed="true" data-pick="a">A · La Traccia</button>
+  <button role="tab" aria-pressed="false" data-pick="b">B · La Macchina</button>
+</div>
+<script>
+  const pick = (d) => {
+    document.body.dataset.show = d;
+    document.querySelectorAll(".switcher button").forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.pick === d)));
+  };
+  document.querySelectorAll(".switcher button").forEach(b =>
+    b.addEventListener("click", () => pick(b.dataset.pick)));
+  addEventListener("keydown", (e) => {
+    if (e.key === "1") pick("a");
+    if (e.key === "2") pick("b");
+  });
+</script>
+</body>
+</html>
