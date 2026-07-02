@@ -19,7 +19,7 @@ const PORT = Number(process.env.PORT ?? 8080);
 // Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
 // conversation text — Bun's default 0.0.0.0 would expose it to the whole LAN behind only the bearer key.
 // Opt into wider exposure explicitly with BELLA_HOST=0.0.0.0 (or a specific interface).
-const HOST = brandEnv("HOST") ?? "127.0.0.1";
+const HOST = brandEnv("HOST")?.trim() || "127.0.0.1";
 
 // Constant-time bearer comparison (avoids leaking the key via response-timing on byte-by-byte compare).
 function authOk(header: string): boolean {
