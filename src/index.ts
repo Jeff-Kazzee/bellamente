@@ -11,23 +11,13 @@ import { inspectRoutes } from "./inspect";
 import { dashboardRoutes } from "./dashboard";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
 import { brandEnv } from "./env";
-import { timingSafeEqual } from "node:crypto";
+import { resolveAuth, bearerOk, type AuthConfig } from "./auth";
 
-const API_KEY = brandEnv("API_KEY");
-const EXPECTED_AUTH = API_KEY ? "Bearer " + API_KEY : null;
 const PORT = Number(process.env.PORT ?? 8080);
 // Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
-// conversation text — Bun's default 0.0.0.0 would expose it to the whole LAN behind only the bearer key.
-// Opt into wider exposure explicitly with BELLA_HOST=0.0.0.0 (or a specific interface).
+// conversation text — Bun's default 0.0.0.0 would expose it to the whole LAN. Opt into wider exposure
+// explicitly with BELLA_HOST=0.0.0.0 (or a specific interface) — doing so auto-enables auth (src/auth.ts).
 const HOST = brandEnv("HOST")?.trim() || "127.0.0.1";
-
-// Constant-time bearer comparison (avoids leaking the key via response-timing on byte-by-byte compare).
-function authOk(header: string): boolean {
-  if (!EXPECTED_AUTH) return false;
-  const a = Buffer.from(header);
-  const b = Buffer.from(EXPECTED_AUTH);
-  return a.length === b.length && timingSafeEqual(a, b); // length differs first (cheap, not secret)
-}
 
 // Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella serve`
 // (or no subcommand) boots the server — `serve` is accepted explicitly so command examples read
@@ -51,18 +41,20 @@ function warnIfOverDiskBudget() {
 
 // Build the full HTTP app. Exported so tests can exercise routing + auth without booting the server.
 // PUBLIC routes (/health, and the dashboard shell at /) are registered BEFORE the bearer middleware, so they
-// respond without a key — same pattern the health check already relies on.
-export function buildApp(ctx: { sql: DB; embed: Embed }) {
+// respond without a key — same pattern the health check already relies on. `auth` defaults to the
+// zero-config resolution for the configured host (src/auth.ts); tests pass it explicitly.
+export function buildApp(ctx: { sql: DB; embed: Embed }, auth: AuthConfig = resolveAuth(HOST)) {
   const app = new Hono();
 
   // The `service` tag is the doctor's authenticity CONTRACT (doctor checks it before trusting a port).
-  app.get("/health", (c) => c.json({ ok: true, service: "bellamente", brand: "bellamente" }));
-  app.route("/", dashboardRoutes()); // the inspect dashboard shell (public HTML; its API calls are still authed)
+  // `auth` tells clients (incl. the dashboard gate) whether a bearer key is needed at all.
+  app.get("/health", (c) => c.json({ ok: true, service: "bellamente", brand: "bellamente", auth: auth.required ? "required" : "none" }));
+  app.route("/", dashboardRoutes()); // the inspect dashboard shell (public HTML; its API calls follow the auth mode)
 
   app.use("*", async (c, next) => {
+    if (!auth.required) return next(); // zero-config loopback: no key, no friction
     if (c.req.path === "/health" || c.req.path === "/") return next(); // defensive: keep public even if reordered
-    if (!EXPECTED_AUTH) return c.json({ error: "BELLA_API_KEY not configured" }, 500);
-    if (!authOk(c.req.header("authorization") ?? "")) return c.json({ error: "Unauthorized" }, 401);
+    if (!bearerOk(c.req.header("authorization") ?? "", auth.key!)) return c.json({ error: "Unauthorized" }, 401);
     await next();
   });
 
@@ -82,8 +74,17 @@ async function main() {
   const sql = await makeDb();
   const embed = makeEmbed();
   await prewarmEmbed(embed);
-  const app = buildApp({ sql, embed });
+  const auth = resolveAuth(HOST);
+  const app = buildApp({ sql, embed }, auth);
   startForgetSweep(sql);
+  // Auth disclosure at every boot: which mode, and how to change it.
+  console.log(
+    auth.source === "none"
+      ? "[auth] no API key needed on loopback — zero config. Set BELLA_API_KEY to require one; setting BELLA_HOST beyond loopback auto-generates one."
+      : auth.source === "generated"
+        ? `[auth] BELLA_HOST exposes beyond loopback — using the auto-generated key in the data dir ('apikey' file). BELLA_API_KEY overrides.`
+        : "[auth] API key from BELLA_API_KEY.",
+  );
   // Disclosure, not fine print: auto-capture state is announced at every boot (privacy review).
   const { captureEnabled } = await import("./capture");
   console.log(

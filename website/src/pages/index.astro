@@ -61,9 +61,8 @@ const base = import.meta.env.BASE_URL;
             <pre id="db-typer"><span class="p">$</span> bella serve
 <span class="cm">bellamente listening on 127.0.0.1:8080</span>
 
-<span class="p">$</span> curl -s :8080/memories -H <span class="cp">"authorization: Bearer $BELLA_API_KEY"</span> \
-    -d <span class="cp">'&lbrace;"memories":[&lbrace;"content":"Jeff prefers dark mode"&rbrace;]&rbrace;'</span>
-<span class="cm">created · v1 · a7Kd…</span>
+<span class="p">$</span> curl -s :8080/memories -d <span class="cp">'&lbrace;"memories":[&lbrace;"content":"Jeff prefers dark mode"&rbrace;]&rbrace;'</span>
+<span class="cm">created · v1 · a7Kd…  <span class="cp">(no key needed on loopback — zero config)</span></span>
 
 <span class="p">$</span> curl -s :8080/search -d <span class="cp">'&lbrace;"q":"what theme does Jeff like?"&rbrace;'</span>
 <span class="cm">0.94 · "Jeff prefers dark mode" · 12ms · trace 9fQ2…</span> <span class="cursor" aria-hidden="true"></span></pre>
