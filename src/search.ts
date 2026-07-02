@@ -83,10 +83,14 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   // Reciprocal Rank Fusion; keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
   const score = new Map<string, number>();
   const data = new Map<string, MemoryResult>();
+  const inKeyword = new Set<string>();
   vrows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); data.set(r.id, toResult(r, Number(r.similarity))); });
-  krows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); if (!data.has(r.id)) data.set(r.id, toResult(r, 0)); });
+  krows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); inKeyword.add(r.id); if (!data.has(r.id)) data.set(r.id, toResult(r, 0)); });
+  // Ties are real at small limits (the top row of each leg scores 1/(K+1)). Deterministic tie-break:
+  // a literal text match is stronger evidence for the query than semantic similarity, so keyword-leg
+  // membership wins; then id, so ordering never depends on Map insertion order (Codex review, PR #79).
   return [...score.entries()]
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => b[1] - a[1] || Number(inKeyword.has(b[0])) - Number(inKeyword.has(a[0])) || a[0].localeCompare(b[0]))
     .slice(0, limit)
     .map(([id]) => data.get(id)!);
 }
