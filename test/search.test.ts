@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { search, searchChunks, searchRoutes, Q } from "../src/search";
+import { search, searchChunks, searchMemories, searchRoutes, Q } from "../src/search";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
 
@@ -165,6 +165,111 @@ test("POST /search: a slow search resolves EMPTY at the deadline with a 200 and 
     await new Promise((r) => setTimeout(r, 400));
   } finally {
     Q.SEARCH_TIMEOUT_MS = originalTimeout;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// --- SPEC-P1.3: full-text leg for MEMORY search (B1-B4) ---
+// Fixture memories inserted per-test so the shared seed (and the exact-similarity tests above) stay
+// untouched. All carry [0,1,0,0] embeddings unless noted: orthogonal to the query embedding [1,0,0,0],
+// so cosine similarity is 0.0 and ONLY the keyword leg can find them.
+async function insertMemory(
+  sql: Sql,
+  m: { id: string; memory: string; vec?: string; isLatest?: boolean; isForgotten?: boolean; space?: string },
+) {
+  await sql`
+    INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, is_forgotten, version, root_memory_id, memory_embedding, memory_embedding_model)
+    VALUES (${m.id}, ${ORG_ID}, ${m.space ?? spaceId}, ${m.memory}, ${m.isLatest ?? true}, ${m.isForgotten ?? false}, 1, ${m.id}, ${m.vec ?? "[0,1,0,0]"}::vector, ${"test-embed"})`;
+}
+
+test("searchMemories finds a rare literal token by keyword when its embedding is orthogonal to the query (B1)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const kwId = "kw".padEnd(22, "x");
+    await insertMemory(ctx.sql, { id: kwId, memory: "deploy code XK-42-BETA is live" });
+    const results = await searchMemories(ctx as any, { q: "XK-42-BETA", threshold: 0.5, limit: 10 });
+    expect(results.some((r) => r.id === kwId)).toBe(true);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("keyword-only memory hits carry similarity 0 but rank via RRF without breaking the shape (B2)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const kwId = "kw".padEnd(22, "x");
+    await insertMemory(ctx.sql, { id: kwId, memory: "deploy code XK-42-BETA is live" });
+    const results = await searchMemories(ctx as any, { q: "XK-42-BETA", threshold: 0.5, limit: 10 });
+    const hit = results.find((r) => r.id === kwId);
+    expect(hit).toBeDefined();
+    expect(hit!.type).toBe("memory");
+    expect(hit!.memory).toContain("XK-42-BETA");
+    expect(typeof hit!.version).toBe("number");
+    // No cosine evidence -> similarity 0, but it must still be a NUMBER (the response shape is frozen).
+    expect(hit!.similarity).toBe(0);
+    for (const r of results) expect(Number.isFinite(r.similarity)).toBe(true);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("threshold floors the vector leg only: a sub-threshold memory stays out until keyword finds it (B3)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const subId = "sub".padEnd(22, "x");
+    // cosine vs the query embedding [1,0,0,0] is exactly 0.3 — below the 0.5 floor.
+    await insertMemory(ctx.sql, { id: subId, memory: "XK-42-BETA rollout checklist", vec: "[0.3,0.9539392014169457,0,0]" });
+    // No keyword overlap -> the memory is vector-only, and the floor excludes it (unchanged semantics).
+    const vectorOnly = await searchMemories(ctx as any, { q: "unrelated calendar shopping list", threshold: 0.5, limit: 10 });
+    expect(vectorOnly.some((r) => r.id === subId)).toBe(false);
+    // The SAME memory found by keyword is included: the floor never applies to the keyword leg.
+    const keyword = await searchMemories(ctx as any, { q: "XK-42-BETA", threshold: 0.5, limit: 10 });
+    expect(keyword.some((r) => r.id === subId)).toBe(true);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("searchMemories keyword=false stays pure vector: threshold enforced, no keyword rescue", async () => {
+  const ctx = await makeCtx();
+  try {
+    const kwId = "kw".padEnd(22, "x");
+    await insertMemory(ctx.sql, { id: kwId, memory: "deploy code XK-42-BETA is live" });
+    const results = await searchMemories(ctx as any, { q: "XK-42-BETA", threshold: 0.5, limit: 10, keyword: false });
+    expect(results.some((r) => r.id === kwId)).toBe(false); // legacy vector-only path, like chunks
+    expect(results.map((r) => r.id)).toEqual(memIds); // seeded sims 1.0/0.8/0.55 in vector order
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("is_latest / is_forgotten / containerTag filters apply to the keyword leg too (B4)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const visibleId = "vis".padEnd(22, "x");
+    const forgottenId = "fgt".padEnd(22, "x");
+    const staleId = "old".padEnd(22, "x");
+    const otherSpaceMemId = "osp".padEnd(22, "x");
+    const otherSpaceId = "o".repeat(22);
+    await ctx.sql`
+      INSERT INTO space (id, container_tag, org_id)
+      VALUES (${otherSpaceId}, ${"other-tag"}, ${ORG_ID})`;
+    await insertMemory(ctx.sql, { id: visibleId, memory: "XK-42-BETA is the launch code" });
+    await insertMemory(ctx.sql, { id: forgottenId, memory: "XK-42-BETA was retired", isForgotten: true });
+    await insertMemory(ctx.sql, { id: staleId, memory: "XK-42-BETA superseded draft", isLatest: false });
+    await insertMemory(ctx.sql, { id: otherSpaceMemId, memory: "XK-42-BETA lives elsewhere", space: otherSpaceId });
+    const results = await searchMemories(ctx as any, {
+      q: "XK-42-BETA",
+      threshold: 0.5,
+      limit: 10,
+      containerTag: DEFAULT_CONTAINER_TAG,
+    });
+    const ids = results.map((r) => r.id);
+    expect(ids).toContain(visibleId);
+    expect(ids).not.toContain(forgottenId); // a forgotten memory with the rare token is NOT returned
+    expect(ids).not.toContain(staleId);
+    expect(ids).not.toContain(otherSpaceMemId);
+  } finally {
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);

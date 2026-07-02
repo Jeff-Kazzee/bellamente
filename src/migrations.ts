@@ -48,6 +48,17 @@ export const MIGRATIONS: Migration[] = [
         WHERE is_latest = true AND is_forgotten = false;
     `,
   },
+  {
+    id: 3,
+    name: "memory-fulltext-index",
+    // searchMemories() gained a full-text keyword leg (SPEC-P1.3): without an index every memory search
+    // would seq-scan to_tsvector over all latest memories. Same 'simple' (language-neutral) GIN shape as
+    // idx_chunk_content, so the two hybrid searches stay symmetric.
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_memory_entry_fulltext
+        ON memory_entry USING gin (to_tsvector('simple', memory));
+    `,
+  },
 ];
 
 /** Apply every migration not yet recorded in schema_migrations, in id order. Returns applied ids.
