@@ -44,6 +44,36 @@ test("a single giant unbreakable CJK line still lands under budget via hard cut"
   }
 });
 
+test("a token-heavy giant heading cannot defeat the budget: breadcrumb capped to half, tail kept", () => {
+  const giantHeading = "# " + "제목이 아주 긴 한국어 헤딩 ".repeat(40); // heading alone ≈ several hundred tokens
+  const doc = giantHeading + "\n\n" + "본문 내용입니다. ".repeat(60);
+  const chunks = chunkMarkdown(doc);
+  expect(chunks.length).toBeGreaterThan(0);
+  for (const c of chunks) {
+    expect(estimateTokens(c.embeddedContent)).toBeLessThanOrEqual(EMBED_TOKEN_BUDGET);
+  }
+  expect(chunks.some((c) => c.flags.includes("breadcrumb-truncated"))).toBe(true);
+});
+
+test("hard cuts never split a surrogate pair (astral CJK stays intact)", () => {
+  const astral = "𠀀".repeat(1200); // U+20000, surrogate pairs, no line/sentence boundaries
+  const chunks = chunkMarkdown(astral);
+  expect(chunks.length).toBeGreaterThan(1);
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  for (const c of chunks) {
+    expect(loneSurrogate.test(c.content)).toBe(false);
+    expect(estimateTokens(c.embeddedContent)).toBeLessThanOrEqual(EMBED_TOKEN_BUDGET);
+  }
+});
+
+test("junk chunkOptions fall back to defaults instead of disabling splitting", () => {
+  const para = ("A sentence that repeats to build a long paragraph. ").repeat(120); // ~6k chars
+  const junk = chunkMarkdown(para, { maxChars: "oops" as any, tokenBudget: NaN as any, minChars: -5 as any });
+  const sane = chunkMarkdown(para);
+  expect(junk.length).toBe(sane.length); // NaN used to make every size comparison false -> one giant chunk
+  expect(junk.length).toBeGreaterThan(1);
+});
+
 test("structural behavior preserved: code fences stay atomic, breadcrumbs prepended to embedded text", () => {
   const md = "# API\n\n## Auth\n\nUse the bearer token.\n\n```ts\nconst x = 1;\nconst y = 2;\n```\n";
   const chunks = chunkMarkdown(md);

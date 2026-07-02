@@ -19,6 +19,14 @@ export type Chunk = {
 export type ChunkOptions = { maxChars?: number; overlapChars?: number; minChars?: number; tokenBudget?: number };
 const DEFAULTS = { maxChars: 1075, overlapChars: 150, minChars: 64, tokenBudget: 480 };
 
+// Options arrive from the HTTP surface (POST /documents chunkOptions) — sanitize here, at the one
+// place every caller funnels through, so junk like maxChars:"oops" can't turn the size comparisons
+// into always-false NaN checks and silently disable splitting altogether.
+const posInt = (v: unknown, fallback: number): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+};
+
 // The embedders truncate at 512 TOKENS (embed-wasm/embed-model2vec max_length), but sizing here is
 // char-based — token-dense content (CJK ~1 token/char vs English ~1 token/4 chars) could fit maxChars
 // yet blow the token limit and get SILENTLY truncated at embed time. Guard with a conservative
@@ -30,7 +38,7 @@ export const EMBED_TOKEN_BUDGET = DEFAULTS.tokenBudget;
 // Unified Ideographs + kana), U+A840-A87F Phags-pa, U+AC00-D7AF Hangul syllables, U+F900-FAFF and
 // U+FE30-FE4F compatibility ideographs/forms, U+FF65-FFDC halfwidth katakana + Jamo.
 const CJK_RE =
-  /[ᄀ-ᇿ⺀-꓏ꡀ-꡿가-힯豈-﫿︰-﹏･-ￜ]/;
+  /[ᄀ-ᇿ⺀-꓏ꡀ-꡿가-힯豈-﫿︰-﹏･-ￜ]/;
 export function estimateTokens(s: string): number {
   let cjk = 0;
   for (const ch of s) if (CJK_RE.test(ch)) cjk++;
@@ -38,12 +46,17 @@ export function estimateTokens(s: string): number {
   return cjk + Math.ceil(rest / 3);
 }
 
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
 // Split text into pieces whose token ESTIMATE fits the budget: line/sentence boundaries first, then a
-// guaranteed-terminating binary hard cut for any single oversized unit.
+// guaranteed-terminating binary hard cut for any single oversized unit. Cuts never land inside a
+// surrogate pair (astral CJK/emoji would otherwise become lone surrogates -> U+FFFD on re-encode).
 function splitByTokenBudget(text: string, budget: number): string[] {
   const hardCut = (u: string): string[] => {
     if (estimateTokens(u) <= budget) return [u];
-    const mid = Math.ceil(u.length / 2);
+    let mid = Math.ceil(u.length / 2);
+    if (isHighSurrogate(u.charCodeAt(mid - 1))) mid += 1;
     return [...hardCut(u.slice(0, mid)), ...hardCut(u.slice(mid))];
   };
   const units = text.includes("\n") ? text.split("\n").map((l) => l + "\n") : splitSentences(text);
@@ -124,7 +137,13 @@ function forceSplit(block: Block, maxChars: number): { text: string; flag: strin
   for (const u of units) {
     if (cur && cur.length + u.length > maxChars) { out.push({ text: cur.trim(), flag }); cur = ""; }
     if (u.length > maxChars) { // a single unit (e.g. one giant line) still too big -> hard cut
-      for (let k = 0; k < u.length; k += maxChars) out.push({ text: u.slice(k, k + maxChars), flag: flag + "+hard-cut" });
+      let k = 0;
+      while (k < u.length) {
+        let end = Math.min(k + maxChars, u.length);
+        if (end < u.length && isHighSurrogate(u.charCodeAt(end - 1))) end -= 1; // keep pairs whole
+        out.push({ text: u.slice(k, end), flag: flag + "+hard-cut" });
+        k = end;
+      }
     } else cur += u;
   }
   if (cur.trim()) out.push({ text: cur.trim(), flag });
@@ -139,10 +158,10 @@ function tail(s: string, n: number): string {
 }
 
 export function chunkMarkdown(md: string, opts: ChunkOptions = {}): Chunk[] {
-  const maxChars = opts.maxChars ?? DEFAULTS.maxChars;
-  const overlapChars = opts.overlapChars ?? DEFAULTS.overlapChars;
-  const minChars = opts.minChars ?? DEFAULTS.minChars;
-  const tokenBudget = opts.tokenBudget ?? DEFAULTS.tokenBudget;
+  const maxChars = posInt(opts.maxChars, DEFAULTS.maxChars);
+  const overlapChars = posInt(opts.overlapChars ?? DEFAULTS.overlapChars, DEFAULTS.overlapChars);
+  const minChars = posInt(opts.minChars, DEFAULTS.minChars);
+  const tokenBudget = posInt(opts.tokenBudget, DEFAULTS.tokenBudget);
   const blocks = parseBlocks(md);
 
   const stack: { level: number; text: string }[] = [];
@@ -178,11 +197,10 @@ export function chunkMarkdown(md: string, opts: ChunkOptions = {}): Chunk[] {
 
   // overlap pass + token-budget pass + assemble (overlap only within the same section)
   const chunks: Chunk[] = [];
-  const push = (content: string, headingPath: string, flags: string[]) => {
+  const push = (content: string, headingPath: string, breadcrumb: string, flags: string[]) => {
     if (content.length < minChars) flags.push("tiny");
     if (content.length > maxChars * 1.15) flags.push("oversized");
     if (!/[.!?:)\]`"\n]$/.test(content.trim())) flags.push("mid-sentence");
-    const breadcrumb = headingPath ? headingPath + "\n\n" : "";
     chunks.push({
       content,
       embeddedContent: breadcrumb + content,
@@ -201,16 +219,25 @@ export function chunkMarkdown(md: string, opts: ChunkOptions = {}): Chunk[] {
       if (ov) { content = ov + "\n\n" + content; flags.push("overlap"); }
     }
     // Token-budget guard: the EMBEDDED text (breadcrumb + content) must fit the embedder's token limit,
-    // or it gets silently truncated at embed time. Char-based sizing already bounds English; this split
-    // only fires for token-dense content (CJK, symbol-heavy) — flagged so the damage is visible.
-    const breadcrumb = r.headingPath ? r.headingPath + "\n\n" : "";
+    // or it gets silently truncated at embed time. The breadcrumb itself is capped to HALF the budget
+    // (a pathological giant heading must not eat the whole allowance and leave content a useless
+    // 32-token sliver); we keep its TAIL — the most specific headings carry the retrieval signal.
+    let breadcrumb = r.headingPath ? r.headingPath + "\n\n" : "";
+    if (estimateTokens(breadcrumb) > tokenBudget / 2) {
+      flags.push("breadcrumb-truncated");
+      while (breadcrumb && estimateTokens(breadcrumb) > tokenBudget / 2) {
+        let drop = Math.max(32, Math.floor(breadcrumb.length / 4));
+        if (isLowSurrogate(breadcrumb.charCodeAt(drop))) drop += 1;
+        breadcrumb = breadcrumb.slice(drop);
+      }
+    }
     const contentBudget = Math.max(tokenBudget - estimateTokens(breadcrumb), 32);
     if (estimateTokens(content) > contentBudget) {
       for (const part of splitByTokenBudget(content, contentBudget)) {
-        push(part, r.headingPath, [...flags, "token-split"]);
+        push(part, r.headingPath, breadcrumb, [...flags, "token-split"]);
       }
     } else {
-      push(content, r.headingPath, flags);
+      push(content, r.headingPath, breadcrumb, flags);
     }
   });
   return chunks;
