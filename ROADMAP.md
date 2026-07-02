@@ -4,7 +4,7 @@
 This page is the actual backlog, in priority order. If a feature you need is listed below, it does
 not exist yet.
 
-Also on the website: https://jeff-kazzee.github.io/bellamente/roadmap
+Also on the website: https://bellamente.vercel.app/roadmap
 
 ## Now — shipped in v0.0.1
 
