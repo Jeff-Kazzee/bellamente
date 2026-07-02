@@ -57,6 +57,7 @@ function normalizeMemory(r: any) {
     version: Number(r.version),
     isLatest: !!r.is_latest,
     isStatic: !!r.is_static,
+    isInference: !!r.is_inference,
     isForgotten: !!r.is_forgotten,
     parentMemoryId: r.parent_memory_id ?? null,
     rootMemoryId: r.root_memory_id ?? null,
@@ -394,12 +395,14 @@ export function memoriesRoutes(ctx: Ctx) {
       const newVersionId = newId();
       const root = row.root_memory_id ?? row.id;
       await sql.begin(async (tx) => {
+        // is_inference carries forward like every other provenance field — a typo fix on a captured
+        // memory must not silently reclassify it as user-asserted (review finding).
         await tx`
           INSERT INTO memory_entry
-            (id, org_id, space_id, memory, is_static, is_latest, version, parent_memory_id, root_memory_id,
+            (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
              source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
           VALUES
-            (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${body.content}, ${isStatic}, true, ${Number(row.version) + 1},
+            (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${body.content}, ${isStatic}, ${!!row.is_inference}, true, ${Number(row.version) + 1},
              ${row.id}, ${root}, ${Number(row.source_count ?? 1)}, ${tx.json({ updates: [row.id] })},
              ${metadata ? tx.json(metadata) : null}, ${forgetAfter}, ${forgetReason},
              ${toVector(vec)}::vector, ${embedModelName()})`;

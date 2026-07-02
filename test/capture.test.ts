@@ -123,6 +123,21 @@ test("an answered turn captures the fact with provenance + a capture trace; repe
     });
     const count = await sql`SELECT count(*)::int AS n FROM memory_entry WHERE memory = ${"I prefer metric units."}`;
     expect(Number(count[0]!.n)).toBe(1);
+
+    // PATCH-editing a captured memory keeps its provenance: is_inference carries into the new version
+    // (a typo fix must not silently reclassify a captured fact as user-asserted).
+    const { memoriesRoutes } = await import("../src/memories");
+    const memApp = new Hono();
+    memApp.route("/memories", memoriesRoutes({ sql, embed }));
+    const [memRow] = await sql`SELECT id FROM memory_entry WHERE memory = ${"I prefer metric units."} AND is_latest = true`;
+    const patched = await memApp.request(`/memories/${memRow!.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "I prefer metric units everywhere." }),
+    });
+    expect(patched.status).toBe(200);
+    const patchedBody = await patched.json();
+    expect(patchedBody.memory.isInference).toBe(true);
   } finally {
     await close();
   }
