@@ -337,7 +337,7 @@
       const { traces } = await api("/inspect"+kindQ);
       const head = `<div class="pagehead"><div><h1>Recall traces</h1><div class="sub">Every retrieval Bellamente performed, locally recorded — what it fetched, how strong, how fast.</div></div>
         <div class="tools">
-          ${["all","search","proxy","tool_search"].map(k=>`<button class="chip ${traceFilter===k?"on":""}" data-filter="${k}">${k==="tool_search"?"tool-search":k}</button>`).join("")}
+          ${["all","search","proxy","tool_search","capture"].map(k=>`<button class="chip ${traceFilter===k?"on":""}" data-filter="${k}">${k==="tool_search"?"tool-search":k}</button>`).join("")}
           <button class="btn" data-refresh><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-.5 3" stroke-linecap="round"/><path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button>
         </div></div>`;
       if(!traces.length){ view.innerHTML = head + `<div class="empty"><b>No traces yet</b>Run a search in the Search tab — each recall is captured here.</div>`; wireTraces(); return; }

@@ -7,6 +7,7 @@ import { searchMemories, Q, type MemoryResult } from "./search";
 import { formatProfile, profileContextBlock, loadProfile } from "./profile";
 import { DEFAULT_CONTAINER_TAG, newId } from "./util";
 import { brandEnv } from "./env";
+import { captureFromTurn } from "./capture";
 import { recordTraceSafe, traceItemsFromSearchResults, traceTextItem } from "./inspect";
 
 type FetchLike = typeof fetch;
@@ -838,6 +839,10 @@ export function proxyRoutes(ctx: Ctx) {
               ...(error ? { error } : {}),
             },
           });
+          // Auto-capture after a clean stream completes (fire-and-forget; see src/capture.ts).
+          if (!error) {
+            void captureFromTurn(ctx, { messages: body.messages, containerTag, userId, proxyTraceId: traceId });
+          }
         },
       );
     }
@@ -961,6 +966,8 @@ export function proxyRoutes(ctx: Ctx) {
         request: requestSummary(body),
         metadata: { memoryRound: false, upstreamStatus: firstRes.status, toolAlreadyPresent, contextInjectedCount: contextInjected.length },
       });
+      // Auto-capture (fire-and-forget; never delays or breaks the turn — see src/capture.ts).
+      void captureFromTurn(ctx, { messages: body.messages, containerTag, userId, proxyTraceId: traceId });
       return proxyResponse(firstBody.text, firstRes.status, firstRes.headers.get("content-type"), {
         traceId,
         contextModified: true,
@@ -1104,6 +1111,11 @@ export function proxyRoutes(ctx: Ctx) {
         ...(toolSearchError ? { toolSearchError } : {}),
       },
     });
+
+    // Auto-capture (fire-and-forget; only on a successful answer).
+    if (finalRes.ok) {
+      void captureFromTurn(ctx, { messages: body.messages, containerTag, userId, proxyTraceId: traceId });
+    }
 
     return proxyResponse(finalBody.text, finalRes.status, finalRes.headers.get("content-type"), {
       traceId,

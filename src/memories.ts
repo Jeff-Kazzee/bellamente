@@ -57,6 +57,7 @@ function normalizeMemory(r: any) {
     version: Number(r.version),
     isLatest: !!r.is_latest,
     isStatic: !!r.is_static,
+    isInference: !!r.is_inference,
     isForgotten: !!r.is_forgotten,
     parentMemoryId: r.parent_memory_id ?? null,
     rootMemoryId: r.root_memory_id ?? null,
@@ -94,6 +95,7 @@ async function writeMemory(
     spaceId: string;
     content: string;
     isStatic: boolean;
+    isInference: boolean;
     metadata: unknown;
     forgetAfter: string | null;
     forgetReason: string | null;
@@ -147,10 +149,10 @@ async function writeMemory(
       // survives the version chain as a reinforcement signal (PATCH corrections carry it unchanged).
       await tx`
         INSERT INTO memory_entry
-          (id, org_id, space_id, memory, is_static, is_latest, version, parent_memory_id, root_memory_id,
+          (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
            source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
         VALUES
-          (${id}, ${ORG_ID}, ${args.spaceId}, ${args.content}, ${args.isStatic}, true, ${Number(nearest.version) + 1},
+          (${id}, ${ORG_ID}, ${args.spaceId}, ${args.content}, ${args.isStatic}, ${args.isInference}, true, ${Number(nearest.version) + 1},
            ${nearest.id}, ${root}, ${Number(nearest.source_count ?? 1) + 1}, ${tx.json({ updates: [nearest.id] })},
            ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
            ${v}::vector, ${args.model})`;
@@ -162,16 +164,132 @@ async function writeMemory(
   const id = newId();
   await tx`
     INSERT INTO memory_entry
-      (id, org_id, space_id, memory, is_static, is_latest, version, root_memory_id,
+      (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, root_memory_id,
        source_count, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
     VALUES
-      (${id}, ${ORG_ID}, ${args.spaceId}, ${args.content}, ${args.isStatic}, true, 1, ${id},
+      (${id}, ${ORG_ID}, ${args.spaceId}, ${args.content}, ${args.isStatic}, ${args.isInference}, true, 1, ${id},
        1, ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
        ${v}::vector, ${args.model})`;
   return { id, action: "created", version: 1 };
 }
 
-export function memoriesRoutes({ sql, embed }: Ctx) {
+// The storage-layer write path: space upsert -> batch embed -> per-item dedup/supersede inside one
+// transaction -> grouping document + provenance. The HTTP route is a thin wrapper; other writers
+// (proxy auto-capture, the future MCP server) call THIS so every write gets identical guarantees.
+export type WriteMemoryItem = {
+  content: string;
+  isStatic?: boolean;
+  isInference?: boolean;
+  metadata?: unknown;
+  forgetAfter?: string | null;
+  forgetReason?: string | null;
+};
+export type WrittenMemory = WriteResult & {
+  content: string;
+  isStatic: boolean;
+  forgetAfter: string | null;
+  forgetReason: string | null;
+  embedTruncated: boolean;
+};
+
+export async function writeMemories(
+  { sql, embed }: Ctx,
+  args: {
+    containerTag: string;
+    items: WriteMemoryItem[];
+    dedupe?: boolean;
+    documentSource?: string; // provenance tag on the grouping document ('api' | 'proxy_capture' | ...)
+    documentTitle?: string;
+  },
+): Promise<{ documentId: string | null; results: WrittenMemory[] }> {
+  const dedupe = args.dedupe !== false;
+
+  // 1. upsert space -> spaceId
+  const [space] = await sql`
+    INSERT INTO space (id, container_tag, org_id)
+    VALUES (${newId()}, ${args.containerTag}, ${ORG_ID})
+    ON CONFLICT (container_tag, org_id) DO UPDATE SET updated_at = now()
+    RETURNING id`;
+  const spaceId = space!.id as string;
+
+  // 2. embed contents
+  const contents = args.items.map((m) => String(m.content));
+  const vectors = await embed({ values: contents, taskType: "RETRIEVAL_DOCUMENT" });
+  const model = embedModelName();
+
+  // 3. build inputs (skip invalid vectors)
+  const inputs = args.items.flatMap((m, i) => {
+    const v = vectors[i];
+    if (!v || !isValidVector(v)) return [];
+    const forgetAfter: string | null = m.forgetAfter ?? null;
+    return [{
+      content: contents[i]!,
+      isStatic: !!m.isStatic,
+      isInference: !!m.isInference,
+      metadata: m.metadata ?? null,
+      forgetAfter,
+      forgetReason: forgetAfter ? (m.forgetReason ?? null) : null,
+      embedding: v,
+      // Which fields the caller EXPLICITLY sent — an exact-dup hit applies these to the existing
+      // row instead of silently dropping them (see writeMemory).
+      provided: {
+        isStatic: m.isStatic !== undefined,
+        metadata: m.metadata !== undefined,
+        forgetAfter: m.forgetAfter !== undefined,
+        forgetReason: m.forgetReason !== undefined,
+      },
+      // Memories are embedded whole (never chunked); past the embedder's token limit the tail is
+      // truncated at embed time. Surface it — silently pretending the whole text is searchable
+      // is the failure mode this repo keeps hunting.
+      embedTruncated: estimateTokens(contents[i]!) > EMBED_TOKEN_BUDGET,
+    }];
+  });
+  if (inputs.length === 0) return { documentId: null, results: [] };
+
+  // 4. one transaction: per-item write (sequential, so in-batch items dedupe against each other),
+  //    then a grouping document + provenance links for the rows that actually landed.
+  const docId = newId();
+  const out = await sql.begin(async (tx) => {
+    const results: WrittenMemory[] = [];
+    let wrote = 0;
+    for (const input of inputs) {
+      const r = await writeMemory(tx, { spaceId, model, dedupe, ...input });
+      results.push({
+        ...r,
+        content: input.content,
+        isStatic: input.isStatic,
+        forgetAfter: input.forgetAfter,
+        forgetReason: input.forgetReason,
+        embedTruncated: input.embedTruncated,
+      });
+      if (r.action !== "unchanged") wrote++;
+    }
+    const written = results.filter((r) => r.action !== "unchanged");
+    if (wrote > 0) {
+      const joined = written.map((r) => r.content).join("\n\n");
+      await tx`
+        INSERT INTO document (id, content, type, source, status, container_tags, title,
+                              chunk_count, token_count, metadata, org_id)
+        VALUES (${docId}, ${joined}, 'text', ${args.documentSource ?? "api"}, 'done', ${[args.containerTag]},
+                ${args.documentTitle ?? "Direct memories (" + written.length + ")"}, 0, 0,
+                ${tx.json({ eu_direct_memory: true })}, ${ORG_ID})`;
+      await tx`
+        INSERT INTO documents_to_spaces (document_id, space_id)
+        VALUES (${docId}, ${spaceId}) ON CONFLICT DO NOTHING`;
+      for (const r of written) {
+        await tx`
+          INSERT INTO memory_document_source (memory_entry_id, document_id, chunk_id, relevance_score)
+          VALUES (${r.id}, ${docId}, ${null}, 100) ON CONFLICT DO NOTHING`;
+      }
+    }
+    return { results, wroteDocument: wrote > 0 };
+  });
+
+  return { documentId: out.wroteDocument ? docId : null, results: out.results };
+}
+
+export function memoriesRoutes(ctx: Ctx) {
+  const { sql, embed } = ctx;
   const app = new Hono();
 
   // POST /memories - write 1..100 memories with dedup/supersede (see header).
@@ -179,7 +297,6 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
     const body = await c.req.json().catch(() => ({}));
     const memories: any[] = body.memories ?? [];
     const containerTag: string = body.containerTag ?? DEFAULT_CONTAINER_TAG;
-    const dedupe: boolean = body.dedupe !== false;
     if (!Array.isArray(memories) || memories.length < 1 || memories.length > 100) {
       return c.json({ error: "memories must be an array of 1..100 items" }, 400);
     }
@@ -189,89 +306,25 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
       }
     }
 
-    // 1. upsert space -> spaceId
-    const [space] = await sql`
-      INSERT INTO space (id, container_tag, org_id)
-      VALUES (${newId()}, ${containerTag}, ${ORG_ID})
-      ON CONFLICT (container_tag, org_id) DO UPDATE SET updated_at = now()
-      RETURNING id`;
-    const spaceId = space!.id as string;
-
-    // 2. embed contents
-    const contents = memories.map((m) => String(m.content));
-    const vectors = await embed({ values: contents, taskType: "RETRIEVAL_DOCUMENT" });
-    const model = embedModelName();
-
-    // 3. build inputs (skip invalid vectors)
-    const inputs = memories.flatMap((m, i) => {
-      const v = vectors[i];
-      if (!v || !isValidVector(v)) return [];
-      const forgetAfter: string | null = m.forgetAfter ?? null;
-      return [{
-        content: contents[i]!,
-        isStatic: !!m.isStatic,
-        metadata: m.metadata ?? null,
-        forgetAfter,
-        forgetReason: forgetAfter ? (m.forgetReason ?? null) : null,
-        embedding: v,
-        // Which fields the caller EXPLICITLY sent — an exact-dup hit applies these to the existing
-        // row instead of silently dropping them (see writeMemory).
-        provided: {
-          isStatic: m.isStatic !== undefined,
-          metadata: m.metadata !== undefined,
-          forgetAfter: m.forgetAfter !== undefined,
-          forgetReason: m.forgetReason !== undefined,
-        },
-        // Memories are embedded whole (never chunked); past the embedder's token limit the tail is
-        // truncated at embed time. Surface it — silently pretending the whole text is searchable
-        // is the failure mode this repo keeps hunting.
-        embedTruncated: estimateTokens(contents[i]!) > EMBED_TOKEN_BUDGET,
-      }];
-    });
-    if (inputs.length === 0) return c.json({ documentId: null, memories: [] }, 201);
-
-    // 4. one transaction: per-item write (sequential, so in-batch items dedupe against each other),
-    //    then a grouping document + provenance links for the rows that actually landed.
-    const docId = newId();
-    const results = await sql.begin(async (tx) => {
-      const out: (WriteResult & { input: (typeof inputs)[number] })[] = [];
-      for (const input of inputs) {
-        const r = await writeMemory(tx, { spaceId, model, dedupe, ...input });
-        out.push({ ...r, input });
-      }
-      const written = out.filter((r) => r.action !== "unchanged");
-      if (written.length) {
-        const joined = written.map((r) => r.input.content).join("\n\n");
-        await tx`
-          INSERT INTO document (id, content, type, source, status, container_tags, title,
-                                chunk_count, token_count, metadata, org_id)
-          VALUES (${docId}, ${joined}, 'text', 'api', 'done', ${[containerTag]},
-                  ${"Direct memories (" + written.length + ")"}, 0, 0, ${tx.json({ eu_direct_memory: true })}, ${ORG_ID})`;
-        await tx`
-          INSERT INTO documents_to_spaces (document_id, space_id)
-          VALUES (${docId}, ${spaceId}) ON CONFLICT DO NOTHING`;
-        for (const r of written) {
-          await tx`
-            INSERT INTO memory_document_source (memory_entry_id, document_id, chunk_id, relevance_score)
-            VALUES (${r.id}, ${docId}, ${null}, 100) ON CONFLICT DO NOTHING`;
-        }
-      }
-      return { out, wroteDocument: written.length > 0 };
+    const { documentId, results } = await writeMemories(ctx, {
+      containerTag,
+      dedupe: body.dedupe !== false,
+      items: memories,
     });
 
     return c.json({
-      documentId: results.wroteDocument ? docId : null,
-      memories: results.out.map((r) => ({
+      documentId,
+      memories: results.map((r) => ({
         id: r.id,
-        memory: r.input.content,
-        isStatic: r.input.isStatic,
+        memory: r.content,
+        isStatic: r.isStatic,
         action: r.action,
         version: r.version,
         ...(r.supersededId ? { supersededId: r.supersededId } : {}),
-        ...(r.input.embedTruncated ? { embedTruncated: true } : {}),
+        ...(r.embedTruncated ? { embedTruncated: true } : {}),
         createdAt: new Date().toISOString(),
-        forgetAfter: r.input.forgetAfter,
-        forgetReason: r.input.forgetReason,
+        forgetAfter: r.forgetAfter,
+        forgetReason: r.forgetReason,
       })),
     }, 201);
   });
@@ -342,12 +395,14 @@ export function memoriesRoutes({ sql, embed }: Ctx) {
       const newVersionId = newId();
       const root = row.root_memory_id ?? row.id;
       await sql.begin(async (tx) => {
+        // is_inference carries forward like every other provenance field — a typo fix on a captured
+        // memory must not silently reclassify it as user-asserted (review finding).
         await tx`
           INSERT INTO memory_entry
-            (id, org_id, space_id, memory, is_static, is_latest, version, parent_memory_id, root_memory_id,
+            (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
              source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
           VALUES
-            (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${body.content}, ${isStatic}, true, ${Number(row.version) + 1},
+            (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${body.content}, ${isStatic}, ${!!row.is_inference}, true, ${Number(row.version) + 1},
              ${row.id}, ${root}, ${Number(row.source_count ?? 1)}, ${tx.json({ updates: [row.id] })},
              ${metadata ? tx.json(metadata) : null}, ${forgetAfter}, ${forgetReason},
              ${toVector(vec)}::vector, ${embedModelName()})`;
