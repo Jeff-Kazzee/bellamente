@@ -42,6 +42,28 @@ This exists because review passes kept finding capabilities that were coded but 
 never worked (see docs/CHANGES-2026-07-01.md #4, #6): a behavior without a test demanding it
 does not reliably exist.
 
+## Model roles + spec-driven handoffs (Jeff, 2026-07-02)
+Multiple models work in this repo. Each has a lane; the SPEC is the handoff artifact between them.
+- **Codex / GPT (extra-high reasoning): PRIMARY IMPLEMENTER.** Backend features and parity items,
+  implemented FROM A SPEC in `docs/specs/` — never from a one-line prompt. Follow the spec's
+  acceptance tests exactly; if the spec is ambiguous or the code contradicts it, STOP and flag —
+  do not improvise around it.
+- **Claude Fable: SPEC AUTHOR + FIXER + FINAL JUDGE.** Writes specs for complex tasks, runs
+  adversarial review on substantial PRs, fixes the problems and fills the gaps other models leave,
+  owns architecture/tradeoff calls. Do NOT burn Fable on mechanical feature grinding — that is
+  Codex's lane (usage economics: Fable is scarce, Codex is the workhorse).
+- **Claude Opus: UI + mid-complexity implementation.** Dashboard, website, design-system work
+  (the La Macchina system — see dashboard/index.html tokens + website/), and feature work when it
+  carries a spec.
+- **Any model, before starting a task:** read this file, the relevant `docs/specs/SPEC-*.md`, and
+  `docs/HANDOFFS.md` (the protocol + spec template + verification ladder). A complex task with no
+  spec yet gets a spec FIRST (by Fable) — implementation without a spec is only for small,
+  well-bounded items whose BACKLOG entry already carries testable acceptance criteria.
+- Every model obeys the Behavior-tests-FIRST law and the four gates. No exceptions by model.
+- Product line to hold (docs/BACKLOG.md "Positioning guardrails"): parity with Supermemory on
+  capability, but the IDENTITY is "memory you can inspect and trust" — local-first single binary,
+  trace-everything, correction/versioning UI, never phones home. We are not building a clone.
+
 ## Workflow (no exceptions)
 1. Branch off `dev` (`git checkout dev && git pull && git checkout -b <type>/<slug>`).
    NEVER commit to `prod` or directly to `dev`.
