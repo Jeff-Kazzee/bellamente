@@ -149,3 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_document_source_document
 CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
   ON memory_entry (org_id, space_id, md5(memory))
   WHERE is_latest = true AND is_forgotten = false;
+-- full-text leg for hybrid MEMORY search; 'simple' = language-neutral, matching idx_chunk_content
+-- (also shipped to existing installs as migration 003 — keep both in sync)
+CREATE INDEX IF NOT EXISTS idx_memory_entry_fulltext
+  ON memory_entry USING gin (to_tsvector('simple', memory));

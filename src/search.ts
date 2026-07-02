@@ -1,4 +1,4 @@
-// search.ts - recall over memories (vector) and document chunks (hybrid: vector + full-text).
+// search.ts - recall over memories and document chunks, both hybrid: vector + full-text, RRF-fused.
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
@@ -22,7 +22,7 @@ export type SearchOpts = {
   threshold?: number;
   containerTag?: string;
   searchMode?: "memories" | "documents" | "hybrid";
-  keyword?: boolean; // chunk search: fuse full-text leg (default true)
+  keyword?: boolean; // fuse the full-text leg (default true; false = pure vector + cosine threshold)
   include?: { forgottenMemories?: boolean };
 };
 
@@ -35,30 +35,60 @@ export type SearchResult = MemoryResult | ChunkResult;
 
 const clampLimit = (n: number | undefined) => Math.min(Math.max(n ?? 10, 1), 100);
 
+// Hybrid memory search (SPEC-P1.3): vector (pgvector cosine) + full-text ('simple' tsvector), fused via
+// RRF — the same pattern as searchChunks. Memories are the PRIMARY object; vector-only recall missed
+// exact names, codes, and rare tokens whose embeddings drift away from the query's.
+// keyword=false -> pure vector + cosine threshold (legacy behavior).
 export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Promise<MemoryResult[]> {
   const limit = clampLimit(opts.limit);
   const threshold = opts.threshold ?? Q.SIMILARITY_THRESHOLD;
+  const useKeyword = opts.keyword !== false;
+  const N = limit * Q.RESULTS_PER_QUERY;
   const [vec] = await embed({ values: [opts.q], taskType: "QUESTION_ANSWERING" });
   if (!vec) return [];
   const v = toVector(vec);
   const includeForgotten = !!opts.include?.forgottenMemories;
+  // Shared by BOTH legs: visibility filters must not diverge between vector and keyword recall.
   const forgottenClause = includeForgotten
     ? sql``
     : sql`AND is_forgotten = false AND (forget_after IS NULL OR forget_after > now())`;
   const tagClause = opts.containerTag
     ? sql`AND space_id IN (SELECT id FROM space WHERE container_tag = ${opts.containerTag} AND org_id = ${ORG_ID})`
     : sql``;
-  const rows = await sql`
+  const rawVrows = await sql`
     SELECT id, memory, version, 1 - (memory_embedding <=> ${v}::vector) AS similarity
     FROM memory_entry
     WHERE org_id = ${ORG_ID} AND is_latest = true AND memory_embedding IS NOT NULL
       ${forgottenClause} ${tagClause}
     ORDER BY memory_embedding <=> ${v}::vector
-    LIMIT ${limit * Q.RESULTS_PER_QUERY}`;
-  return rows
-    .map((r): MemoryResult => ({ type: "memory", id: r.id, memory: r.memory, version: Number(r.version), similarity: Number(r.similarity) }))
-    .filter((r) => r.similarity >= threshold)
-    .slice(0, limit);
+    LIMIT ${N}`;
+  // The cosine floor applies to the VECTOR leg only. Keyword hits are exempt: a literal text match is
+  // its own relevance evidence, and ts_rank is not on the cosine scale (same rule as searchChunks).
+  const toResult = (r: any, similarity: number): MemoryResult =>
+    ({ type: "memory", id: r.id, memory: r.memory, version: Number(r.version), similarity });
+  const vrows = rawVrows.filter((r) => Number(r.similarity) >= threshold);
+
+  if (!useKeyword) return vrows.map((r) => toResult(r, Number(r.similarity))).slice(0, limit);
+
+  const krows = await sql`
+    SELECT id, memory, version,
+           ts_rank(to_tsvector('simple', memory), websearch_to_tsquery('simple', ${opts.q})) AS rank
+    FROM memory_entry
+    WHERE org_id = ${ORG_ID} AND is_latest = true
+      ${forgottenClause} ${tagClause}
+      AND to_tsvector('simple', memory) @@ websearch_to_tsquery('simple', ${opts.q})
+    ORDER BY rank DESC
+    LIMIT ${N}`;
+
+  // Reciprocal Rank Fusion; keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
+  const score = new Map<string, number>();
+  const data = new Map<string, MemoryResult>();
+  vrows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); data.set(r.id, toResult(r, Number(r.similarity))); });
+  krows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); if (!data.has(r.id)) data.set(r.id, toResult(r, 0)); });
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([id]) => data.get(id)!);
 }
 
 // Hybrid chunk search: vector (pgvector cosine) + full-text ('simple' tsvector), fused via RRF.

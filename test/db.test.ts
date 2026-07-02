@@ -121,6 +121,24 @@ test("runMigrations: brings a legacy install (missing new indexes) up to date", 
   await sql.end();
 }, 20000);
 
+test("runMigrations: memory full-text GIN index ships to legacy installs (003) and fresh installs via schema.sql (B6)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  // Fresh install: schema.sql itself creates the index (migrations then no-op over it).
+  let idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  expect(idx.length).toBe(1);
+  // Legacy install: the index predates migration 003 on disk — drop it, migrations bring it back.
+  await sql.unsafe("DROP INDEX idx_memory_entry_fulltext");
+  await runMigrations(sql);
+  idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  expect(idx.length).toBe(1);
+  // Idempotent: a re-run applies nothing and leaves the index in place.
+  const again = await runMigrations(sql);
+  expect(again).toEqual([]);
+  await sql.end();
+}, 20000);
+
 test("runMigrations: a failing migration rolls back atomically (no SQL applied, no row recorded)", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
   const sql = makePgliteSql(pg);
