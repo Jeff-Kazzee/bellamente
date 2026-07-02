@@ -32,6 +32,10 @@ recall traces, document ingestion, and profile-aware workflows.
 - M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers, with upstream timeouts (BELLA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (BELLA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
 - Document ingestion: WIRED. POST /documents chunks + embeds markdown (structure-aware, token-budget
   guarded); chunks are searchable via /search searchMode documents|hybrid (vector + full-text, RRF-fused).
+- Auto-capture: the proxy remembers durable first-person facts from your chats — conservatively,
+  through the standard dedup path, with a `capture` trace for every event and a sensitive-content
+  exclusion list (credentials/financial/medical are never stored). ON by default;
+  `BELLA_PROXY_CAPTURE=0` disables. Boot announces the capture state.
 - Inspect API: recall/search/proxy traces are durable and readable via `/inspect`; proxy `answered` traces show which memories fed the final model response.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
 
@@ -116,6 +120,7 @@ See docs/PRD.md and docs/08-api.md.
 - `BELLA_HOST` (default `127.0.0.1`), `PORT` (default 8080).
 - `BELLA_SUPERSEDE_THRESHOLD` — cosine floor for supersede-on-write (default 0.95 transformer/OpenAI, 0.98 static tier).
 - `SEARCH_THRESHOLD` — recall similarity floor (per-model default).
+- `BELLA_PROXY_CAPTURE` (default on) — chat auto-capture; `0` disables. Captures are traced + reversible.
 - `BELLA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
 - `BELLA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
 

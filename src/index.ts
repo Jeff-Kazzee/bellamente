@@ -85,6 +85,13 @@ async function main() {
   await prewarmEmbed(embed);
   const app = buildApp({ sql, embed });
   startForgetSweep(sql);
+  // Disclosure, not fine print: auto-capture state is announced at every boot (privacy review).
+  const { captureEnabled } = await import("./capture");
+  console.log(
+    captureEnabled()
+      ? "[capture] chat auto-capture is ON — every capture is traced and reversible; BELLA_PROXY_CAPTURE=0 disables"
+      : "[capture] chat auto-capture is OFF (BELLA_PROXY_CAPTURE)",
+  );
   console.log(`bellamente listening on ${HOST}:${PORT}`);
   return { app, port: PORT };
 }

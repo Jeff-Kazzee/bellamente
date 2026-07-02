@@ -24,6 +24,23 @@ test("extractCandidateFacts: keeps declarative first-person facts, drops questio
   expect(extractCandidateFacts("short")).toEqual([]);
 });
 
+test("sensitive disclosures are NEVER captured (credentials, financial/government IDs, medical)", () => {
+  const sensitive = [
+    "my password is hunter2.",
+    "My API key is sk-abc123def.",
+    "I'm HIV positive.",
+    "my social security number is 123-45-6789.",
+    "I am depressed lately.",
+    "my credit card number is 4111 1111 1111 1111.",
+    "Remember that my bank account PIN is 0000.",
+  ];
+  for (const s of sensitive) {
+    expect(extractCandidateFacts(s)).toEqual([]);
+  }
+  // ...while adjacent benign facts in the same message still capture.
+  expect(extractCandidateFacts("my password is hunter2. I prefer metric units.")).toEqual(["I prefer metric units."]);
+});
+
 test("captureEnabled: on by default, BELLA_PROXY_CAPTURE=0 kills it", () => {
   try {
     expect(captureEnabled()).toBe(true);

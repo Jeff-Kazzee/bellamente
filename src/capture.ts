@@ -40,6 +40,13 @@ const FACT_OPENERS: RegExp[] = [
   /^remember (?:that )?/i,
 ];
 
+// Sensitive-content EXCLUSION (privacy review finding): a candidate that looks like a credential,
+// financial/government identifier, or an explicit medical disclosure is dropped outright — never
+// stored, never embedded, never traced as a memory. Over-blocking is the right v1 bias: a user who
+// WANTS such a fact remembered can add it deliberately via the dashboard or POST /memories.
+const SENSITIVE_RE =
+  /\b(password|passwd|passphrase|token|api[ _-]?key|secret|private key|credentials?|ssn|social security|credit card|card number|cvv|cvc|pin (?:is|code|number)|bank account|routing number|iban|swift|passport|driver'?s licen[cs]e|licen[cs]e number|diagnos(?:is|ed)|hiv|cancer|std|pregnan\w*|depress\w*|anxiet\w*|suicid\w*|medication|prescri\w*)\b/i;
+
 /** Extract up to `cap` candidate facts from one message's text. Exported for direct unit testing. */
 export function extractCandidateFacts(text: string, cap = 3): string[] {
   const sentences = text
@@ -52,6 +59,7 @@ export function extractCandidateFacts(text: string, cap = 3): string[] {
     if (out.length >= cap) break;
     if (s.length < 8 || s.length > 300) continue;
     if (s.endsWith("?")) continue;
+    if (SENSITIVE_RE.test(s)) continue;
     if (!FACT_OPENERS.some((re) => re.test(s))) continue;
     out.push(s.replace(/^remember (that )?/i, "").trim());
   }
