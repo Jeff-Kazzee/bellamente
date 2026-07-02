@@ -124,6 +124,7 @@ See docs/PRD.md and docs/08-api.md.
 - `BELLA_PROXY_CAPTURE` (default on) — chat auto-capture; `0` disables. Captures are traced + reversible.
 - `BELLA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
 - `BELLA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
+- `BELLA_STREAM_DECISION_HOLD_CHARS` (default 512) — how much streamed answer text is held while classifying a turn, so models that narrate before calling `searchMemory` still get the memory round (`0` = pipe immediately).
 
 ## Naming
 Bellamente is the brand everywhere — copy, CLI (`bella`), and machine identifiers:

@@ -6,7 +6,7 @@ import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
 import { searchRoutes } from "../src/search";
 import { inspectRoutes, recordTrace } from "../src/inspect";
-import { proxyRoutes } from "../src/proxy";
+import { proxyRoutes, runToolSearch } from "../src/proxy";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
 
@@ -332,7 +332,7 @@ test("proxy streams upstream responses with profile context and trace visibility
     expect(res.headers.get("x-bella-streaming")).toBe("true");
     expect(res.headers.get("x-bella-context-modified")).toBe("true");
     expect(res.headers.get("x-bella-memory-round")).toBe("false");
-    expect(res.headers.get("x-bella-tool-intercept")).toBeNull();
+    expect(res.headers.get("x-bella-tool-intercept")).toBe("searchMemory"); // tool injected — same signal as buffered
     const streamText = await res.text();
     expect(streamText).toContain("dark mode");
     expect(streamText).toContain("data: [DONE]");
@@ -842,11 +842,14 @@ test("proxy aborts a hung upstream after BELLA_UPSTREAM_TIMEOUT_MS", async () =>
 
 test("proxy errors a stalled stream after BELLA_STREAM_IDLE_TIMEOUT_MS", async () => {
   process.env.BELLA_STREAM_IDLE_TIMEOUT_MS = "50";
+  // Content must exceed the decision hold window so the proxy commits to "answer" and starts piping
+  // BEFORE the stall — pinning the mid-stream (post-headers) failure path.
+  const longContent = "p".repeat(600);
   const fetcher: typeof fetch = async () =>
     new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(encoder.encode('data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n'));
+          controller.enqueue(encoder.encode(`data: {"choices":[{"index":0,"delta":{"content":"${longContent}"}}]}\n\n`));
           // ...then go silent forever: never enqueue again, never close.
         },
       }),
@@ -881,6 +884,463 @@ test("proxy errors a stalled stream after BELLA_STREAM_IDLE_TIMEOUT_MS", async (
     expect(String(trace.metadata.error)).toContain("stalled");
   } finally {
     delete process.env.BELLA_STREAM_IDLE_TIMEOUT_MS;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streaming proxy returns 502 when a non-local upstream has no API key", async () => {
+  const ctx = await makeCtx({ upstreamBaseUrl: "https://upstream.example/v1" }); // no key, no allow flag
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toContain("Missing upstream API key");
+
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_config_error" });
+    expect(trace.metadata).toMatchObject({ streaming: true });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streaming proxy returns 502 when the upstream fetch itself fails", async () => {
+  const fetcher: typeof fetch = async () => {
+    throw new Error("connection refused (test)");
+  };
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
+    expect(trace.metadata).toMatchObject({ streaming: true });
+    expect(String(trace.metadata.error)).toContain("connection refused");
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streaming proxy forwards a non-OK upstream status and error body", async () => {
+  const fetcher: typeof fetch = async () =>
+    new Response(JSON.stringify({ error: { message: "model not found" } }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "missing", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("model not found");
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
+    expect(trace.metadata).toMatchObject({ streaming: true, upstreamStatus: 404 });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streaming proxy returns 502 stream_error when upstream stalls before any event", async () => {
+  process.env.BELLA_STREAM_IDLE_TIMEOUT_MS = "50";
+  const fetcher: typeof fetch = async () =>
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    // The stall happens while classifying the stream, BEFORE anything went to the client,
+    // so the proxy can still answer with a proper error status instead of a broken stream.
+    expect(res.status).toBe(502);
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "stream_error" });
+    expect(String(trace.metadata.error)).toContain("stalled");
+  } finally {
+    delete process.env.BELLA_STREAM_IDLE_TIMEOUT_MS;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streamed memory round returns 502 when the second upstream call fails", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
+    if (upstreamCalls.length === 1) {
+      return sseResponse([
+        'data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_mem_3","type":"function","function":{"name":"searchMemory","arguments":"{\\"queries\\":[\\"which theme\\"]}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+        "data: [DONE]\n\n",
+      ]);
+    }
+    throw new Error("second call exploded (test)");
+  };
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Which theme should I use?" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    expect(upstreamCalls).toHaveLength(2);
+    expect(res.headers.get("x-bella-memory-round")).toBe("true");
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error", resultCount: 1 });
+    expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: true, firstUpstreamStatus: 200 });
+    expect(String(trace.metadata.error)).toContain("second call exploded");
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streamed memory round forwards a non-OK second upstream response", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
+    if (upstreamCalls.length === 1) {
+      return sseResponse([
+        'data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_mem_4","type":"function","function":{"name":"searchMemory","arguments":"{\\"queries\\":[\\"which theme\\"]}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+        "data: [DONE]\n\n",
+      ]);
+    }
+    return new Response(JSON.stringify({ error: { message: "overloaded" } }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Which theme should I use?" }] }),
+    });
+
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("overloaded");
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
+    expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: true, upstreamStatus: 503, firstUpstreamStatus: 200 });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("buffered memory round returns 502 when the second upstream call fails", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
+    if (upstreamCalls.length === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  { id: "call_buf_1", type: "function", function: { name: "searchMemory", arguments: '{"queries":["which theme"]}' } },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error("buffered second call exploded (test)");
+  };
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Which theme should I use?" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    expect(upstreamCalls).toHaveLength(2);
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error", resultCount: 1 });
+    expect(trace.metadata).toMatchObject({ memoryRound: true, firstUpstreamStatus: 200 });
+    expect(String(trace.metadata.error)).toContain("buffered second call exploded");
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streamed response with only [DONE] is replayed to the client as-is", async () => {
+  const fetcher: typeof fetch = async () => sseResponse(["data: [DONE]\n\n"]);
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("data: [DONE]\n\n");
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "streamed" });
+    expect(trace.metadata).toMatchObject({ memoryRound: false, chunkCount: 1 });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("runToolSearch records an ok tool_search trace when invoked directly", async () => {
+  const ctx = await makeCtx();
+  try {
+    const results = await runToolSearch(ctx as any, ["which theme"], { userId: "direct-user", containerTag: DEFAULT_CONTAINER_TAG });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.id).toBe(memId);
+
+    const rows = await ctx.sql`SELECT kind, status, user_id FROM recall_trace WHERE kind = ${"tool_search"}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "tool_search", status: "ok", user_id: "direct-user" });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("runToolSearch records an error tool_search trace and rethrows on search failure", async () => {
+  const ctx = await makeCtx({
+    embed: async () => {
+      throw new Error("embedder offline (direct)");
+    },
+  });
+  try {
+    await expect(runToolSearch(ctx as any, ["which theme"], { containerTag: DEFAULT_CONTAINER_TAG })).rejects.toThrow("embedder offline");
+    const rows = await ctx.sql`SELECT kind, status FROM recall_trace WHERE kind = ${"tool_search"}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("error");
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streamed memory round runs even when the model emits preamble content before the tool call", async () => {
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
+    if (upstreamCalls.length === 1) {
+      // Local models often narrate before calling the tool. The preamble must be HELD, not piped —
+      // otherwise the searchMemory call leaks to a client that cannot serve it.
+      return sseResponse([
+        'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Let me check what I know…"},"finish_reason":null}]}\n\n',
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_mem_pre","type":"function","function":{"name":"searchMemory","arguments":"{\\"queries\\":[\\"which theme\\"]}"}}]},"finish_reason":null}]}\n\n',
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        "data: [DONE]\n\n",
+      ]);
+    }
+    return sseResponse([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Use dark mode."},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+  };
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Which theme should I use?" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(2);
+    expect(res.headers.get("x-bella-memory-round")).toBe("true");
+    const streamText = await res.text();
+    expect(streamText).toContain("Use dark mode.");
+    expect(streamText).not.toContain("Let me check"); // the preamble + tool call never reach the client
+    expect(streamText).not.toContain("call_mem_pre");
+
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "streamed", resultCount: 1 });
+    expect(trace.metadata).toMatchObject({ memoryRound: true });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("streamed tool-call deltas without index but with distinct ids do not collide", async () => {
+  // Non-conformant upstreams may omit `index`; fragments must accumulate per id, not merge at 0.
+  const upstreamCalls: any[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
+    return sseResponse([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_a","type":"function","function":{"name":"lookupWeather","arguments":"{\\"city\\":"}}]},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_b","type":"function","function":{"name":"lookupNews","arguments":"{\\"topic\\":"}}]},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_a","function":{"arguments":"\\"Denver\\"}"}}]},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_b","function":{"arguments":"\\"ai\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+  };
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: true,
+        messages: [{ role: "user", content: "Weather and news please" }],
+        tools: [
+          { type: "function", function: { name: "lookupWeather", parameters: { type: "object" } } },
+          { type: "function", function: { name: "lookupNews", parameters: { type: "object" } } },
+        ],
+      }),
+    });
+
+    // Both calls are external → verbatim passthrough with every chunk intact.
+    expect(res.status).toBe(200);
+    const streamText = await res.text();
+    expect(streamText).toContain("call_a");
+    expect(streamText).toContain("call_b");
+
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls" });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("SSE keepalive comment lines are tolerated during stream classification", async () => {
+  const fetcher: typeof fetch = async () =>
+    sseResponse([
+      ": ping\n\n",
+      ": ping\n\n",
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Answer after keepalives."},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    const streamText = await res.text();
+    expect(streamText).toContain("Answer after keepalives.");
+    expect(streamText).toContain(": ping"); // replayed verbatim — the proxy does not rewrite bytes
+
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "streamed" });
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("BELLA_STREAM_DECISION_HOLD_CHARS=0 restores commit-on-first-content", async () => {
+  process.env.BELLA_STREAM_DECISION_HOLD_CHARS = "0";
+  const fetcher: typeof fetch = async () =>
+    sseResponse([
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"content":" there."},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Hi");
+    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "streamed" });
+    expect(trace.metadata.chunkCount).toBe(3);
+  } finally {
+    delete process.env.BELLA_STREAM_DECISION_HOLD_CHARS;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);

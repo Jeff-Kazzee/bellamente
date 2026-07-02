@@ -381,8 +381,7 @@ function firstMemoryToolCalls(upstreamJson: any): { id: string; queries: string[
 // enough to classify the turn. `function.arguments` arrives as string FRAGMENTS spread across delta
 // chunks (often split mid-JSON), so fragments accumulate per tool-call index and only the concatenated
 // whole is parsed. Every raw chunk read here is kept in `held` so answer/external decisions can replay
-// the bytes to the client unmodified; an "answer" decision returns on the first visible content delta
-// without buffering the rest of the stream.
+// the bytes to the client unmodified.
 type StreamDecision =
   | { decision: "answer"; held: Uint8Array[] }
   | { decision: "external_tool"; held: Uint8Array[] }
@@ -395,11 +394,36 @@ type ByteStreamReader = {
   cancel(reason?: unknown): Promise<unknown> | void;
 };
 
+// Local models often emit PREAMBLE content ("Let me check…") before their searchMemory call in the
+// same choice. Committing to "answer" on the first content token would leak that tool call to a
+// client that cannot serve it and silently skip memory grounding (the buffered path intercepts it
+// regardless of content). So content is HELD until finish_reason/[DONE] — or until this many chars
+// arrive with no tool-call fragment, at which point it is safe to assume a plain answer and start
+// piping live. 0 = commit on the very first content token (no hold, maximum streaming latency win,
+// preamble tool calls leak). Bounded [0, 100k].
+export function streamDecisionHoldChars(): number {
+  const raw = brandEnv("STREAM_DECISION_HOLD_CHARS");
+  const n = Number(raw);
+  if (raw === undefined || !Number.isFinite(n) || n < 0) return 512;
+  return Math.min(Math.round(n), 100_000);
+}
+
+// Runaway guard: a stream that never yields a decision (e.g. endless keepalive comments) must not
+// grow `held` unbounded. Past this many held bytes the turn is committed as a plain answer and
+// replayed — degraded, but bounded.
+const DECISION_HELD_BYTES_CAP = 1_048_576;
+
 async function readStreamDecision(reader: ByteStreamReader, idleMs: number): Promise<StreamDecision> {
   const held: Uint8Array[] = [];
   const decoder = new TextDecoder();
   let buffer = "";
+  let heldBytes = 0;
+  let contentChars = 0;
+  const holdChars = streamDecisionHoldChars();
   const calls = new Map<number, { id?: string; name?: string; args: string }>();
+  // Deltas that omit `index` but carry an id must not collide at index 0 — key them by id into a
+  // synthetic index range instead (order among them follows arrival).
+  const syntheticIndexById = new Map<string, number>();
 
   const readChunk = async () => {
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -426,6 +450,7 @@ async function readStreamDecision(reader: ByteStreamReader, idleMs: number): Pro
     if (done) break;
     if (value) {
       held.push(value);
+      heldBytes += value.byteLength;
       buffer += decoder.decode(value, { stream: true });
     }
     let sep: RegExpMatchArray | null;
@@ -449,7 +474,15 @@ async function readStreamDecision(reader: ByteStreamReader, idleMs: number): Pro
       const delta = choice?.delta;
       if (Array.isArray(delta?.tool_calls)) {
         for (const tc of delta.tool_calls) {
-          const index = typeof tc?.index === "number" ? tc.index : 0;
+          let index: number;
+          if (typeof tc?.index === "number") {
+            index = tc.index;
+          } else if (typeof tc?.id === "string" && tc.id) {
+            if (!syntheticIndexById.has(tc.id)) syntheticIndexById.set(tc.id, 1_000_000 + syntheticIndexById.size);
+            index = syntheticIndexById.get(tc.id)!;
+          } else {
+            index = 0;
+          }
           const acc = calls.get(index) ?? { args: "" };
           if (typeof tc?.id === "string" && tc.id) acc.id = tc.id;
           if (typeof tc?.function?.name === "string" && tc.function.name) acc.name = tc.function.name;
@@ -458,10 +491,12 @@ async function readStreamDecision(reader: ByteStreamReader, idleMs: number): Pro
         }
       }
       if (!calls.size && typeof delta?.content === "string" && delta.content.length) {
-        return { decision: "answer", held };
+        contentChars += delta.content.length;
+        if (contentChars > holdChars) return { decision: "answer", held };
       }
-      if (choice?.finish_reason === "tool_calls") sawFinish = true;
+      if (typeof choice?.finish_reason === "string" && choice.finish_reason) sawFinish = true;
     }
+    if (!sawFinish && heldBytes > DECISION_HELD_BYTES_CAP) return { decision: "answer", held };
   }
 
   if (!calls.size) return { decision: "answer", held };
@@ -1048,6 +1083,7 @@ export function proxyRoutes(ctx: Ctx) {
           contextModified: true,
           searchResults: 0,
           latencyMs: initialLatencyMs,
+          toolIntercept: MEMORY_TOOL_NAME, // the tool WAS injected — same signal the buffered path emits
         });
         return pipeStream(firstReader, decision.held, firstRes.status, headers, async ({ chunkCount, byteCount, error }) => {
           const latencyMs = Date.now() - started;
