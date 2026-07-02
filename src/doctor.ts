@@ -77,7 +77,10 @@ export async function runDoctor(): Promise<number> {
     const weights = join(modelBase, ...rel);
     let present = false;
     try { present = statSync(weights).size > 0; } catch {}
-    check(present, `model weights cached: ${LOCAL_MODEL}`, present ? weights : "not yet downloaded (fetched on first run)");
+    // Absent weights on a fresh install are NORMAL (fetched automatically on first serve) — report
+    // informationally instead of failing the checkup, so `bella doctor` right after download exits 0.
+    if (present) check(true, `model weights cached: ${LOCAL_MODEL}`, weights);
+    else console.log(`  -- model weights not yet downloaded: ${LOCAL_MODEL} (fetched automatically on first \`bella serve\`)`);
   }
 
   // Disk budget.
