@@ -4,10 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="color-scheme" content="dark" />
-<title>Eunoia — Inspect</title>
+<title>Bellamente — Inspect</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%2356d1c4'/%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2356d1c4' stroke-opacity='.5' stroke-width='1.5'/%3E%3C/svg%3E" />
 <style>
-  /* ---- Eunoia inspect dashboard — self-contained, no external assets (WASM-clean, single-binary) ---- */
+  /* ---- Bellamente inspect dashboard — self-contained, no external assets (WASM-clean, single-binary) ---- */
   :root{
     --bg:#0a0c10; --bg2:#0e1116; --panel:#12161c; --panel2:#161b22; --raise:#1b212a;
     --border:#212832; --border-soft:#191e26; --hair:rgba(255,255,255,.06);
@@ -242,7 +242,7 @@
   <aside class="side">
     <div class="brand">
       <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="6" fill="#56d1c4"/><circle cx="16" cy="16" r="13" fill="none" stroke="#56d1c4" stroke-opacity=".5" stroke-width="1.5"/></svg>
-      <div><b>Eunoia</b><small>Inspect</small></div>
+      <div><b>Bellamente</b><small>Inspect</small></div>
     </div>
     <nav class="nav" id="nav">
       <a href="#/traces" data-route="traces"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round"/></svg>Traces</a>
@@ -335,7 +335,7 @@
     await guard(async () => {
       const kindQ = traceFilter==="all" ? "" : "?kind="+encodeURIComponent(traceFilter);
       const { traces } = await api("/inspect"+kindQ);
-      const head = `<div class="pagehead"><div><h1>Recall traces</h1><div class="sub">Every retrieval Eunoia performed, locally recorded — what it fetched, how strong, how fast.</div></div>
+      const head = `<div class="pagehead"><div><h1>Recall traces</h1><div class="sub">Every retrieval Bellamente performed, locally recorded — what it fetched, how strong, how fast.</div></div>
         <div class="tools">
           ${["all","search","proxy","tool_search"].map(k=>`<button class="chip ${traceFilter===k?"on":""}" data-filter="${k}">${k==="tool_search"?"tool-search":k}</button>`).join("")}
           <button class="btn" data-refresh><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-.5 3" stroke-linecap="round"/><path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button>
@@ -363,7 +363,7 @@
     setActive("traces"); loading();
     await guard(async () => {
       const { trace:t } = await api("/inspect/"+encodeURIComponent(id));
-      const proxyNote = t.kind==="proxy" && t.status!=="answered" ? `<div class="notice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5" stroke-linecap="round"/><circle cx="12" cy="16" r=".6" fill="currentColor"/></svg><div><b>Context-injection trace.</b> This records what Eunoia injected (profile / tool / passthrough), <b>not</b> the model's final answer.</div></div>` : "";
+      const proxyNote = t.kind==="proxy" && t.status!=="answered" ? `<div class="notice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5" stroke-linecap="round"/><circle cx="12" cy="16" r=".6" fill="currentColor"/></svg><div><b>Context-injection trace.</b> This records what Bellamente injected (profile / tool / passthrough), <b>not</b> the model's final answer.</div></div>` : "";
       const retrieved = t.retrieved||[], injected = t.injected||[];
       view.innerHTML = `
         <a class="back" href="#/traces"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M15 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>All traces</a>
@@ -380,7 +380,7 @@
         <div class="sec"><div class="hd"><h3>Retrieved</h3><span class="n">${retrieved.length} item${retrieved.length===1?"":"s"}, ranked by relevance</span></div>
           ${retrieved.length ? retrieved.map(retrievedItem).join("") : `<div class="empty">Nothing retrieved for this query.</div>`}</div>
         ${injected.length ? `<div class="sec"><div class="hd"><h3>Injected</h3><span class="n">fed into context</span></div>${injected.map(retrievedItem).join("")}</div>` : ""}
-        <details class="raw"><summary>Raw trace record (exactly what Eunoia stored)</summary><pre>${esc(JSON.stringify(t,null,2))}</pre></details>`;
+        <details class="raw"><summary>Raw trace record (exactly what Bellamente stored)</summary><pre>${esc(JSON.stringify(t,null,2))}</pre></details>`;
       view.querySelectorAll("[data-expand]").forEach(a=>a.onclick=()=>{ const c=view.querySelector("#"+a.dataset.expand); c.classList.toggle("clip"); a.textContent=c.classList.contains("clip")?"Show more":"Show less"; });
     });
   }
@@ -451,7 +451,7 @@
     setActive("memory"); loading();
     await guard(async () => {
       const { memories } = await api("/memories?limit=100");
-      const head = `<div class="pagehead"><div><h1>Memory browser</h1><div class="sub">The latest memories Eunoia holds — the store your agent recalls from.</div></div><div class="tools"><button class="btn" data-refresh><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-.5 3" stroke-linecap="round"/><path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button></div></div>`;
+      const head = `<div class="pagehead"><div><h1>Memory browser</h1><div class="sub">The latest memories Bellamente holds — the store your agent recalls from.</div></div><div class="tools"><button class="btn" data-refresh><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-.5 3" stroke-linecap="round"/><path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button></div></div>`;
       if(!memories.length){ view.innerHTML=head+`<div class="empty"><b>No memories stored</b>Write some via POST /memories, then they'll appear here.</div>`; const r=view.querySelector("[data-refresh]"); if(r)r.onclick=renderMemory; return; }
       const items = memories.map((m,i)=>{ const cid="m"+i; const long=(m.memory||"").length>200; return `<div class="card mem fade" data-mid="${esc(m.id)}">
         <div class="mtop">${m.is_static?`<span class="badge b-both">static</span>`:`<span class="badge b-mem">dynamic</span>`}<span class="tag">v${m.version}</span><span class="tag">${esc(String(m.id).slice(0,10))}</span>${m.forget_after?`<span class="badge b-timeout">expires in ${esc(timeUntil(m.forget_after))}</span>`:""}<span class="when" title="${esc(fmtTime(m.created_at))}">${timeAgo(m.created_at)}</span></div>
@@ -575,8 +575,8 @@
     $("#app").hidden=true; const g=$("#gate"); g.hidden=false;
     g.innerHTML = `<div class="gate"><div class="card box fade">
       <svg class="mark" viewBox="0 0 32 32"><circle cx="16" cy="16" r="6" fill="#56d1c4"/><circle cx="16" cy="16" r="13" fill="none" stroke="#56d1c4" stroke-opacity=".5" stroke-width="1.5"/></svg>
-      <h2>Connect to Eunoia</h2>
-      <p>This dashboard talks to your local Eunoia instance. Paste the API key (<span class="mono">EUNOIA_API_KEY</span>) to inspect your memory layer.</p>
+      <h2>Connect to Bellamente</h2>
+      <p>This dashboard talks to your local Bellamente instance. Paste the API key (<span class="mono">EUNOIA_API_KEY</span>) to inspect your memory layer.</p>
       <label class="field"><span class="lab">API key</span><input id="gkey" type="password" placeholder="Bearer token" autocomplete="off" /></label>
       <div class="row2"><button class="btn primary" id="gconnect" style="flex:1;justify-content:center">Connect</button></div>
       <div class="err" id="gerr">${msg?esc(msg):""}</div>
