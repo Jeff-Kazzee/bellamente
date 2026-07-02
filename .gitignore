@@ -17,6 +17,7 @@ pgdata/
 docs/
 
 # Brand brief + source assets live in docs/ (local-only, for the website/app work);
-# never commit copies dropped at the repo root.
-BRAND.md
-brand/
+# never commit copies dropped at the repo root. Anchored to the ROOT on purpose: a future
+# tracked website/src "brand/" assets directory must not be silently ignored.
+/BRAND.md
+/brand/

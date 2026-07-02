@@ -49,7 +49,7 @@ Bellamente / `bella`. When unsure whether something is copy or contract: it's a 
   Careful: "invalid → fallback" and "out-of-range → clamp" are different semantics (see
   BACKLOG P2.14 before touching any of the clamp helpers).
 - Comments only where the WHY is non-obvious. No new dependencies without checking
-  `~/dev/agents/.shared/deny-list-npm.json` and `bun audit` first.
+  `~/dev/.shared/deny-list-npm.json` (verified location) and `bun audit` first.
 - New/changed user-visible strings say Bellamente/bella. New machine identifiers: ask before
   inventing either `EUNOIA_*` or `BELLA_*` (naming is a migration decision).
 
