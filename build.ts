@@ -1,8 +1,9 @@
 // build.ts - compile the Bun single binary (WASM engine: no native code embedded).
 //
 //  Env knobs:
-//    OUTFILE             output binary     (default ./eunoia)
-//    BUN_COMPILE_TARGET  Bun compile target, e.g. bun-linux-x64 / bun-darwin-arm64 (default: host)
+//    OUTFILE                 output binary  (default ./bella — the public CLI name, see BRAND.md)
+//    BUN_COMPILE_TARGET      Bun compile target, e.g. bun-linux-x64 / bun-darwin-arm64 (default: host)
+//    BELLA_NO_COMPAT_BINARY  set 1 to skip the legacy `eunoia` compat copy
 //
 //  What it does:
 //   - stubs the unused native `sharp` image dep (we are text-only)
@@ -15,7 +16,7 @@ const ENTRY = resolve(import.meta.dir, "src/index.ts");
 // The embed worker MUST be an explicit entrypoint — Bun does not auto-detect new Worker(...) for --compile.
 // Both entrypoints live in src/ so they co-locate in the embedded FS.
 const WORKER = resolve(import.meta.dir, "src/embed-worker.ts");
-const OUTFILE = process.env.OUTFILE ?? import.meta.dir + "/eunoia";
+const OUTFILE = process.env.OUTFILE ?? import.meta.dir + "/bella";
 const TARGET = process.env.BUN_COMPILE_TARGET; // undefined -> host target
 
 const compile: Record<string, unknown> = {
@@ -58,3 +59,17 @@ const r = await Bun.build({
 });
 console.log("build success:", r.success, "| entry:", ENTRY, "| out:", OUTFILE, "| target:", TARGET ?? "host");
 if (!r.success) for (const m of r.logs) console.log(String(m));
+
+// Staged rebrand (BRAND.md): the public command is `bella`, but the old `eunoia` binary must keep
+// working until a deliberate migration retires it — so the default build also emits a byte-identical
+// compat copy. Skipped when OUTFILE is overridden (custom name = caller's business) or opted out.
+if (r.success && !process.env.OUTFILE && process.env.BELLA_NO_COMPAT_BINARY !== "1") {
+  const { copyFileSync, chmodSync, statSync } = await import("node:fs");
+  const isWin = TARGET ? TARGET.includes("windows") : process.platform === "win32";
+  const exe = isWin ? ".exe" : "";
+  const built = OUTFILE + exe;
+  const compat = import.meta.dir + "/eunoia" + exe;
+  copyFileSync(built, compat);
+  if (!isWin) chmodSync(compat, statSync(built).mode);
+  console.log("compat copy:", compat, "(legacy name; see BRAND.md staged migration)");
+}
