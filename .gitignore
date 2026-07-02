@@ -9,6 +9,7 @@ bella-probe-*
 pgdata/
 *.tmp
 .DS_Store
+.vercel/
 
 # Internal/semi-proprietary design docs + reverse-engineering provenance.
 # Kept in the working folder, NOT published to GitHub.

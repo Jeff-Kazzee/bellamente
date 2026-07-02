@@ -1,0 +1,135 @@
+---
+// Public release ledger. Roadmap items move here when they ship.
+import "../styles/machina.css";
+
+const downloads = [
+  {
+    label: "Windows x64",
+    detail: "bella-windows-x64.exe",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe",
+  },
+  {
+    label: "macOS Apple silicon",
+    detail: "bella-darwin-arm64",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-arm64",
+  },
+  {
+    label: "macOS Intel",
+    detail: "bella-darwin-x64",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-x64",
+  },
+  {
+    label: "Linux x64",
+    detail: "bella-linux-x64",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-linux-x64",
+  },
+  {
+    label: "SHA256 checksums",
+    detail: "SHA256SUMS.txt",
+    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Changelog — Bellamente</title>
+    <meta name="description" content="What shipped in Bellamente, with direct downloads for each public release." />
+    <link rel="canonical" href="https://bellamente.vercel.app/changelog/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Bellamente" />
+    <meta property="og:title" content="Changelog - Bellamente" />
+    <meta property="og:description" content="What shipped in Bellamente, with direct downloads for each public release." />
+    <meta property="og:url" content="https://bellamente.vercel.app/changelog/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Changelog - Bellamente" />
+    <meta name="twitter:description" content="What shipped in Bellamente, with direct downloads for each public release." />
+    <script type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "Changelog - Bellamente",
+      "description": "What shipped in Bellamente, with direct downloads for each public release.",
+      "url": "https://bellamente.vercel.app/changelog/",
+      "publisher": { "@type": "Organization", "name": "The Little AI Co" },
+      "about": { "@type": "SoftwareApplication", "name": "Bellamente", "applicationCategory": "DeveloperApplication" }
+    })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23c4703a'/%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%234fa487' stroke-opacity='.5' stroke-width='1.5'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <main class="db">
+      <div class="wrap">
+        <!-- section: nav -->
+        <header class="db-nav">
+          <a class="db-logo" href="/">Bella<span>mente</span></a>
+          <nav aria-label="primary">
+            <a href="/">Home</a>
+            <a href="/roadmap">Roadmap</a>
+            <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
+            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe">Download</a>
+          </nav>
+        </header>
+
+        <!-- section: changelog hero -->
+        <section class="db-hero">
+          <p class="db-kicker">$ tail CHANGELOG.md</p>
+          <h1>Changelog.
+            <span class="thin">The roadmap is intent. This page is what actually shipped, with direct binaries attached.</span>
+          </h1>
+          <div class="rm-banner" role="note">
+            Roadmap items may ship out of order, and multiple items may land together. When that happens,
+            this page is the ledger: what moved, what changed, and which download is current.
+          </div>
+        </section>
+
+        <!-- section: v0.0.1 -->
+        <section class="db-pillars">
+          <div class="db-row">
+            <span class="k">2026-07-02</span>
+            <div>
+              <h3>Bellamente v0.0.1</h3>
+              <p>First public release: local-first memory lifecycle, document recall, OpenAI-compatible proxy,
+                 auto-capture, recall traces, dashboard inspection, embedded Postgres+pgvector, and local embeddings.</p>
+            </div>
+            <div><span class="proof">tag v0.0.1 · target prod</span></div>
+          </div>
+        </section>
+
+        <!-- section: direct downloads -->
+        <section class="db-proxy">
+          <div>
+            <h2>Download v0.0.1</h2>
+            <p>Choose the binary for your machine. The checksum file is published with the same release.</p>
+          </div>
+          <div class="db-downloads stacked" aria-label="Direct downloads for Bellamente v0.0.1">
+            {downloads.map((download) => (
+              <a class="db-download" href={download.href}>
+                <strong>{download.label}</strong>
+                <span>{download.detail}</span>
+              </a>
+            ))}
+          </div>
+        </section>
+
+        <!-- section: footer -->
+        <footer class="db-footer">
+          <span>© 2026 The Little AI Co · BELLAMENTE</span>
+          <span class="fine">
+            full release notes ·
+            <a href="https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1">github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1</a>
+          </span>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>
