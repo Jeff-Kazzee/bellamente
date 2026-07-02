@@ -28,6 +28,14 @@ test("GET / serves the dashboard shell publicly (no key needed) and leaks no sec
   expect(html).not.toContain("test-key-123"); // the shell must never embed the API key
 });
 
+test("GET / ships a restrictive Content-Security-Policy", async () => {
+  const r = await req("/");
+  const csp = r.headers.get("content-security-policy") || "";
+  expect(csp).toContain("default-src 'none'");
+  expect(csp).toContain("connect-src 'self'"); // same-origin API calls only — no exfil targets
+  expect(csp).toContain("frame-ancestors 'none'");
+});
+
 test("GET /health is public and identifies the service", async () => {
   const r = await req("/health");
   expect(r.status).toBe(200);

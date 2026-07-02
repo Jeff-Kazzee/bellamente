@@ -14,6 +14,7 @@ import { openSync, closeSync, writeSync, readFileSync, rmSync } from "node:fs";
 import { EMBED_DIM, LOCAL_MODEL, PROVIDER, embedModelName } from "./embed-common";
 import { dataDir, dbDir, runtimeDir, writeEmbedderMeta } from "./paths";
 import { makePgliteSql, type DB } from "./pg-shim";
+import { runMigrations } from "./migrations";
 import schemaSql from "../schema.sql" with { type: "text" };
 
 // Embed the PGlite runtime into the compiled binary. In `bun --compile`, `type:"file"` imports are packed
@@ -281,6 +282,7 @@ export async function makeDb(): Promise<DB> {
     : await makePglite();
   try {
     await sql.unsafe(schema); // idempotent schema apply at boot (Spec 01)
+    await runMigrations(sql); // then bring EXISTING installs up to date (schema.sql no-ops on them)
     await assertEmbeddingDim(sql, EMBED_DIM); // fail fast on a dimension switch (no silent 500-storm)
     await assertEmbeddingModel(sql, embedModelName()); // ...and on a same-dim model swap (silent corruption)
     // Pin the local embedder identity so a benign RAM/VM change can't flip the model/dim under this DB.

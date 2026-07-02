@@ -11,8 +11,19 @@ import { Hono } from "hono";
 import dashboardHtmlAsset from "../dashboard/index.html" with { type: "text" };
 export const dashboardHtml = dashboardHtmlAsset as unknown as string;
 
+// CSP for the public shell: the page is fully self-contained (inline CSS/JS, same-origin fetches, no
+// external assets — verified: the only URL in the file is an SVG xmlns attribute). 'unsafe-inline' is
+// required for the inline script/styles; the value of the policy is everything else it BLOCKS: external
+// script injection, exfiltration to foreign origins (connect-src 'self'), framing, and form posts.
+const DASHBOARD_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; " +
+  "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 export function dashboardRoutes() {
   const app = new Hono();
-  app.get("/", (c) => c.html(dashboardHtml));
+  app.get("/", (c) => {
+    c.header("content-security-policy", DASHBOARD_CSP);
+    return c.html(dashboardHtml);
+  });
   return app;
 }

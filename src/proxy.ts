@@ -130,12 +130,12 @@ function contentText(content: unknown): string {
   return "";
 }
 
+// The proxy speaks Chat Completions ONLY. It used to half-parse Anthropic-Messages shapes here
+// (top-level body.system, content blocks with type:"tool_result") that the tool-call round trip could
+// never actually serve — dead code that misled readers into thinking Anthropic was supported. Removed;
+// Anthropic support is a BACKLOG decision (docs/BACKLOG.md P2.2), not an accident of parsing.
 function promptText(body: any): string | undefined {
   const parts: string[] = [];
-  if (typeof body.system === "string") parts.push("system: " + body.system);
-  else if (body.system && typeof body.system === "object" && "content" in body.system) {
-    parts.push("system: " + contentText((body.system as any).content));
-  }
   for (const m of body.messages ?? []) {
     const text = contentText(m?.content);
     if (text) parts.push(`${m?.role ?? "message"}: ${text}`);
@@ -148,16 +148,13 @@ function requestSummary(body: any) {
     model: typeof body.model === "string" ? body.model : null,
     messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
     toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
-    hasSystem: body.system != null,
+    hasSystem: (body.messages ?? []).some((m: any) => m?.role === "system"),
     stream: body.stream === true,
   };
 }
 
 function hasToolResults(body: any): boolean {
-  return (body.messages ?? []).some((m: any) => {
-    if (m?.role === "tool") return true;
-    return Array.isArray(m?.content) && m.content.some((p: any) => p?.type === "tool_result");
-  });
+  return (body.messages ?? []).some((m: any) => m?.role === "tool");
 }
 
 function toolName(tool: any): string | undefined {
@@ -290,8 +287,41 @@ function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
   return { ok: true, url, headers };
 }
 
-async function forwardUpstream(fetcher: FetchLike, config: Extract<UpstreamConfig, { ok: true }>, body: any) {
-  return fetcher(config.url, { method: "POST", headers: config.headers, body: JSON.stringify(body) });
+// Upstream timeouts. Read lazily (per request, not at import) so tests and long-running processes can
+// adjust without a restart. Bounded [1ms, 10min]; local LLM generation can legitimately take minutes,
+// so the buffered default is generous — the point is "never hang forever", not "be snappy".
+const clampMs = (raw: unknown, fallback: number): number => {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.max(Math.round(n), 1), 600_000);
+};
+export function upstreamTimeoutMs(): number {
+  return clampMs(process.env.EUNOIA_UPSTREAM_TIMEOUT_MS, 120_000);
+}
+export function streamIdleTimeoutMs(): number {
+  return clampMs(process.env.EUNOIA_STREAM_IDLE_TIMEOUT_MS, 120_000);
+}
+
+// One deadline covers connect + headers + (for buffered exchanges) the full body read: fetch's abort
+// signal governs res.text() too, so a stalled body can't hang past the deadline. Streaming call sites
+// clear the deadline once headers arrive and hand off to the per-read idle timeout in proxyStreamResponse.
+type Deadline = { signal: AbortSignal; clear: () => void };
+function upstreamDeadline(ms: number): Deadline {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(`upstream timed out after ${ms}ms (EUNOIA_UPSTREAM_TIMEOUT_MS)`)),
+    ms,
+  );
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
+async function forwardUpstream(
+  fetcher: FetchLike,
+  config: Extract<UpstreamConfig, { ok: true }>,
+  body: any,
+  signal?: AbortSignal,
+) {
+  return fetcher(config.url, { method: "POST", headers: config.headers, body: JSON.stringify(body), signal });
 }
 
 async function readUpstreamBody(res: Response): Promise<{ text: string; json: any }> {
@@ -300,6 +330,36 @@ async function readUpstreamBody(res: Response): Promise<{ text: string; json: an
     return { text, json: text ? JSON.parse(text) : null };
   } catch {
     return { text, json: null };
+  }
+}
+
+// fetch() wraps abort reasons in a TypeError whose `cause` holds the real deadline error — unwrap it so
+// traces say "timed out after Nms" instead of "fetch failed".
+function upstreamErrorMessage(e: unknown): string {
+  const cause = (e as any)?.cause;
+  if (cause instanceof Error && cause.message) return cause.message;
+  return e instanceof Error ? e.message : String(e);
+}
+
+// Buffered request/response exchange under one deadline. Fetch errors, timeouts, and mid-body read
+// failures all land in the same { ok: false } shape — call sites treat them as one upstream_error path.
+type BufferedExchange =
+  | { ok: true; res: Response; text: string; json: any }
+  | { ok: false; error: string };
+async function bufferedUpstreamExchange(
+  fetcher: FetchLike,
+  config: Extract<UpstreamConfig, { ok: true }>,
+  body: any,
+): Promise<BufferedExchange> {
+  const deadline = upstreamDeadline(upstreamTimeoutMs());
+  try {
+    const res = await forwardUpstream(fetcher, config, body, deadline.signal);
+    const { text, json } = await readUpstreamBody(res);
+    return { ok: true, res, text, json };
+  } catch (e) {
+    return { ok: false, error: upstreamErrorMessage(e) };
+  } finally {
+    deadline.clear();
   }
 }
 
@@ -346,10 +406,11 @@ function firstMemoryToolCalls(upstreamJson: any): { id: string; queries: string[
   return calls;
 }
 
-function toolResultPayload(queries: string[], results: MemoryResult[]) {
+function toolResultPayload(queries: string[], results: MemoryResult[], error?: string) {
   return {
     type: "eunoia_memory_results",
     queries,
+    ...(error ? { error } : {}),
     results: results.map((r) => ({
       type: r.type,
       id: r.id,
@@ -437,8 +498,23 @@ function proxyStreamResponse(
   };
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      // Idle timeout per READ, not per stream: the timer only runs while a read is outstanding, so a
+      // slow CONSUMER (backpressure, no pull pending) never trips it — only an upstream that goes silent
+      // mid-stream does. Without this, a stalled upstream held the response open forever.
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const { done, value } = await reader.read();
+        const idleMs = streamIdleTimeoutMs();
+        const read = reader.read();
+        read.catch(() => {}); // the race can abandon this promise; don't let its rejection go unhandled
+        const { done, value } = await Promise.race([
+          read,
+          new Promise<never>((_, reject) => {
+            idleTimer = setTimeout(
+              () => reject(new Error(`upstream stream stalled: no data for ${idleMs}ms (EUNOIA_STREAM_IDLE_TIMEOUT_MS)`)),
+              idleMs,
+            );
+          }),
+        ]);
         if (done) {
           await finish();
           controller.close();
@@ -450,9 +526,14 @@ function proxyStreamResponse(
           controller.enqueue(value);
         }
       } catch (e) {
+        try {
+          await reader.cancel(e); // release the upstream connection on stall/error
+        } catch {}
         const error = e instanceof Error ? e.message : String(e);
         await finish(error);
         controller.error(e);
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
       }
     },
     async cancel(reason) {
@@ -513,10 +594,49 @@ export function proxyRoutes(ctx: Ctx) {
           passthrough: true,
         });
       }
-      let upstreamRes: Response;
+      const deadline = upstreamDeadline(upstreamTimeoutMs());
+      let upstreamRes: Response | null = null;
+      let upstreamBody: { text: string; json: any } | null = null;
+      let upstreamError: string | null = null;
       try {
-        upstreamRes = await forwardUpstream(fetcher, upstream, body);
+        upstreamRes = await forwardUpstream(fetcher, upstream, body, deadline.signal);
+        if (body.stream === true && upstreamRes.ok) {
+          deadline.clear(); // headers are in; the per-read idle timeout owns the stream from here
+          const streamRes = upstreamRes;
+          const initialLatencyMs = Date.now() - started;
+          return proxyStreamResponse(
+            streamRes,
+            { traceId, contextModified: false, searchResults: 0, latencyMs: initialLatencyMs, passthrough: true },
+            async ({ chunkCount, byteCount, error }) => {
+              const latencyMs = Date.now() - started;
+              await recordTraceSafe(ctx.sql, {
+                id: traceId,
+                kind: "proxy",
+                status: error ? "stream_error" : "streamed_passthrough",
+                userId,
+                containerTag,
+                query,
+                latencyMs,
+                request: requestSummary(body),
+                metadata: {
+                  hasToolResults: true,
+                  streaming: true,
+                  upstreamStatus: streamRes.status,
+                  chunkCount,
+                  byteCount,
+                  ...(error ? { error } : {}),
+                },
+              });
+            },
+          );
+        }
+        upstreamBody = await readUpstreamBody(upstreamRes);
       } catch (e) {
+        upstreamError = upstreamErrorMessage(e);
+      } finally {
+        deadline.clear();
+      }
+      if (upstreamError !== null || !upstreamRes || !upstreamBody) {
         const latencyMs = Date.now() - started;
         await recordTraceSafe(ctx.sql, {
           id: traceId,
@@ -527,7 +647,7 @@ export function proxyRoutes(ctx: Ctx) {
           query,
           latencyMs,
           request: requestSummary(body),
-          metadata: { hasToolResults: true, error: e instanceof Error ? e.message : String(e) },
+          metadata: { hasToolResults: true, error: upstreamError ?? "upstream exchange failed" },
         });
         return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
           traceId,
@@ -537,36 +657,6 @@ export function proxyRoutes(ctx: Ctx) {
           passthrough: true,
         });
       }
-      if (body.stream === true && upstreamRes.ok) {
-        const initialLatencyMs = Date.now() - started;
-        return proxyStreamResponse(
-          upstreamRes,
-          { traceId, contextModified: false, searchResults: 0, latencyMs: initialLatencyMs, passthrough: true },
-          async ({ chunkCount, byteCount, error }) => {
-            const latencyMs = Date.now() - started;
-            await recordTraceSafe(ctx.sql, {
-              id: traceId,
-              kind: "proxy",
-              status: error ? "stream_error" : "streamed_passthrough",
-              userId,
-              containerTag,
-              query,
-              latencyMs,
-              request: requestSummary(body),
-              metadata: {
-                hasToolResults: true,
-                streaming: true,
-                upstreamStatus: upstreamRes.status,
-                chunkCount,
-                byteCount,
-                ...(error ? { error } : {}),
-              },
-            });
-          },
-        );
-      }
-
-      const upstreamBody = await readUpstreamBody(upstreamRes);
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
         id: traceId,
@@ -657,10 +747,21 @@ export function proxyRoutes(ctx: Ctx) {
         });
       }
 
-      let upstreamRes: Response;
+      const deadline = upstreamDeadline(upstreamTimeoutMs());
+      let upstreamRes: Response | null = null;
+      let errorBody: { text: string; json: any } | null = null;
+      let upstreamError: string | null = null;
       try {
-        upstreamRes = await forwardUpstream(fetcher, upstream, body);
+        upstreamRes = await forwardUpstream(fetcher, upstream, body, deadline.signal);
+        if (!upstreamRes.ok) errorBody = await readUpstreamBody(upstreamRes);
+        else deadline.clear(); // headers are in; the per-read idle timeout owns the stream from here
       } catch (e) {
+        upstreamError = upstreamErrorMessage(e);
+      } finally {
+        deadline.clear();
+      }
+
+      if (upstreamError !== null || !upstreamRes) {
         const latencyMs = Date.now() - started;
         await recordTraceSafe(ctx.sql, {
           id: traceId,
@@ -673,7 +774,7 @@ export function proxyRoutes(ctx: Ctx) {
           injectedCount: contextInjected.length,
           injected: contextInjected,
           request: requestSummary(body),
-          metadata: { error: e instanceof Error ? e.message : String(e), streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+          metadata: { error: upstreamError ?? "upstream exchange failed", streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
         });
         return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
           traceId,
@@ -684,7 +785,6 @@ export function proxyRoutes(ctx: Ctx) {
       }
 
       if (!upstreamRes.ok) {
-        const upstreamBody = await readUpstreamBody(upstreamRes);
         const latencyMs = Date.now() - started;
         await recordTraceSafe(ctx.sql, {
           id: traceId,
@@ -699,7 +799,7 @@ export function proxyRoutes(ctx: Ctx) {
           request: requestSummary(body),
           metadata: { upstreamStatus: upstreamRes.status, streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
         });
-        return proxyResponse(upstreamBody.text, upstreamRes.status, upstreamRes.headers.get("content-type"), {
+        return proxyResponse(errorBody?.text ?? "", upstreamRes.status, upstreamRes.headers.get("content-type"), {
           traceId,
           contextModified: true,
           searchResults: 0,
@@ -766,10 +866,8 @@ export function proxyRoutes(ctx: Ctx) {
       });
     }
 
-    let firstRes: Response;
-    try {
-      firstRes = await forwardUpstream(fetcher, upstream, body);
-    } catch (e) {
+    const first = await bufferedUpstreamExchange(fetcher, upstream, body);
+    if (!first.ok) {
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
         id: traceId,
@@ -782,7 +880,7 @@ export function proxyRoutes(ctx: Ctx) {
         injectedCount: contextInjected.length,
         injected: contextInjected,
         request: requestSummary(body),
-        metadata: { error: e instanceof Error ? e.message : String(e), toolAlreadyPresent },
+        metadata: { error: first.error, toolAlreadyPresent },
       });
       return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
         traceId,
@@ -792,8 +890,8 @@ export function proxyRoutes(ctx: Ctx) {
         toolIntercept: MEMORY_TOOL_NAME,
       });
     }
-
-    const firstBody = await readUpstreamBody(firstRes);
+    const firstRes = first.res;
+    const firstBody = { text: first.text, json: first.json };
     if (!firstRes.ok) {
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
@@ -873,83 +971,57 @@ export function proxyRoutes(ctx: Ctx) {
 
     let remainingQueries = MAX_QUERIES_PER_CALL;
     let toolSearchTimedOut = false;
+    let toolSearchFailed = false;
+    let toolSearchError: string | undefined;
     const toolMessages: any[] = [];
     const allResults: MemoryResult[] = [];
     const usedQueries: string[] = [];
-    try {
-      for (const call of toolCalls) {
-        const queries = call.queries.slice(0, Math.max(remainingQueries, 0));
-        remainingQueries -= queries.length;
-        usedQueries.push(...queries);
-        let results: MemoryResult[] = [];
-        if (queries.length) {
-          let timedOut = false;
-          const searchPromise = runToolSearch(ctx, queries, { userId, containerTag, recordTrace: false }).catch((e) => {
-            if (timedOut) {
-              console.warn("[proxy] memory tool search finished after timeout:", e instanceof Error ? e.message : String(e));
-              return [];
-            }
-            throw e;
-          });
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            results = await Promise.race([
-              searchPromise,
-              new Promise<MemoryResult[]>((resolve) => {
-                timer = setTimeout(() => {
-                  timedOut = true;
-                  toolSearchTimedOut = true;
-                  resolve([]);
-                }, Q.SEARCH_TIMEOUT_MS);
-              }),
-            ]);
-          } finally {
-            if (timer) clearTimeout(timer);
+    for (const call of toolCalls) {
+      const queries = call.queries.slice(0, Math.max(remainingQueries, 0));
+      remainingQueries -= queries.length;
+      usedQueries.push(...queries);
+      let results: MemoryResult[] = [];
+      let failed = false;
+      if (queries.length) {
+        let timedOut = false;
+        const searchPromise = runToolSearch(ctx, queries, { userId, containerTag, recordTrace: false }).catch((e) => {
+          if (timedOut) {
+            console.warn("[proxy] memory tool search finished after timeout:", e instanceof Error ? e.message : String(e));
+            return [];
           }
-        }
-        allResults.push(...results);
-        toolMessages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: JSON.stringify(toolResultPayload(queries, results)),
+          throw e;
         });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          results = await Promise.race([
+            searchPromise,
+            new Promise<MemoryResult[]>((resolve) => {
+              timer = setTimeout(() => {
+                timedOut = true;
+                toolSearchTimedOut = true;
+                resolve([]);
+              }, Q.SEARCH_TIMEOUT_MS);
+            }),
+          ]);
+        } catch (e) {
+          // Recall failure must not kill a turn the model already answered with a tool call. The model's
+          // response is intact and the timeout path two branches up already proves "continue with empty
+          // results" is safe — reuse it, mark the degradation in the trace, and let the model answer
+          // without memory instead of returning a 500 that discards its work.
+          failed = true;
+          toolSearchFailed = true;
+          toolSearchError = e instanceof Error ? e.message : String(e);
+          console.warn("[proxy] memory tool search failed; continuing with empty results:", toolSearchError);
+          results = [];
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
       }
-    } catch (e) {
-      const partialResults = topMemoryResults(allResults);
-      const traceItems = traceItemsFromSearchResults(partialResults);
-      const latencyMs = Date.now() - started;
-      await recordTraceSafe(ctx.sql, {
-        id: traceId,
-        kind: "proxy",
-        status: "tool_error",
-        userId,
-        containerTag,
-        query,
-        queries: usedQueries,
-        searchMode: "memories",
-        resultCount: partialResults.length,
-        injectedCount: 0,
-        latencyMs,
-        retrieved: traceItems,
-        request: requestSummary(body),
-        metadata: {
-          memoryRound: true,
-          toolAlreadyPresent,
-          toolCallCount: toolCalls.length,
-          completedToolMessageCount: toolMessages.length,
-          firstUpstreamStatus: firstRes.status,
-          contextInjectedCount: contextInjected.length,
-          toolSearchTimedOut,
-          error: e instanceof Error ? e.message : String(e),
-        },
-      });
-      return proxyResponse(JSON.stringify({ error: "Memory tool search failed", traceId }), 500, "application/json", {
-        traceId,
-        contextModified: true,
-        searchResults: partialResults.length,
-        latencyMs,
-        toolIntercept: MEMORY_TOOL_NAME,
-        memoryRound: true,
+      allResults.push(...results);
+      toolMessages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: JSON.stringify(toolResultPayload(queries, results, failed ? "memory_search_unavailable" : undefined)),
       });
     }
 
@@ -962,10 +1034,8 @@ export function proxyRoutes(ctx: Ctx) {
       tool_choice: "none",
     };
 
-    let finalRes: Response;
-    try {
-      finalRes = await forwardUpstream(fetcher, upstream, finalRequest);
-    } catch (e) {
+    const final = await bufferedUpstreamExchange(fetcher, upstream, finalRequest);
+    if (!final.ok) {
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
         id: traceId,
@@ -989,7 +1059,9 @@ export function proxyRoutes(ctx: Ctx) {
           firstUpstreamStatus: firstRes.status,
           contextInjectedCount: contextInjected.length,
           toolSearchTimedOut,
-          error: e instanceof Error ? e.message : String(e),
+          toolSearchFailed,
+          ...(toolSearchError ? { toolSearchError } : {}),
+          error: final.error,
         },
       });
       return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
@@ -1001,8 +1073,8 @@ export function proxyRoutes(ctx: Ctx) {
         memoryRound: true,
       });
     }
-
-    const finalBody = await readUpstreamBody(finalRes);
+    const finalRes = final.res;
+    const finalBody = { text: final.text, json: final.json };
     const latencyMs = Date.now() - started;
     await recordTraceSafe(ctx.sql, {
       id: traceId,
@@ -1027,6 +1099,8 @@ export function proxyRoutes(ctx: Ctx) {
         firstUpstreamStatus: firstRes.status,
         contextInjectedCount: contextInjected.length,
         toolSearchTimedOut,
+        toolSearchFailed,
+        ...(toolSearchError ? { toolSearchError } : {}),
       },
     });
 

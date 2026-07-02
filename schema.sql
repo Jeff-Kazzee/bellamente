@@ -134,3 +134,18 @@ CREATE INDEX IF NOT EXISTS idx_recall_trace_kind_created
 -- full-text leg for hybrid search; 'simple' = language-neutral (multilingual default)
 CREATE INDEX IF NOT EXISTS idx_chunk_content
   ON chunk USING gin (to_tsvector('simple', content));
+
+-- Hot-filter indexes (also shipped to existing installs as migration 001 — keep both in sync; see
+-- src/migrations.ts rules).
+CREATE INDEX IF NOT EXISTS idx_memory_entry_latest
+  ON memory_entry (org_id, is_latest, is_forgotten, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entry_space ON memory_entry (space_id);
+CREATE INDEX IF NOT EXISTS idx_memory_entry_root ON memory_entry (root_memory_id);
+CREATE INDEX IF NOT EXISTS idx_document_org ON document (org_id);
+CREATE INDEX IF NOT EXISTS idx_document_container_tags ON document USING gin (container_tags);
+CREATE INDEX IF NOT EXISTS idx_memory_document_source_document
+  ON memory_document_source (document_id);
+-- exact-dup write check: md5 keeps the key under the btree row-size cap for 10k-char memories
+CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
+  ON memory_entry (org_id, space_id, md5(memory))
+  WHERE is_latest = true AND is_forgotten = false;

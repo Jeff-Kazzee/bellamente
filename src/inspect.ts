@@ -40,11 +40,12 @@ const TRACE_TEXT_LIMIT = (() => {
   return Math.min(Math.max(Math.round(raw), 80), 5000);
 })();
 
-const TRACE_RETENTION = (() => {
+// Read per-call (not frozen at import) so tests and live processes can tune retention.
+function traceRetention(): number {
   const raw = Number(process.env.EUNOIA_TRACE_RETENTION ?? 1000);
   if (!Number.isFinite(raw)) return 1000;
   return Math.min(Math.max(Math.round(raw), 0), 100000);
-})();
+}
 
 function parseLimit(value: string | null | undefined): number {
   const n = Number(value ?? 50);
@@ -105,14 +106,21 @@ export function traceItemsFromSearchResults(results: any[]): TraceItem[] {
 }
 
 async function pruneTraceLog(sql: DB): Promise<void> {
-  if (TRACE_RETENTION <= 0) return;
+  const retention = traceRetention();
+  if (retention <= 0) return;
   await sql`
     DELETE FROM recall_trace
     WHERE org_id = ${ORG_ID}
       AND id NOT IN (
-        SELECT id FROM recall_trace WHERE org_id = ${ORG_ID} ORDER BY created_at DESC LIMIT ${TRACE_RETENTION}
+        SELECT id FROM recall_trace WHERE org_id = ${ORG_ID} ORDER BY created_at DESC LIMIT ${retention}
       )`;
 }
+
+// Pruning ran a full-table ORDER BY on EVERY trace write (review flag). Batch it: every PRUNE_EVERY
+// writes per DB handle, so the table is bounded by retention + PRUNE_EVERY - 1 rows in the worst
+// case. WeakMap keyed on the DB handle keeps test databases isolated from each other.
+const PRUNE_EVERY = 25;
+const writesSincePrune = new WeakMap<DB, number>();
 
 export async function recordTrace(sql: DB, input: TraceInput): Promise<string> {
   const id = input.id ?? newId();
@@ -127,10 +135,16 @@ export async function recordTrace(sql: DB, input: TraceInput): Promise<string> {
        ${input.injectedCount ?? input.injected?.length ?? 0}, ${Math.max(0, Math.round(input.latencyMs ?? 0))},
        ${sql.json(input.retrieved ?? [])}, ${sql.json(input.injected ?? [])},
        ${sql.json(input.request ?? {})}, ${sql.json(input.metadata ?? {})})`;
-  try {
-    await pruneTraceLog(sql);
-  } catch (e) {
-    console.warn("[inspect] failed to prune trace log:", e instanceof Error ? e.message : String(e));
+  const writes = (writesSincePrune.get(sql) ?? 0) + 1;
+  if (writes >= PRUNE_EVERY) {
+    writesSincePrune.set(sql, 0);
+    try {
+      await pruneTraceLog(sql);
+    } catch (e) {
+      console.warn("[inspect] failed to prune trace log:", e instanceof Error ? e.message : String(e));
+    }
+  } else {
+    writesSincePrune.set(sql, writes);
   }
   return id;
 }

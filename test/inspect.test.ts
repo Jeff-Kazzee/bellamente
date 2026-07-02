@@ -5,7 +5,7 @@ import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
 import { searchRoutes } from "../src/search";
-import { inspectRoutes } from "../src/inspect";
+import { inspectRoutes, recordTrace } from "../src/inspect";
 import { proxyRoutes } from "../src/proxy";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
@@ -557,29 +557,41 @@ test("proxy passthrough forwards existing tool results without reinjecting", asy
   }
 }, TEST_TIMEOUT_MS);
 
-test("proxy records a tool_error trace when local memory search fails", async () => {
+test("proxy degrades to empty memory results when local memory search fails", async () => {
   const upstreamCalls: any[] = [];
   const fetcher: typeof fetch = async (_input, init) => {
-    upstreamCalls.push(JSON.parse(String(init?.body ?? "{}")));
-    return new Response(
-      JSON.stringify({
-        id: "chatcmpl-tool-error",
-        choices: [
-          {
-            message: {
-              role: "assistant",
-              content: null,
-              tool_calls: [
-                {
-                  id: "call_memory_error",
-                  type: "function",
-                  function: { name: "searchMemory", arguments: JSON.stringify({ queries: ["which theme"] }) },
-                },
-              ],
+    const requestBody = JSON.parse(String(init?.body ?? "{}"));
+    upstreamCalls.push(requestBody);
+    if (upstreamCalls.length === 1) {
+      return new Response(
+        JSON.stringify({
+          id: "chatcmpl-tool-error",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call_memory_error",
+                    type: "function",
+                    function: { name: "searchMemory", arguments: JSON.stringify({ queries: ["which theme"] }) },
+                  },
+                ],
+              },
             },
-          },
-        ],
-      }),
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    // Second round: the model must receive an explicit "memory unavailable" tool result, not a dead turn.
+    const toolMessage = requestBody.messages.find((m: any) => m.role === "tool");
+    expect(toolMessage).toMatchObject({ tool_call_id: "call_memory_error" });
+    const payload = JSON.parse(toolMessage.content);
+    expect(payload).toMatchObject({ type: "eunoia_memory_results", error: "memory_search_unavailable", results: [] });
+    return new Response(
+      JSON.stringify({ id: "chatcmpl-degraded", choices: [{ message: { role: "assistant", content: "Answer without memory." } }] }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   };
@@ -604,21 +616,126 @@ test("proxy records a tool_error trace when local memory search fails", async ()
       body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Help me choose a theme" }] }),
     });
 
-    expect(res.status).toBe(500);
-    expect(upstreamCalls).toHaveLength(1);
+    // A recall failure no longer discards the model's successful tool-call turn: the proxy continues
+    // with empty results (same as the timeout path) and the user still gets an answer.
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toHaveLength(2);
     expect(res.headers.get("x-eunoia-context-modified")).toBe("true");
     expect(res.headers.get("x-eunoia-memory-round")).toBe("true");
     const body = await res.json();
-    expect(body.error).toBe("Memory tool search failed");
+    expect(body.choices[0].message.content).toBe("Answer without memory.");
 
     const traceId = res.headers.get("x-eunoia-trace-id");
-    expect(body.traceId).toBe(traceId);
     const inspect = await app.request(`/inspect/${traceId}`);
     const { trace } = await inspect.json();
-    expect(trace).toMatchObject({ kind: "proxy", status: "tool_error", resultCount: 0, injectedCount: 0 });
+    expect(trace).toMatchObject({ kind: "proxy", status: "answered", resultCount: 0, injectedCount: 0 });
     expect(trace.queries).toEqual(["which theme"]);
-    expect(trace.metadata).toMatchObject({ memoryRound: true, toolCallCount: 1, completedToolMessageCount: 0, error: "embedding unavailable" });
+    expect(trace.metadata).toMatchObject({
+      memoryRound: true,
+      toolCallCount: 1,
+      toolSearchFailed: true,
+      toolSearchError: "embedding unavailable",
+      toolSearchTimedOut: false,
+    });
   } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("trace pruning is batched (every 25 writes) and bounds the table to the retention", async () => {
+  process.env.EUNOIA_TRACE_RETENTION = "5";
+  const ctx = await makeCtx();
+  try {
+    const count = async () =>
+      Number((await ctx.sql`SELECT count(*)::int AS n FROM recall_trace`)[0]!.n);
+    for (let i = 0; i < 24; i++) await recordTrace(ctx.sql, { kind: "search", query: `q${i}` });
+    expect(await count()).toBe(24); // no prune yet — pruning no longer runs on every write
+    await recordTrace(ctx.sql, { kind: "search", query: "q24" }); // 25th write triggers the prune
+    expect(await count()).toBe(5); // ...and bounds the table to the retention
+  } finally {
+    delete process.env.EUNOIA_TRACE_RETENTION;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("proxy aborts a hung upstream after EUNOIA_UPSTREAM_TIMEOUT_MS", async () => {
+  process.env.EUNOIA_UPSTREAM_TIMEOUT_MS = "50";
+  const fetcher: typeof fetch = (_input, init) =>
+    new Promise((_, reject) => {
+      // Simulate a hung upstream that only ends when the caller aborts.
+      (init?.signal as AbortSignal | undefined)?.addEventListener("abort", () =>
+        reject((init!.signal as AbortSignal).reason ?? new Error("aborted")),
+      );
+    });
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toBe("Upstream request failed");
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
+    expect(String(trace.metadata.error)).toContain("timed out after 50ms");
+  } finally {
+    delete process.env.EUNOIA_UPSTREAM_TIMEOUT_MS;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("proxy errors a stalled stream after EUNOIA_STREAM_IDLE_TIMEOUT_MS", async () => {
+  process.env.EUNOIA_STREAM_IDLE_TIMEOUT_MS = "50";
+  const fetcher: typeof fetch = async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n'));
+          // ...then go silent forever: never enqueue again, never close.
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+
+  const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
+  try {
+    const app = new Hono();
+    app.route("/v1", proxyRoutes(ctx as any));
+    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", stream: true, messages: [{ role: "user", content: "Hello" }] }),
+    });
+
+    expect(res.status).toBe(200); // headers arrived before the stall
+    let streamFailed = false;
+    try {
+      await res.text();
+    } catch {
+      streamFailed = true;
+    }
+    expect(streamFailed).toBe(true);
+
+    const traceId = res.headers.get("x-eunoia-trace-id");
+    const inspect = await app.request(`/inspect/${traceId}`);
+    const { trace } = await inspect.json();
+    expect(trace).toMatchObject({ kind: "proxy", status: "stream_error" });
+    expect(String(trace.metadata.error)).toContain("stalled");
+  } finally {
+    delete process.env.EUNOIA_STREAM_IDLE_TIMEOUT_MS;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);

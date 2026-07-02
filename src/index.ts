@@ -2,7 +2,8 @@
 import { Hono } from "hono";
 import { makeDb, type DB } from "./db";
 import { makeEmbed, prewarmEmbed, type Embed } from "./embed";
-import { memoriesRoutes } from "./memories";
+import { memoriesRoutes, sweepExpiredMemories } from "./memories";
+import { documentsRoutes } from "./documents";
 import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
@@ -14,6 +15,10 @@ import { timingSafeEqual } from "node:crypto";
 const API_KEY = process.env.EUNOIA_API_KEY;
 const EXPECTED_AUTH = API_KEY ? "Bearer " + API_KEY : null;
 const PORT = Number(process.env.PORT ?? 8080);
+// Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
+// conversation text — Bun's default 0.0.0.0 would expose it to the whole LAN behind only the bearer key.
+// Opt into wider exposure explicitly with EUNOIA_HOST=0.0.0.0 (or a specific interface).
+const HOST = process.env.EUNOIA_HOST?.trim() || "127.0.0.1";
 
 // Constant-time bearer comparison (avoids leaking the key via response-timing on byte-by-byte compare).
 function authOk(header: string): boolean {
@@ -59,6 +64,7 @@ export function buildApp(ctx: { sql: DB; embed: Embed }) {
   });
 
   app.route("/memories", memoriesRoutes(ctx));
+  app.route("/documents", documentsRoutes(ctx)); // ingestion: the populate path for document/hybrid search
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
   app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
@@ -74,8 +80,22 @@ async function main() {
   const embed = makeEmbed();
   await prewarmEmbed(embed);
   const app = buildApp({ sql, embed });
-  console.log("eunoia listening on :" + PORT);
+  startForgetSweep(sql);
+  console.log(`eunoia listening on ${HOST}:${PORT}`);
   return { app, port: PORT };
+}
+
+// forget_after expiry sweep (Spec 00 boot step 5): once at boot, then on an interval. Lives in main()
+// so tests importing buildApp never start a timer. EUNOIA_FORGET_SWEEP_INTERVAL_MS=0 disables.
+function startForgetSweep(sql: DB) {
+  const raw = Number(process.env.EUNOIA_FORGET_SWEEP_INTERVAL_MS ?? 3_600_000);
+  const intervalMs = Number.isFinite(raw) ? Math.round(raw) : 3_600_000;
+  const sweep = () =>
+    sweepExpiredMemories(sql).catch((e) =>
+      console.warn("[memories] forget_after sweep failed:", e instanceof Error ? e.message : String(e)),
+    );
+  void sweep();
+  if (intervalMs > 0) setInterval(sweep, Math.max(intervalMs, 60_000));
 }
 
 // Boot only when this is the server entry: `bun run` (import.meta.main) OR the compiled standalone binary
@@ -83,12 +103,13 @@ async function main() {
 // (e.g. tests exercising buildApp), neither holds, so main() — which opens the DB and prewarms the embedder —
 // does not run.
 const isStandalone = import.meta.url.includes("$bunfs") || /%7ebun|~bun/i.test(import.meta.url);
-let served: { port: number; fetch: (req: Request, ...rest: any[]) => Response | Promise<Response> } = {
+let served: { port: number; hostname: string; fetch: (req: Request, ...rest: any[]) => Response | Promise<Response> } = {
   port: PORT,
+  hostname: HOST,
   fetch: () => new Response("eunoia: not booted", { status: 503 }),
 };
 if (import.meta.main || isStandalone) {
   const { app, port } = await main();
-  served = { port, fetch: app.fetch };
+  served = { port, hostname: HOST, fetch: app.fetch };
 }
 export default served;

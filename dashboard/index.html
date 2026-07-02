@@ -188,6 +188,20 @@
   .mem .mtop .when{margin-left:auto;color:var(--faint);font-size:12px;font-family:var(--mono)}
   .mem .mtext{color:var(--text);font-size:14px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
   .mem .mtext.clip{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .btn.sm{padding:5px 10px;font-size:12px;border-radius:6px}
+  .mactions{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+  .mactions .btn.danger:hover{border-color:rgba(236,136,115,.5);color:#f0a595}
+  .medit{margin-top:9px}
+  .medit textarea{font-size:14px;line-height:1.55;resize:vertical;min-height:84px}
+  .medit .erow{display:flex;align-items:center;gap:9px;margin-top:8px}
+  .mhistory{margin-top:8px}
+
+  /* transient status toast */
+  .toast{position:fixed;right:22px;bottom:22px;padding:11px 16px;border-radius:var(--r-sm);background:var(--panel2);
+    border:1px solid var(--border);color:var(--text);font-size:13px;box-shadow:var(--shadow);z-index:50;
+    opacity:0;transform:translateY(6px);transition:opacity .18s,transform .18s;pointer-events:none;max-width:360px}
+  .toast.show{opacity:1;transform:none}
+  .toast.err{border-color:rgba(236,136,115,.4);color:#f0a595}
 
   /* connect gate */
   .gate{min-height:78vh;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -261,8 +275,19 @@
   async function api(path, opts={}) {
     const r = await fetch(base + path, { ...opts, headers: { "authorization": "Bearer " + apiKey, ...(opts.body ? {"content-type":"application/json"} : {}), ...(opts.headers||{}) } });
     if (r.status === 401) { const e = new Error("Unauthorized"); e.code = 401; throw e; }
-    if (!r.ok) { let m = "HTTP " + r.status; try { m = (await r.json()).error || m; } catch {} const e = new Error(m); e.code = r.status; throw e; }
+    if (!r.ok) { let m = "HTTP " + r.status, body = null; try { body = await r.json(); m = body.error || m; } catch {} const e = new Error(m); e.code = r.status; e.body = body; throw e; }
     return r.json();
+  }
+
+  // ---- transient status feedback (bottom-right toast) ----
+  let toastTimer = null;
+  function flash(msg, isErr){
+    let t = $("#toast");
+    if(!t){ t = el("div", { id:"toast", class:"toast" }); document.body.append(t); }
+    t.textContent = msg;
+    t.className = "toast show" + (isErr ? " err" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
   }
 
   // ---- helpers ----
@@ -352,7 +377,7 @@
           <div class="qbox"><div class="k">Query</div><div class="qt">${esc(t.query || (t.queries||[]).join("  •  ") || "—")}</div></div>
           ${proxyNote}
         </div>
-        <div class="sec"><div class="hd"><h3>Retrieved</h3><span class="n">${retrieved.length} item${retrieved.length===1?"":"s"}, ranked by similarity</span></div>
+        <div class="sec"><div class="hd"><h3>Retrieved</h3><span class="n">${retrieved.length} item${retrieved.length===1?"":"s"}, ranked by relevance</span></div>
           ${retrieved.length ? retrieved.map(retrievedItem).join("") : `<div class="empty">Nothing retrieved for this query.</div>`}</div>
         ${injected.length ? `<div class="sec"><div class="hd"><h3>Injected</h3><span class="n">fed into context</span></div>${injected.map(retrievedItem).join("")}</div>` : ""}
         <details class="raw"><summary>Raw trace record (exactly what Eunoia stored)</summary><pre>${esc(JSON.stringify(t,null,2))}</pre></details>`;
@@ -407,19 +432,142 @@
   }
 
   // Memory browser
+  // versionItem renders one entry of a version chain (GET /memories/:id -> camelCase normalizeMemory shape —
+  // distinct from the list endpoint's snake_case rows, so don't cross the field names between the two).
+  function versionItem(v){
+    const meta = [
+      `<span class="tag">v${v.version}</span>`,
+      v.isLatest ? `<span class="badge b-ok">latest</span>` : "",
+      v.isForgotten ? `<span class="badge b-timeout">forgotten</span>` : "",
+    ].filter(Boolean).join("");
+    return `<div class="item">
+      <div class="ihead"><span class="meta">${meta}</span><span class="faint mono" style="margin-left:auto;font-size:12px" title="${esc(fmtTime(v.createdAt))}">${esc(fmtTime(v.createdAt))}</span></div>
+      <div class="content">${esc(v.memory)}</div>
+      ${v.forgetReason ? `<div class="sub"><span class="tag">reason: ${esc(v.forgetReason)}</span></div>` : ""}
+    </div>`;
+  }
+
   async function renderMemory(){
     setActive("memory"); loading();
     await guard(async () => {
       const { memories } = await api("/memories?limit=100");
       const head = `<div class="pagehead"><div><h1>Memory browser</h1><div class="sub">The latest memories Eunoia holds — the store your agent recalls from.</div></div><div class="tools"><button class="btn" data-refresh><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-.5 3" stroke-linecap="round"/><path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button></div></div>`;
       if(!memories.length){ view.innerHTML=head+`<div class="empty"><b>No memories stored</b>Write some via POST /memories, then they'll appear here.</div>`; const r=view.querySelector("[data-refresh]"); if(r)r.onclick=renderMemory; return; }
-      const items = memories.map((m,i)=>{ const cid="m"+i; const long=(m.memory||"").length>200; return `<div class="card mem fade">
+      const items = memories.map((m,i)=>{ const cid="m"+i; const long=(m.memory||"").length>200; return `<div class="card mem fade" data-mid="${esc(m.id)}">
         <div class="mtop">${m.is_static?`<span class="badge b-both">static</span>`:`<span class="badge b-mem">dynamic</span>`}<span class="tag">v${m.version}</span><span class="tag">${esc(String(m.id).slice(0,10))}</span>${m.forget_after?`<span class="badge b-timeout">expires in ${esc(timeUntil(m.forget_after))}</span>`:""}<span class="when" title="${esc(fmtTime(m.created_at))}">${timeAgo(m.created_at)}</span></div>
-        <div class="mtext ${long?"clip":""}" id="${cid}">${esc(m.memory)}</div>${long?`<button class="more" data-expand="${cid}">Show more</button>`:""}</div>`; }).join("");
+        <div class="mtext ${long?"clip":""}" id="${cid}">${esc(m.memory)}</div>${long?`<button class="more" data-expand="${cid}">Show more</button>`:""}
+        <div class="mactions">
+          <button class="btn sm" data-act="edit">Edit</button>
+          <button class="btn sm" data-act="history">View history</button>
+          <button class="btn sm" data-act="forget">Forget</button>
+          <button class="btn sm danger" data-act="delete">Delete</button>
+        </div>
+        <div class="mhistory" hidden></div>
+      </div>`; }).join("");
       view.innerHTML = head + items;
       const r=view.querySelector("[data-refresh]"); if(r)r.onclick=renderMemory;
       view.querySelectorAll("[data-expand]").forEach(a=>a.onclick=()=>{ const c=view.querySelector("#"+a.dataset.expand); c.classList.toggle("clip"); a.textContent=c.classList.contains("clip")?"Show more":"Show less"; });
+      wireMemoryActions();
     });
+  }
+
+  function wireMemoryActions(){
+    view.querySelectorAll(".mem[data-mid]").forEach(card => {
+      const id = card.dataset.mid;
+      const editBtn = card.querySelector('[data-act="edit"]');
+      const histBtn = card.querySelector('[data-act="history"]');
+      const forgetBtn = card.querySelector('[data-act="forget"]');
+      const delBtn = card.querySelector('[data-act="delete"]');
+      if(editBtn) editBtn.onclick = () => startEdit(card, id);
+      if(histBtn) histBtn.onclick = () => toggleHistory(card, id);
+      if(forgetBtn) forgetBtn.onclick = () => doForget(id);
+      if(delBtn) delBtn.onclick = () => doDelete(id);
+    });
+  }
+
+  // Inline edit: swap the memory text for a textarea + Save/Cancel, PATCH {content} on save.
+  // A content edit always creates a NEW version server-side (the version chain is never overwritten).
+  function startEdit(card, id){
+    if(card.querySelector(".medit")) return; // already editing
+    const textEl = card.querySelector(".mtext");
+    const moreBtn = card.querySelector("[data-expand]");
+    if(!textEl) return;
+    const original = textEl.textContent;
+    textEl.hidden = true; if(moreBtn) moreBtn.hidden = true;
+    const wrap = el("div", { class:"medit" }, []);
+    wrap.innerHTML = `<textarea rows="4">${esc(original)}</textarea>
+      <div class="erow">
+        <button class="btn primary sm" data-save>Save</button>
+        <button class="btn sm" data-cancel>Cancel</button>
+        <span class="faint" id="eerr" style="font-size:12px"></span>
+      </div>`;
+    textEl.insertAdjacentElement("afterend", wrap);
+    const ta = wrap.querySelector("textarea");
+    ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    const close = () => { wrap.remove(); textEl.hidden=false; if(moreBtn) moreBtn.hidden=false; };
+    wrap.querySelector("[data-cancel]").onclick = close;
+    ta.addEventListener("keydown", e => { if(e.key==="Escape") close(); });
+    wrap.querySelector("[data-save]").onclick = async () => {
+      const content = ta.value.trim();
+      const errEl = wrap.querySelector("#eerr");
+      if(!content){ ta.focus(); return; }
+      if(content === original){ close(); return; }
+      const saveBtn = wrap.querySelector("[data-save]"); saveBtn.disabled = true; errEl.textContent = "";
+      try {
+        await api("/memories/"+encodeURIComponent(id), { method:"PATCH", body: JSON.stringify({ content }) });
+        flash("Memory updated");
+        renderMemory();
+      } catch(e){
+        if(e.code===401){ apiKey=""; localStorage.removeItem(KEY_STORE); renderGate("Your API key was rejected. Re-enter it below."); return; }
+        if(e.code===409 && e.body && e.body.latestId){ errEl.textContent = "This isn't the latest version anymore — latest is " + String(e.body.latestId).slice(0,10) + ". Refresh and edit that one instead."; }
+        else { errEl.textContent = e.message; }
+        saveBtn.disabled = false;
+      }
+    };
+  }
+
+  // View history: GET /memories/:id -> the full version chain, rendered inline (toggled open/closed).
+  async function toggleHistory(card, id){
+    const panel = card.querySelector(".mhistory");
+    if(!panel) return;
+    if(!panel.hidden){ panel.hidden = true; return; }
+    panel.hidden = false;
+    panel.innerHTML = `<div class="skeleton" style="height:60px"></div>`;
+    try {
+      const { versions } = await api("/memories/"+encodeURIComponent(id));
+      panel.innerHTML = `<div class="sec"><div class="hd"><h3>Version history</h3><span class="n">${versions.length} version${versions.length===1?"":"s"}</span></div>${versions.map(versionItem).join("")}</div>`;
+    } catch(e){
+      if(e.code===401){ apiKey=""; localStorage.removeItem(KEY_STORE); renderGate("Your API key was rejected. Re-enter it below."); return; }
+      panel.innerHTML = `<div class="empty">Couldn't load history: ${esc(e.message)}</div>`;
+    }
+  }
+
+  // Forget: soft-forget the whole version chain (reversible). Forgotten memories drop out of the list.
+  async function doForget(id){
+    const reason = window.prompt("Optional reason for forgetting this memory (leave blank for none):", "");
+    if(reason === null) return; // cancelled
+    try {
+      await api("/memories/"+encodeURIComponent(id)+"/forget", { method:"POST", body: JSON.stringify(reason ? { reason } : {}) });
+      flash("Memory forgotten");
+      renderMemory();
+    } catch(e){
+      if(e.code===401){ apiKey=""; localStorage.removeItem(KEY_STORE); renderGate("Your API key was rejected. Re-enter it below."); return; }
+      flash("Forget failed: " + e.message, true);
+    }
+  }
+
+  // Delete: HARD delete of the whole version chain — the only physical-removal path. Confirm first.
+  async function doDelete(id){
+    const ok = window.confirm("Permanently delete this memory and its entire version history? This cannot be undone.");
+    if(!ok) return;
+    try {
+      await api("/memories/"+encodeURIComponent(id), { method:"DELETE" });
+      flash("Memory deleted");
+      renderMemory();
+    } catch(e){
+      if(e.code===401){ apiKey=""; localStorage.removeItem(KEY_STORE); renderGate("Your API key was rejected. Re-enter it below."); return; }
+      flash("Delete failed: " + e.message, true);
+    }
   }
 
   // ---- connect gate ----
