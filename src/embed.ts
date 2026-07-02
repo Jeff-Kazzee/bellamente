@@ -13,6 +13,7 @@ import {
   type Embed,
   type TaskType,
 } from "./embed-common";
+import { brandEnv } from "./env";
 
 export { EMBED_DIM, isValidVector, embedModelName } from "./embed-common";
 export type { Embed, TaskType } from "./embed-common";
@@ -36,7 +37,7 @@ async function embedOpenAI(values: string[], taskType: TaskType): Promise<number
 type WorkerOut = { id: number; ok: true; vectors: number[][] } | { id: number; ok: false; error: string };
 
 type Pending = { resolve: (v: number[][]) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
-const EMBED_TIMEOUT_MS = Number(process.env.EUNOIA_EMBED_TIMEOUT_MS ?? 120_000);
+const EMBED_TIMEOUT_MS = Number(brandEnv("EMBED_TIMEOUT_MS") ?? 120_000);
 
 function makeLocalWorkerEmbed(): Embed {
   let worker: Worker | null = null;
@@ -112,7 +113,8 @@ function makeStaticEmbed(): Embed {
 
 export async function prewarmEmbed(embed: Embed): Promise<void> {
   if (PROVIDER === "openai") return;
-  if (process.env.EUNOIA_SKIP_EMBEDDING_PREWARM === "1" || process.env.EUNOIA_SKIP_EMBEDDING_PREWARM === "true") {
+  const skip = brandEnv("SKIP_EMBEDDING_PREWARM");
+  if (skip === "1" || skip === "true") {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }

@@ -6,6 +6,7 @@ import type { Embed } from "./embed";
 import { searchMemories, Q, type MemoryResult } from "./search";
 import { formatProfile, profileContextBlock, loadProfile } from "./profile";
 import { DEFAULT_CONTAINER_TAG, newId } from "./util";
+import { brandEnv } from "./env";
 import { recordTraceSafe, traceItemsFromSearchResults, traceTextItem } from "./inspect";
 
 type FetchLike = typeof fetch;
@@ -260,7 +261,7 @@ function isLoopbackUpstream(url: URL): boolean {
 }
 
 function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
-  const base = ctx.upstreamBaseUrl || process.env.EUNOIA_UPSTREAM_BASE_URL || "http://127.0.0.1:11434/v1";
+  const base = ctx.upstreamBaseUrl || brandEnv("UPSTREAM_BASE_URL") || "http://127.0.0.1:11434/v1";
   let parsed: URL;
   try {
     parsed = new URL(chatCompletionsUrl(base));
@@ -270,8 +271,8 @@ function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
   const url = parsed.toString();
 
   const explicitAuth = c.req.header("x-eunoia-upstream-authorization");
-  const apiKey = c.req.header("x-eunoia-upstream-api-key") || ctx.upstreamApiKey || process.env.EUNOIA_UPSTREAM_API_KEY || "";
-  const allowNoAuth = ctx.allowUnauthenticatedUpstream || process.env.EUNOIA_UPSTREAM_ALLOW_NO_AUTH === "1" || isLoopbackUpstream(parsed);
+  const apiKey = c.req.header("x-eunoia-upstream-api-key") || ctx.upstreamApiKey || brandEnv("UPSTREAM_API_KEY") || "";
+  const allowNoAuth = ctx.allowUnauthenticatedUpstream || brandEnv("UPSTREAM_ALLOW_NO_AUTH") === "1" || isLoopbackUpstream(parsed);
   if (!explicitAuth && !apiKey && !allowNoAuth) {
     return {
       ok: false,
@@ -296,10 +297,10 @@ const clampMs = (raw: unknown, fallback: number): number => {
   return Math.min(Math.max(Math.round(n), 1), 600_000);
 };
 export function upstreamTimeoutMs(): number {
-  return clampMs(process.env.EUNOIA_UPSTREAM_TIMEOUT_MS, 120_000);
+  return clampMs(brandEnv("UPSTREAM_TIMEOUT_MS"), 120_000);
 }
 export function streamIdleTimeoutMs(): number {
-  return clampMs(process.env.EUNOIA_STREAM_IDLE_TIMEOUT_MS, 120_000);
+  return clampMs(brandEnv("STREAM_IDLE_TIMEOUT_MS"), 120_000);
 }
 
 // One deadline covers connect + headers + (for buffered exchanges) the full body read: fetch's abort
@@ -309,7 +310,7 @@ type Deadline = { signal: AbortSignal; clear: () => void };
 function upstreamDeadline(ms: number): Deadline {
   const controller = new AbortController();
   const timer = setTimeout(
-    () => controller.abort(new Error(`upstream timed out after ${ms}ms (EUNOIA_UPSTREAM_TIMEOUT_MS)`)),
+    () => controller.abort(new Error(`upstream timed out after ${ms}ms (BELLA_UPSTREAM_TIMEOUT_MS)`)),
     ms,
   );
   return { signal: controller.signal, clear: () => clearTimeout(timer) };
@@ -510,7 +511,7 @@ function proxyStreamResponse(
           read,
           new Promise<never>((_, reject) => {
             idleTimer = setTimeout(
-              () => reject(new Error(`upstream stream stalled: no data for ${idleMs}ms (EUNOIA_STREAM_IDLE_TIMEOUT_MS)`)),
+              () => reject(new Error(`upstream stream stalled: no data for ${idleMs}ms (BELLA_STREAM_IDLE_TIMEOUT_MS)`)),
               idleMs,
             );
           }),
@@ -698,7 +699,7 @@ export function proxyRoutes(ctx: Ctx) {
       }),
     ];
 
-    if (c.req.header("x-eunoia-proxy-mode") === "inject-only" || process.env.EUNOIA_PROXY_INJECT_ONLY === "1") {
+    if (c.req.header("x-eunoia-proxy-mode") === "inject-only" || brandEnv("PROXY_INJECT_ONLY") === "1") {
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
         id: traceId,

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { statSync, renameSync, rmSync } from "node:fs";
 import { EMBED_DIM, EMBED_DIM_EXPLICIT, LOCAL_MODEL, LOCAL_DTYPE, ONNX_FILE, onnxRelPath, profile, formatForTask, truncatePayload, mrl, type TaskType } from "./embed-common";
+import { brandEnv } from "./env";
 import wasmFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm" with { type: "file" };
 import glueFile from "../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs" with { type: "file" };
 
@@ -18,14 +19,14 @@ if (!MODEL_RE.test(LOCAL_MODEL)) {
   throw new Error(`invalid LOCAL_EMBED_MODEL '${LOCAL_MODEL}' (expected '<org>/<name>')`);
 }
 
-const MODEL_DOWNLOAD_TIMEOUT_MS = Number(process.env.EUNOIA_MODEL_DOWNLOAD_TIMEOUT_MS ?? 300_000);
+const MODEL_DOWNLOAD_TIMEOUT_MS = Number(brandEnv("MODEL_DOWNLOAD_TIMEOUT_MS") ?? 300_000);
 
 let sessionP: Promise<ort.InferenceSession> | null = null;
 let tokP: Promise<any> | null = null;
 
 async function modelDir(): Promise<string> {
   const { modelsDir } = await import("./paths");
-  return process.env.EUNOIA_MODEL_DIR ?? modelsDir();
+  return brandEnv("MODEL_DIR") ?? modelsDir();
 }
 
 /** Ensure the .onnx weights exist in the cache; download from HF on first run if missing.

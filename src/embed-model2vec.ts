@@ -7,6 +7,7 @@
 import { join } from "node:path";
 import { statSync, renameSync, rmSync } from "node:fs";
 import { EMBED_DIM, LOCAL_MODEL, formatForTask, truncatePayload, type TaskType } from "./embed-common";
+import { brandEnv } from "./env";
 
 // Interpolated into a filesystem path AND a URL — reject anything but "<org>/<name>". [\w.-]+ would match a
 // pure-dot segment (".."/"."), so explicitly reject those to prevent escaping the model cache dir.
@@ -14,12 +15,12 @@ const MODEL_RE = /^[\w.-]+\/[\w.-]+$/;
 if (!MODEL_RE.test(LOCAL_MODEL) || LOCAL_MODEL.split("/").some((p) => p === "." || p === "..")) {
   throw new Error(`invalid LOCAL_EMBED_MODEL '${LOCAL_MODEL}' (expected '<org>/<name>')`);
 }
-const DL_TIMEOUT_MS = Number(process.env.EUNOIA_MODEL_DOWNLOAD_TIMEOUT_MS ?? 300_000);
+const DL_TIMEOUT_MS = Number(brandEnv("MODEL_DOWNLOAD_TIMEOUT_MS") ?? 300_000);
 const MAX_TOKENS = 512;
 
 async function modelDir(): Promise<string> {
   const { modelsDir } = await import("./paths");
-  return process.env.EUNOIA_MODEL_DIR ?? modelsDir();
+  return brandEnv("MODEL_DIR") ?? modelsDir();
 }
 
 /** Download a single model file from HF to the cache (atomic temp+rename; reused across boots via size>0). */

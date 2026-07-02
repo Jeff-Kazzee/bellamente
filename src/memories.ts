@@ -18,6 +18,7 @@ import { type Embed, isValidVector, embedModelName } from "./embed";
 import { PROVIDER, profile } from "./embed-common";
 import { estimateTokens, EMBED_TOKEN_BUDGET } from "./chunk";
 import { newId, toVector, ORG_ID, DEFAULT_CONTAINER_TAG } from "./util";
+import { brandEnv } from "./env";
 
 type Ctx = { sql: DB; embed: Embed };
 
@@ -25,11 +26,11 @@ const ID_RE = /^[0-9A-Za-z]{22}$/;
 
 // Near-duplicate floor for supersede-on-write. Engine-aware: transformer embeddings (e5/bge; OpenAI is
 // on the same scale) put paraphrases ~0.95+; static Model2Vec vectors are weaker separators, so require
-// near-identity (0.98) there rather than risk superseding unrelated facts. EUNOIA_SUPERSEDE_THRESHOLD
+// near-identity (0.98) there rather than risk superseding unrelated facts. BELLA_SUPERSEDE_THRESHOLD
 // overrides; read per-call so tests/live processes can tune without a restart.
 const DEFAULT_SUPERSEDE_THRESHOLD = PROVIDER === "openai" || profile.engine === "wasm" ? 0.95 : 0.98;
 export function supersedeThreshold(): number {
-  const raw = Number(process.env.EUNOIA_SUPERSEDE_THRESHOLD);
+  const raw = Number(brandEnv("SUPERSEDE_THRESHOLD"));
   if (Number.isFinite(raw) && raw > 0 && raw <= 1) return raw;
   return DEFAULT_SUPERSEDE_THRESHOLD;
 }

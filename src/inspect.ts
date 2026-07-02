@@ -2,6 +2,7 @@
 import { Hono } from "hono";
 import type { DB } from "./db";
 import { newId, ORG_ID } from "./util";
+import { brandEnv } from "./env";
 
 type Ctx = { sql: DB };
 
@@ -35,14 +36,14 @@ export type TraceInput = {
 };
 
 const TRACE_TEXT_LIMIT = (() => {
-  const raw = Number(process.env.EUNOIA_TRACE_TEXT_LIMIT ?? 1200);
+  const raw = Number(brandEnv("TRACE_TEXT_LIMIT") ?? 1200);
   if (!Number.isFinite(raw) || raw <= 0) return 1200;
   return Math.min(Math.max(Math.round(raw), 80), 5000);
 })();
 
 // Read per-call (not frozen at import) so tests and live processes can tune retention.
 function traceRetention(): number {
-  const raw = Number(process.env.EUNOIA_TRACE_RETENTION ?? 1000);
+  const raw = Number(brandEnv("TRACE_RETENTION") ?? 1000);
   if (!Number.isFinite(raw)) return 1000;
   return Math.min(Math.max(Math.round(raw), 0), 100000);
 }

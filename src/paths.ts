@@ -7,22 +7,25 @@
 //   cache (models/libs) : Win %LOCALAPPDATA%\Eunoia\Cache | macOS ~/Library/Caches/Eunoia             | Linux $XDG_CACHE_HOME/eunoia (~/.cache)
 //   logs                : Win %LOCALAPPDATA%\Eunoia\Log   | macOS ~/Library/Logs/Eunoia               | Linux $XDG_STATE_HOME/eunoia (~/.local/state)
 //
-// USER OVERRIDES (env vars, easiest first):
-//   EUNOIA_HOME       - put EVERYTHING under one folder (single-folder / portable install)
-//   EUNOIA_DATA_DIR   - relocate just the data (memories/DB)
-//   EUNOIA_CACHE_DIR  - relocate just the cache (model weights / extracted libs) e.g. to a big drive
-//   EUNOIA_LOG_DIR    - relocate just the logs
-//   EUNOIA_MODEL_DIR  - (used by embed.ts) point the model cache anywhere directly
-//   DATABASE_URL      - use an external Postgres instead of the embedded DB (dev / advanced)
+// USER OVERRIDES (env vars, easiest first; BELLA_* documented, EUNOIA_* honored as legacy alias):
+//   BELLA_HOME       - put EVERYTHING under one folder (single-folder / portable install)
+//   BELLA_DATA_DIR   - relocate just the data (memories/DB)
+//   BELLA_CACHE_DIR  - relocate just the cache (model weights / extracted libs) e.g. to a big drive
+//   BELLA_LOG_DIR    - relocate just the logs
+//   BELLA_MODEL_DIR  - (used by embed.ts) point the model cache anywhere directly
+//   DATABASE_URL     - use an external Postgres instead of the embedded DB (dev / advanced)
 import envPaths from "env-paths";
 import { mkdirSync, readdirSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { brandEnv } from "./env";
 
+// The on-disk app-dir name stays "Eunoia" — renaming it orphans existing users' memories.
+// Adoption logic is a future migration slice (docs/REBRAND-PLAN.md slice 3), not a rename.
 const P = envPaths("Eunoia", { suffix: "" });
-const HOME = process.env.EUNOIA_HOME;
-const dataBase = process.env.EUNOIA_DATA_DIR ?? HOME ?? P.data;
-const cacheBase = process.env.EUNOIA_CACHE_DIR ?? HOME ?? P.cache;
-const logBase = process.env.EUNOIA_LOG_DIR ?? (HOME ? join(HOME, "logs") : P.log);
+const HOME = brandEnv("HOME");
+const dataBase = brandEnv("DATA_DIR") ?? HOME ?? P.data;
+const cacheBase = brandEnv("CACHE_DIR") ?? HOME ?? P.cache;
+const logBase = brandEnv("LOG_DIR") ?? (HOME ? join(HOME, "logs") : P.log);
 
 const ensure = (p: string): string => {
   mkdirSync(p, { recursive: true });
@@ -72,8 +75,8 @@ export function dirSizeBytes(dir: string): number {
   return total;
 }
 
-/** Total bytes Eunoia is using on disk (data + cache; logs excluded — safely deletable + small).
- *  Dedupes overlapping roots so EUNOIA_HOME (data===cache===HOME) isn't double-counted. */
+/** Total bytes Bellamente is using on disk (data + cache; logs excluded — safely deletable + small).
+ *  Dedupes overlapping roots so BELLA_HOME (data===cache===HOME) isn't double-counted. */
 export const diskUsedBytes = (): number => {
   const roots = [...new Set([resolve(dataBase), resolve(cacheBase)])];
   // Drop any root nested inside another so a shared parent (e.g. EUNOIA_HOME) is measured once.
@@ -81,14 +84,14 @@ export const diskUsedBytes = (): number => {
   return top.reduce((sum, r) => sum + dirSizeBytes(r), 0);
 };
 
-/** Soft disk cap in MB (0 = unlimited). User sets EUNOIA_DISK_BUDGET_MB. A non-numeric value (e.g. "500MB")
+/** Soft disk cap in MB (0 = unlimited). User sets BELLA_DISK_BUDGET_MB. A non-numeric value (e.g. "500MB")
  *  coerces to 0 (unlimited) rather than NaN, which would silently disable the cap in the > 0 consumers. */
 export const diskBudgetMb = (): number => {
-  const n = Number(process.env.EUNOIA_DISK_BUDGET_MB ?? 0);
+  const n = Number(brandEnv("DISK_BUDGET_MB") ?? 0);
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
-/** Resolved storage locations, for `eunoia doctor` and diagnostics. */
+/** Resolved storage locations, for `bella doctor` and diagnostics. */
 export const storageDirs = () => ({
   data: dataBase,
   db: join(dataBase, "db"),
