@@ -29,11 +29,11 @@ recall traces, document ingestion, and profile-aware workflows.
   `DATABASE_URL` stays as an advanced override for external Postgres. Schema changes ship as
   append-only migrations applied at boot (schema_migrations), so upgrades never strand existing data.
 - M2 standalone binary: DONE (verified compiled binary on Windows + Linux; see docs/STATUS.md).
-- M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers, with upstream timeouts (EUNOIA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (EUNOIA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
+- M3 proxy upstream-forward + tool-call interception: WIRED for buffered `/v1/chat/completions`-compatible local servers, with upstream timeouts (BELLA_UPSTREAM_TIMEOUT_MS) and stream-stall detection (BELLA_STREAM_IDLE_TIMEOUT_MS). Recall failures degrade to a memory-less answer instead of failing the chat turn. `stream:true` requests forward upstream with trace headers/profile context; streamed memory-tool reinvocation and provider-specific shapes remain follow-ups.
 - Document ingestion: WIRED. POST /documents chunks + embeds markdown (structure-aware, token-budget
   guarded); chunks are searchable via /search searchMode documents|hybrid (vector + full-text, RRF-fused).
 - Inspect API: recall/search/proxy traces are durable and readable via `/inspect`; proxy `answered` traces show which memories fed the final model response.
-- Server binds 127.0.0.1 by default (EUNOIA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
+- Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
 
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
@@ -60,7 +60,7 @@ docs/            PRD + 11 subsystem specs
 
 ## Quick start (dev)
 ```
-cp .env.example .env          # set EUNOIA_API_KEY (defaults: local embeddings + embedded DB, no cloud, no Docker)
+cp .env.example .env          # set BELLA_API_KEY (defaults: local embeddings + embedded DB, no cloud, no Docker)
 bun install
 bun run dev                   # first boot creates the embedded DB, downloads the embedding model, and prewarms
 ```
@@ -68,10 +68,10 @@ bun run dev                   # first boot creates the embedded DB, downloads th
 Example:
 ```
 curl -s localhost:8080/health
-curl -s localhost:8080/memories -H "authorization: Bearer $EUNOIA_API_KEY" \
+curl -s localhost:8080/memories -H "authorization: Bearer $BELLA_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"containerTag":"user_123","memories":[{"content":"John prefers dark mode","isStatic":true}]}'
-curl -s localhost:8080/search -H "authorization: Bearer $EUNOIA_API_KEY" \
+curl -s localhost:8080/search -H "authorization: Bearer $BELLA_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"q":"what theme does John like","containerTag":"user_123"}'
 ```
@@ -84,7 +84,7 @@ Bellamente picks the embedder by device RAM so it "just works" without crashing 
   (~440 MB, no worker, never OOM-crashes). The threaded-WASM OOM is uncatchable, so the tier is chosen
   proactively by total RAM.
 
-Override with `EUNOIA_EMBED_TIER=quality|light`, `EUNOIA_EMBED_MIN_RAM_GB`, or pin `LOCAL_EMBED_MODEL`
+Override with `BELLA_EMBED_TIER=quality|light`, `BELLA_EMBED_MIN_RAM_GB`, or pin `LOCAL_EMBED_MODEL`
 (`EMBED_DIM` auto-follows a known model). The chosen `{model, dim}` is pinned at first DB init
 (`<data>/embedder.json`), so a later RAM/hardware change won't flip it and break your stored memories.
 `EMBEDDING_PROVIDER=openai` is an optional cloud fallback. See `docs/02-embedding.md` for local design docs.
@@ -113,23 +113,23 @@ bun run build      # -> ./bella / bella.exe (+ legacy ./eunoia copy)
 See docs/PRD.md and docs/08-api.md.
 
 ### Server + tuning env vars
-- `EUNOIA_HOST` (default `127.0.0.1`), `PORT` (default 8080).
-- `EUNOIA_SUPERSEDE_THRESHOLD` — cosine floor for supersede-on-write (default 0.95 transformer/OpenAI, 0.98 static tier).
+- `BELLA_HOST` (default `127.0.0.1`), `PORT` (default 8080).
+- `BELLA_SUPERSEDE_THRESHOLD` — cosine floor for supersede-on-write (default 0.95 transformer/OpenAI, 0.98 static tier).
 - `SEARCH_THRESHOLD` — recall similarity floor (per-model default).
-- `EUNOIA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
-- `EUNOIA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
+- `BELLA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
+- `BELLA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
 
 ## Compatibility (staged rebrand)
-This is a staged rebrand: public copy says Bellamente, but machine identifiers
-have not moved yet, on purpose.
-- Env vars stay `EUNOIA_*` (e.g. `EUNOIA_API_KEY`, `EUNOIA_HOST`).
-- Headers stay `x-eunoia-*`.
-- The data directory is unchanged.
-- `/health` still reports `service:"eunoia"` (plus a new `brand:"bellamente"` field).
+This is a staged rebrand: everything a human reads says Bellamente, and nothing
+an existing setup depends on breaks.
+- Env vars: `BELLA_*` are the documented names; every one also accepts the legacy
+  `EUNOIA_*` spelling as a permanent alias (`BELLA_` wins when both are set; the
+  server logs a one-line note when a legacy name is used).
+- HTTP headers stay `x-eunoia-*` (wire contract).
+- The data directory is unchanged (renaming it would orphan existing memories).
+- `/health` still reports `service:"eunoia"` (the doctor authenticity contract)
+  plus `brand:"bellamente"`.
 - The build emits a legacy `eunoia` / `eunoia.exe` binary copy alongside `bella`.
-
-These will migrate deliberately later, with a real compatibility plan — see
-`BRAND.md`.
 
 ## Design principles
 - Local-first by default: no hosted memory account, no model server, no cloud

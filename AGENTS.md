@@ -8,7 +8,9 @@ before changing anything.
 
 ## The one rule that outranks everything
 **Never break a machine contract.** These are frozen until a migration plan says otherwise:
-- `EUNOIA_*` environment variable names
+- Env vars: `BELLA_*` are the documented names, read via `brandEnv()` (src/env.ts), which honors the
+  legacy `EUNOIA_*` spelling PERMANENTLY. Never remove the legacy fallback; never read
+  `process.env.BELLA_X`/`process.env.EUNOIA_X` directly — always `brandEnv("X")`.
 - `x-eunoia-*` HTTP header names
 - the data directory (`envPaths("Eunoia")` in src/paths.ts) — renaming it orphans user memories
 - `service: "eunoia"` in `/health` (the doctor authenticity contract; `brand` carries the public name)

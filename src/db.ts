@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { openSync, closeSync, writeSync, readFileSync, rmSync } from "node:fs";
 import { EMBED_DIM, LOCAL_MODEL, PROVIDER, embedModelName } from "./embed-common";
 import { dataDir, dbDir, runtimeDir, writeEmbedderMeta } from "./paths";
+import { brandEnv } from "./env";
 import { makePgliteSql, type DB } from "./pg-shim";
 import { runMigrations } from "./migrations";
 import schemaSql from "../schema.sql" with { type: "text" };
@@ -196,14 +197,14 @@ const isStandalone = (): boolean =>
 
 // shared_buffers, auto-scaled to the device with a user override. Bounded [32,512] MB in ALL cases (the
 // override is clamped too): 16 MB stalls initdb, and ~>2 GB aborts PGlite's WASM init; a memory server
-// should stay small regardless. Auto default targets ~2% RAM capped at 128 MB. Override: EUNOIA_DB_SHARED_BUFFERS_MB.
+// should stay small regardless. Auto default targets ~2% RAM capped at 128 MB. Override: BELLA_DB_SHARED_BUFFERS_MB.
 function sharedBuffersMb(): number {
   const MIN = 32, MAX = 512;
-  const raw = Number(process.env.EUNOIA_DB_SHARED_BUFFERS_MB);
+  const raw = Number(brandEnv("DB_SHARED_BUFFERS_MB"));
   if (Number.isFinite(raw) && raw > 0) {
     const clamped = Math.min(MAX, Math.max(MIN, Math.round(raw)));
     if (clamped !== Math.round(raw)) {
-      console.warn(`[db] EUNOIA_DB_SHARED_BUFFERS_MB=${raw} out of range; clamped to ${clamped}MB (valid ${MIN}..${MAX}).`);
+      console.warn(`[db] BELLA_DB_SHARED_BUFFERS_MB=${raw} out of range; clamped to ${clamped}MB (valid ${MIN}..${MAX}).`);
     }
     return clamped;
   }
@@ -249,8 +250,8 @@ async function makePglite(): Promise<DB> {
   const releaseLock = acquireDbLock(join(dataDir(), "db.lock"));
   try {
     // Default false = durable (crash-safe writes) — the trust pillar. Opt-in relax for write throughput.
-    const relaxed =
-      process.env.EUNOIA_DB_RELAXED_DURABILITY === "1" || process.env.EUNOIA_DB_RELAXED_DURABILITY === "true";
+    const rd = brandEnv("DB_RELAXED_DURABILITY");
+    const relaxed = rd === "1" || rd === "true";
 
     const opts: Record<string, unknown> = {
       dataDir: dbDir(),

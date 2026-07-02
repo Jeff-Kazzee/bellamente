@@ -10,15 +10,16 @@ import { proxyRoutes } from "./proxy";
 import { inspectRoutes } from "./inspect";
 import { dashboardRoutes } from "./dashboard";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
+import { brandEnv } from "./env";
 import { timingSafeEqual } from "node:crypto";
 
-const API_KEY = process.env.EUNOIA_API_KEY;
+const API_KEY = brandEnv("API_KEY");
 const EXPECTED_AUTH = API_KEY ? "Bearer " + API_KEY : null;
 const PORT = Number(process.env.PORT ?? 8080);
 // Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
 // conversation text — Bun's default 0.0.0.0 would expose it to the whole LAN behind only the bearer key.
-// Opt into wider exposure explicitly with EUNOIA_HOST=0.0.0.0 (or a specific interface).
-const HOST = process.env.EUNOIA_HOST?.trim() || "127.0.0.1";
+// Opt into wider exposure explicitly with BELLA_HOST=0.0.0.0 (or a specific interface).
+const HOST = brandEnv("HOST")?.trim() || "127.0.0.1";
 
 // Constant-time bearer comparison (avoids leaking the key via response-timing on byte-by-byte compare).
 function authOk(header: string): boolean {
@@ -43,7 +44,7 @@ function warnIfOverDiskBudget() {
   if (usedMb > budget) {
     console.warn(
       `[storage] WARNING: Bellamente is using ${usedMb.toFixed(0)} MB on disk, over the ` +
-        `${budget} MB budget (EUNOIA_DISK_BUDGET_MB). Run \`bella doctor\` for details.`,
+        `${budget} MB budget (BELLA_DISK_BUDGET_MB). Run \`bella doctor\` for details.`,
     );
   }
 }
@@ -61,7 +62,7 @@ export function buildApp(ctx: { sql: DB; embed: Embed }) {
 
   app.use("*", async (c, next) => {
     if (c.req.path === "/health" || c.req.path === "/") return next(); // defensive: keep public even if reordered
-    if (!EXPECTED_AUTH) return c.json({ error: "EUNOIA_API_KEY not configured" }, 500);
+    if (!EXPECTED_AUTH) return c.json({ error: "BELLA_API_KEY not configured (legacy EUNOIA_API_KEY also works)" }, 500);
     if (!authOk(c.req.header("authorization") ?? "")) return c.json({ error: "Unauthorized" }, 401);
     await next();
   });
@@ -89,9 +90,9 @@ async function main() {
 }
 
 // forget_after expiry sweep (Spec 00 boot step 5): once at boot, then on an interval. Lives in main()
-// so tests importing buildApp never start a timer. EUNOIA_FORGET_SWEEP_INTERVAL_MS=0 disables.
+// so tests importing buildApp never start a timer. BELLA_FORGET_SWEEP_INTERVAL_MS=0 disables.
 function startForgetSweep(sql: DB) {
-  const raw = Number(process.env.EUNOIA_FORGET_SWEEP_INTERVAL_MS ?? 3_600_000);
+  const raw = Number(brandEnv("FORGET_SWEEP_INTERVAL_MS") ?? 3_600_000);
   const intervalMs = Number.isFinite(raw) ? Math.round(raw) : 3_600_000;
   const sweep = () =>
     sweepExpiredMemories(sql).catch((e) =>

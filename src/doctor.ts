@@ -4,6 +4,7 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { storageDirs, dirSizeBytes, diskUsedBytes, diskBudgetMb } from "./paths";
+import { brandEnv } from "./env";
 import { EMBED_DIM, EMBED_TIER, LOCAL_MODEL, LOCAL_DTYPE, PROVIDER, profile, onnxRelPath } from "./embed-common";
 
 const MB = 1024 * 1024;
@@ -68,9 +69,9 @@ export async function runDoctor(): Promise<number> {
 
   // Model present? (local provider only.) Check the actual .onnx WEIGHTS file (not just the model dir —
   // the tokenizer files are downloaded separately, so a dir-only check would falsely report "cached").
-  // Honor EUNOIA_MODEL_DIR exactly like the embed engine.
+  // Honor BELLA_MODEL_DIR (legacy EUNOIA_MODEL_DIR) exactly like the embed engine.
   if (PROVIDER === "local") {
-    const modelBase = process.env.EUNOIA_MODEL_DIR ?? dirs.models;
+    const modelBase = brandEnv("MODEL_DIR") ?? dirs.models;
     // Static (Model2Vec) weights are model.safetensors; the WASM engine's are the .onnx file.
     const rel = profile.engine === "static" ? [...LOCAL_MODEL.split("/"), "model.safetensors"] : onnxRelPath();
     const weights = join(modelBase, ...rel);
@@ -85,7 +86,7 @@ export async function runDoctor(): Promise<number> {
   if (budget > 0) {
     check(used <= budget * MB, "disk within budget", `${mb(used)} used / ${budget} MB budget`);
   } else {
-    console.log(`  -- disk used (data+cache): ${mb(used)}  (set EUNOIA_DISK_BUDGET_MB to enforce a cap)`);
+    console.log(`  -- disk used (data+cache): ${mb(used)}  (set BELLA_DISK_BUDGET_MB to enforce a cap)`);
   }
 
   // DB check. Default = embedded PGlite; external Postgres when DATABASE_URL is set. Verify pgvector.

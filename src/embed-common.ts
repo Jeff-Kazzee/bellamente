@@ -3,6 +3,7 @@
 // path (src/embed.ts), so the model-specific prompt/pooling/normalize logic lives in exactly one place.
 import { totalmem } from "node:os";
 import { readEmbedderMeta } from "./paths";
+import { brandEnv } from "./env";
 
 export type TaskType = "QUESTION_ANSWERING" | "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
 export type Embed = (args: { values: string[]; taskType: TaskType }) => Promise<number[][]>;
@@ -22,8 +23,8 @@ const env = (k: string): string | undefined => {
 // used on capable machines. LOW-RAM machines that would crash the threaded-WASM engine auto-fall back to
 // "light" = a static Model2Vec model (never crashes, no worker, ~440 MB). The threaded-WASM OOM is
 // UNCATCHABLE (mprotect), so we choose PROACTIVELY by total device RAM rather than trying and catching.
-// Override: EUNOIA_EMBED_TIER=quality|light, or set LOCAL_EMBED_MODEL directly (wins outright).
-// EUNOIA_EMBED_MIN_RAM_GB tunes the auto threshold (default 7 GB — 8 GB machines get e5, 4 GB get light).
+// Override: BELLA_EMBED_TIER=quality|light, or set LOCAL_EMBED_MODEL directly (wins outright).
+// BELLA_EMBED_MIN_RAM_GB tunes the auto threshold (default 7 GB — 8 GB machines get e5, 4 GB get light).
 const TIERS = { quality: "Xenova/multilingual-e5-small", light: "minishlab/potion-retrieval-32M" } as const;
 const MODEL_DIMS: Record<string, number> = {
   "Xenova/multilingual-e5-small": 384, "Xenova/multilingual-e5-base": 768, "Xenova/multilingual-e5-large": 1024,
@@ -33,12 +34,12 @@ const MODEL_DIMS: Record<string, number> = {
   "minishlab/potion-base-8M": 256, "minishlab/potion-base-32M": 512,
 };
 function resolveTier(): "quality" | "light" {
-  const forced = env("EUNOIA_EMBED_TIER");
+  const forced = brandEnv("EMBED_TIER");
   if (forced === "quality" || forced === "light") return forced;
-  const parsed = Number(env("EUNOIA_EMBED_MIN_RAM_GB") ?? 7);
+  const parsed = Number(brandEnv("EMBED_MIN_RAM_GB") ?? 7);
   const minRamGb = Number.isFinite(parsed) ? parsed : 7; // junk/blank -> safe default; never fail toward WASM
   // NOTE: totalmem() is TOTAL HOST RAM — NOT cgroup/container-limit aware. In a memory-capped container set
-  // EUNOIA_EMBED_TIER=light explicitly (Eunoia targets local desktops/laptops, not memory-limited containers).
+  // BELLA_EMBED_TIER=light explicitly (Bellamente targets local desktops/laptops, not memory-limited containers).
   return totalmem() / 2 ** 30 < minRamGb ? "light" : "quality";
 }
 export const EMBED_TIER = resolveTier();
@@ -48,7 +49,7 @@ export const EMBED_TIER = resolveTier();
 // existing populated DB and brick it (paths.ts persists {model,dim} at first DB init).
 const explicitModel = env("LOCAL_EMBED_MODEL");
 const explicitDim = env("EMBED_DIM");
-const meta = explicitModel || explicitDim || env("EUNOIA_EMBED_TIER") || PROVIDER === "openai" ? null : readEmbedderMeta();
+const meta = explicitModel || explicitDim || brandEnv("EMBED_TIER") || PROVIDER === "openai" ? null : readEmbedderMeta();
 
 export const LOCAL_MODEL = explicitModel ?? meta?.model ?? TIERS[EMBED_TIER];
 // OpenAI's cloud vectors are provider-fixed (384-d, e5-like ~0.4 scale) — don't let the RAM-selected local
