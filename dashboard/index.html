@@ -275,7 +275,7 @@
 
   // ---- api ----
   async function api(path, opts={}) {
-    const r = await fetch(base + path, { ...opts, headers: { "authorization": "Bearer " + apiKey, ...(opts.body ? {"content-type":"application/json"} : {}), ...(opts.headers||{}) } });
+    const r = await fetch(base + path, { ...opts, headers: { ...(apiKey ? { "authorization": "Bearer " + apiKey } : {}), ...(opts.body ? {"content-type":"application/json"} : {}), ...(opts.headers||{}) } });
     if (r.status === 401) { const e = new Error("Unauthorized"); e.code = 401; throw e; }
     if (!r.ok) { let m = "HTTP " + r.status, body = null; try { body = await r.json(); m = body.error || m; } catch {} const e = new Error(m); e.code = r.status; e.body = body; throw e; }
     return r.json();
@@ -611,8 +611,15 @@
   $("#disconnect").onclick=()=>{ apiKey=""; localStorage.removeItem(KEY_STORE); if(location.hash) history.replaceState(null,"","#"); renderGate(); };
   window.addEventListener("hashchange", route);
 
-  // boot: reflect connection, verify key silently, then route
+  // boot: zero-config first — /health says whether a key is needed at all (loopback default: it isn't).
   (async () => {
+    let authMode = "required";
+    try { authMode = (await (await fetch(base + "/health")).json()).auth ?? "required"; } catch {}
+    if(authMode === "none"){
+      apiKey = ""; // never send a stale bearer in no-auth mode
+      $("#dot").className="dot ok"; $("#connlabel").textContent=base.replace(/^https?:\/\//,"") + " · local";
+      $("#app").hidden=false; route(); return;
+    }
     if(apiKey){
       $("#dot").className="dot ok"; $("#connlabel").textContent=base.replace(/^https?:\/\//,""); $("#disconnect").hidden=false;
       try { await api("/inspect?limit=1"); } catch(e){ if(e.code===401){ apiKey=""; localStorage.removeItem(KEY_STORE); } }

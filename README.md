@@ -67,19 +67,18 @@ docs/            PRD + 11 subsystem specs
 
 ## Quick start (dev)
 ```
-cp .env.example .env          # set BELLA_API_KEY (defaults: local embeddings + embedded DB, no cloud, no Docker)
 bun install
-bun run dev                   # first boot creates the embedded DB, downloads the embedding model, and prewarms
+bun run dev                   # zero config: first boot creates the embedded DB, downloads the model, prewarms
 ```
+No `.env` needed. On loopback (the default bind) there is no API key; set `BELLA_API_KEY` to require
+one, or set `BELLA_HOST` beyond loopback and a key is auto-generated in the data dir and enforced.
 
 Example:
 ```
 curl -s localhost:8080/health
-curl -s localhost:8080/memories -H "authorization: Bearer $BELLA_API_KEY" \
-  -H 'content-type: application/json' \
+curl -s localhost:8080/memories -H 'content-type: application/json' \
   -d '{"containerTag":"user_123","memories":[{"content":"John prefers dark mode","isStatic":true}]}'
-curl -s localhost:8080/search -H "authorization: Bearer $BELLA_API_KEY" \
-  -H 'content-type: application/json' \
+curl -s localhost:8080/search -H 'content-type: application/json' \
   -d '{"q":"what theme does John like","containerTag":"user_123"}'
 ```
 
