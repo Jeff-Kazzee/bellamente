@@ -1,3 +1,0 @@
-# Dev: alias the native ONNX backend to the WASM one (mirrors build.ts) so `bun run` uses a single
-# onnxruntime-web instance for both the transformers.js tokenizer and inference (no native, no conflict).
-preload = ["./scripts/ort-alias-preload.ts"]
