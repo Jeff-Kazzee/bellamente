@@ -28,7 +28,9 @@ function authOk(header: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b); // length differs first (cheap, not secret)
 }
 
-// Subcommand: `eunoia doctor` runs the health/resource check and exits (no server).
+// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella serve`
+// (or no subcommand) boots the server — `serve` is accepted explicitly so command examples read
+// naturally, but the default path is identical.
 if (process.argv[2] === "doctor") {
   const { runDoctor } = await import("./doctor");
   process.exit(await runDoctor());
@@ -40,8 +42,8 @@ function warnIfOverDiskBudget() {
   const usedMb = diskUsedBytes() / (1024 * 1024);
   if (usedMb > budget) {
     console.warn(
-      `[storage] WARNING: Eunoia is using ${usedMb.toFixed(0)} MB on disk, over the ` +
-        `${budget} MB budget (EUNOIA_DISK_BUDGET_MB). Run \`eunoia doctor\` for details.`,
+      `[storage] WARNING: Bellamente is using ${usedMb.toFixed(0)} MB on disk, over the ` +
+        `${budget} MB budget (EUNOIA_DISK_BUDGET_MB). Run \`bella doctor\` for details.`,
     );
   }
 }
@@ -52,8 +54,9 @@ function warnIfOverDiskBudget() {
 export function buildApp(ctx: { sql: DB; embed: Embed }) {
   const app = new Hono();
 
-  // `service` tag lets `eunoia doctor` confirm the responder is actually Eunoia (not another process on the port).
-  app.get("/health", (c) => c.json({ ok: true, service: "eunoia" }));
+  // The `service` tag is the doctor's authenticity CONTRACT (old binaries check it too) — it stays
+  // "eunoia" through the staged rebrand; `brand` carries the public name (BRAND.md).
+  app.get("/health", (c) => c.json({ ok: true, service: "eunoia", brand: "bellamente" }));
   app.route("/", dashboardRoutes()); // the inspect dashboard shell (public HTML; its API calls are still authed)
 
   app.use("*", async (c, next) => {
@@ -81,7 +84,7 @@ async function main() {
   await prewarmEmbed(embed);
   const app = buildApp({ sql, embed });
   startForgetSweep(sql);
-  console.log(`eunoia listening on ${HOST}:${PORT}`);
+  console.log(`bellamente listening on ${HOST}:${PORT}`);
   return { app, port: PORT };
 }
 

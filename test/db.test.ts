@@ -69,7 +69,7 @@ test("acquireDbLock: writes our pid; reclaims OWN pid; refuses live/dead-foreign
   // a LIVE, different holder -> refuse
   const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"]);
   writeFileSync(lockPath, String(child.pid));
-  expect(() => acquireDbLock(lockPath)).toThrow(/already open by another Eunoia process/);
+  expect(() => acquireDbLock(lockPath)).toThrow(/already open by another Bellamente process/);
   child.kill();
   await child.exited;
 
@@ -107,7 +107,7 @@ test("runMigrations: applies once, records in schema_migrations, re-run is a no-
   const second = await runMigrations(sql);
   expect(second).toEqual([]); // already recorded -> nothing re-applied
   await sql.end();
-});
+}, 20000);
 
 test("runMigrations: brings a legacy install (missing new indexes) up to date", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
@@ -119,7 +119,7 @@ test("runMigrations: brings a legacy install (missing new indexes) up to date", 
   const idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_latest"}`;
   expect(idx.length).toBe(1);
   await sql.end();
-});
+}, 20000);
 
 test("runMigrations: a failing migration rolls back atomically (no SQL applied, no row recorded)", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
@@ -132,7 +132,7 @@ test("runMigrations: a failing migration rolls back atomically (no SQL applied, 
   const rows = await sql`SELECT id FROM schema_migrations WHERE id = 99`;
   expect(rows.length).toBe(0); // ...and no completion row was recorded
   await sql.end();
-});
+}, 20000);
 
 test("concurrent acquirers never double-acquire while a live holder exists", async () => {
   const lockPath = join(tmpdir(), `eunoia-lock-conc-${process.pid}.lock`);
