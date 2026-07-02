@@ -21,7 +21,7 @@ test("GET / serves the dashboard shell publicly (no key needed) and leaks no sec
   expect(r.status).toBe(200);
   expect(r.headers.get("content-type") || "").toContain("text/html");
   const html = await r.text();
-  expect(html).toContain("Eunoia");
+  expect(html).toContain("Bellamente"); // public brand (BRAND.md); machine identifiers keep eunoia
   expect(html).toContain("Recall traces"); // trace-as-hero copy
   expect(html).toContain('id="app"');
   expect(html).not.toContain("onnxruntime"); // WASM-clean: no ONNX markers in the shipped UI
@@ -36,10 +36,12 @@ test("GET / ships a restrictive Content-Security-Policy", async () => {
   expect(csp).toContain("frame-ancestors 'none'");
 });
 
-test("GET /health is public and identifies the service", async () => {
+test("GET /health is public and identifies the service (stable tag) + brand", async () => {
   const r = await req("/health");
   expect(r.status).toBe(200);
-  expect(await r.json()).toMatchObject({ ok: true, service: "eunoia" });
+  // service:"eunoia" is the doctor's authenticity contract and must survive the rebrand;
+  // brand carries the public name.
+  expect(await r.json()).toMatchObject({ ok: true, service: "eunoia", brand: "bellamente" });
 });
 
 test("API routes require the bearer key", async () => {

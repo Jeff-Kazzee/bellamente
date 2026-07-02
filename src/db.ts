@@ -173,18 +173,18 @@ export function acquireDbLock(lockPath: string): () => void {
     if (parseable) {
       throw lockedError(
         isAlive(holder)
-          ? `the embedded database is already open by another Eunoia process (pid ${holder}); refusing to ` +
+          ? `the embedded database is already open by another Bellamente process (pid ${holder}); refusing to ` +
               `open a second writer (two engines on one data dir corrupt the store). Stop that process first, ` +
               `or set DATABASE_URL to use external Postgres. If no such process is running, delete ${lockPath}.`
           : `the embedded database lock at ${lockPath} is stale (pid ${holder} is not running — likely a prior ` +
-              `hard crash). Not auto-reclaiming it, to avoid a double-writer race. If no Eunoia process is ` +
+              `hard crash). Not auto-reclaiming it, to avoid a double-writer race. If no Bellamente process is ` +
               `running, delete ${lockPath} and start again.`,
       );
     }
     // Empty/garbage — a peer mid-create (between its openSync and writeSync), or a crash in that window.
     throw lockedError(
       `the embedded database lock at ${lockPath} appears held by another starting process; refusing to open ` +
-        `a second writer. If no Eunoia process is running, delete ${lockPath}.`,
+        `a second writer. If no Bellamente process is running, delete ${lockPath}.`,
     );
   }
   throw lockedError(`could not acquire the embedded database lock at ${lockPath}`);

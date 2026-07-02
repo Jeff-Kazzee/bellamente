@@ -1,4 +1,4 @@
-// doctor.ts - `eunoia doctor`: verify the install is ready and surface resource usage.
+// doctor.ts - `bella doctor`: verify the install is ready and surface resource usage.
 // A trust/visibility tool: it checks DB reachability, model presence, and storage footprint vs the
 // optional disk budget. Read-only beyond ensuring the (already-safe) storage dirs exist.
 import { statSync } from "node:fs";
@@ -21,8 +21,9 @@ function redactUrl(u: string): string {
   }
 }
 
-// Is an EUNOIA server already running (and thus holding the embedded DB's single-writer lock)? Requires the
-// `service: "eunoia"` tag so an unrelated process answering 200 on the same port can't produce a false OK.
+// Is a Bellamente server already running (and thus holding the embedded DB's single-writer lock)? Requires
+// the `service: "eunoia"` tag — the machine contract kept stable through the rebrand (BRAND.md) so old and
+// new binaries recognize each other; an unrelated process answering 200 on the port can't produce a false OK.
 async function serverIsUp(port: number): Promise<boolean> {
   try {
     const ctrl = new AbortController();
@@ -44,7 +45,7 @@ export async function runDoctor(): Promise<number> {
     if (!ok) problems++;
   };
 
-  console.log("Eunoia doctor\n");
+  console.log("Bellamente doctor (bella doctor)\n");
 
   // Storage layout + per-dir footprint.
   const dirs = storageDirs();
@@ -108,7 +109,7 @@ export async function runDoctor(): Promise<number> {
     } else if (await serverIsUp(Number(process.env.PORT ?? 8080))) {
       // A running server holds the single-writer lock; doctor genuinely cannot probe the DB while it's held.
       // Report informationally (neither a pass nor a false OK) — the running server already verified it at boot.
-      console.log(`  -- embedded database in use by a running Eunoia server on :${process.env.PORT ?? 8080} (not probed while locked)`);
+      console.log(`  -- embedded database in use by a running Bellamente server on :${process.env.PORT ?? 8080} (not probed while locked)`);
     } else {
       const { makeDb, DB_LOCK_ERR } = await import("./db");
       try {
@@ -120,10 +121,10 @@ export async function runDoctor(): Promise<number> {
           await sql.end({ timeout: 1 });
         }
       } catch (e: any) {
-        // Another Eunoia process grabbed the lock between the /health probe and now — that's healthy, not a
-        // problem; report it informationally rather than as a failed check.
+        // Another Bellamente process grabbed the lock between the /health probe and now — that's healthy,
+        // not a problem; report it informationally rather than as a failed check.
         if (e?.code === DB_LOCK_ERR) {
-          console.log(`  -- embedded database in use by another Eunoia process (not probed): ${e.message}`);
+          console.log(`  -- embedded database in use by another Bellamente process (not probed): ${e.message}`);
         } else {
           throw e;
         }
