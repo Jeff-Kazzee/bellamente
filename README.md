@@ -1,7 +1,7 @@
 # Bellamente
 Memoria Viva for your AI agents.
 
-Bellamente is a local-first memory substrate for AI agents. It stores durable facts
+Bellamente is a local-first memory tool for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
 
