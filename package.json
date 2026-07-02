@@ -1,7 +1,7 @@
 {
-  "name": "eunoia",
+  "name": "bellamente",
   "version": "0.0.1",
-  "description": "Local-first memory substrate for agents: facts, documents, recall, and profile context.",
+  "description": "Bellamente - Memoria Viva for your AI agents. Local-first memory: facts, documents, recall, and profile context.",
   "type": "module",
   "module": "src/index.ts",
   "scripts": {

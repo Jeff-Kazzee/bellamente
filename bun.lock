@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "eunoia",
+      "name": "bellamente",
       "dependencies": {
         "@electric-sql/pglite": "0.4.6",
         "@huggingface/transformers": "^4.2.0",
