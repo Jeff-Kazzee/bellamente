@@ -1,0 +1,57 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Config
+description: Every BELLA_* environment variable. All of them optional — zero config is the default.
+---
+
+# Config
+
+**Everything is optional.** Bellamente runs with zero configuration; these knobs tune it.
+
+## Auth & network
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BELLA_HOST` | `127.0.0.1` | Bind address. Anything beyond loopback auto-generates and enforces an API key. |
+| `PORT` | `8080` | Listen port. |
+| `BELLA_API_KEY` | unset | Require this bearer key everywhere (overrides auto-generation). |
+
+## Upstream model (the proxy)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BELLA_UPSTREAM_BASE_URL` | `http://127.0.0.1:11434/v1` | Your local model server (Ollama, LM Studio, llama.cpp, vLLM). |
+| `BELLA_UPSTREAM_API_KEY` | unset | Only needed for non-local upstreams (which must opt in explicitly). |
+| `BELLA_UPSTREAM_TIMEOUT_MS` | `120000` | Deadline for buffered upstream exchanges. |
+| `BELLA_STREAM_IDLE_TIMEOUT_MS` | `120000` | Stall detector for streamed responses (per pending read). |
+| `BELLA_STREAM_DECISION_HOLD_CHARS` | `512` | How much streamed answer text is held while classifying a turn, so models that narrate before calling `searchMemory` still get the memory round. `0` = pipe immediately. |
+
+## Capture
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BELLA_PROXY_CAPTURE` | on | `0` disables auto-capture entirely. |
+| `BELLA_CAPTURE_DISTILL` | on | `0` skips the local-LLM distillation pass (regex heuristics only). |
+
+## Embeddings
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BELLA_EMBED_TIER` | auto | `quality` (multilingual-e5-small, WASM) or `light` (static Model2Vec — low-RAM safe). Auto-picked by device RAM and **pinned per data dir**. |
+| `BELLA_EMBED_MIN_RAM_GB` | `7` | Below this total RAM, auto picks the light tier. |
+| `LOCAL_EMBED_MODEL` / `EMBED_DIM` | unset | Pin a specific model (dimension change requires a fresh DB). |
+| `EMBEDDING_PROVIDER` | `local` | `openai` enables the optional cloud fallback (requires `OPENAI_API_KEY`). |
+
+## Storage & safety
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BELLA_HOME` | OS app dirs | Put everything under one folder (portable install). |
+| `BELLA_DATA_DIR` / `BELLA_CACHE_DIR` / `BELLA_LOG_DIR` / `BELLA_MODEL_DIR` | OS app dirs | Relocate individual pieces. |
+| `DATABASE_URL` | embedded | Use external Postgres+pgvector instead of the embedded DB (advanced). |
+| `BELLA_DISK_BUDGET_MB` | `0` (off) | Soft disk cap; `bella doctor` reports usage. |
+| `BELLA_TRACE_RETENTION` | `1000` | How many recall/proxy traces to keep (`0` = never prune). |
+| `BELLA_SUPERSEDE_THRESHOLD` | engine-aware | Cosine floor for supersede-on-write. |
+| `SEARCH_THRESHOLD` | per-model | Recall similarity floor. |
+
+Run `bella doctor` any time — it verifies the DB, model, ports, and disk against your config.
