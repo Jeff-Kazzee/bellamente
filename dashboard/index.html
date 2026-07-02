@@ -377,7 +377,7 @@
           <div class="qbox"><div class="k">Query</div><div class="qt">${esc(t.query || (t.queries||[]).join("  •  ") || "—")}</div></div>
           ${proxyNote}
         </div>
-        <div class="sec"><div class="hd"><h3>Retrieved</h3><span class="n">${retrieved.length} item${retrieved.length===1?"":"s"}, ranked by similarity</span></div>
+        <div class="sec"><div class="hd"><h3>Retrieved</h3><span class="n">${retrieved.length} item${retrieved.length===1?"":"s"}, ranked by relevance</span></div>
           ${retrieved.length ? retrieved.map(retrievedItem).join("") : `<div class="empty">Nothing retrieved for this query.</div>`}</div>
         ${injected.length ? `<div class="sec"><div class="hd"><h3>Injected</h3><span class="n">fed into context</span></div>${injected.map(retrievedItem).join("")}</div>` : ""}
         <details class="raw"><summary>Raw trace record (exactly what Eunoia stored)</summary><pre>${esc(JSON.stringify(t,null,2))}</pre></details>`;
