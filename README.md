@@ -14,6 +14,10 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
+**Pre-release.** v0.0.1 sign-off is blocked on two items (specs in `docs/HANDOFF-CODEX.md`):
+streamed memory-tool reinvocation, and capture v2 (LLM distillation through the local upstream).
+No release artifacts are published and the repository stays private until both land.
+
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
 - Memory lifecycle: COMPLETE. Writes dedup exact duplicates and SUPERSEDE near-duplicates as new
   versions (old versions stay inspectable); memories can be read with full version history, edited
