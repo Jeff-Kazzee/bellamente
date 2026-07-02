@@ -7,7 +7,8 @@ import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
 import { proxyRoutes } from "../src/proxy";
-import { extractCandidateFacts, captureEnabled } from "../src/capture";
+import { extractCandidateFacts, captureEnabled, captureFromTurn } from "../src/capture";
+import { DEFAULT_CONTAINER_TAG } from "../src/util";
 import { EMBED_DIM } from "../src/embed-common";
 import type { Embed } from "../src/embed";
 
@@ -143,7 +144,7 @@ test("an answered turn captures the fact with provenance + a capture trace; repe
   }
 }, TEST_TIMEOUT_MS);
 
-test("BELLA_PROXY_CAPTURE=0 disables capture entirely", async () => {
+test("BELLA_PROXY_CAPTURE=0 disables capture entirely: no memory write AND no capture trace", async () => {
   process.env.BELLA_PROXY_CAPTURE = "0";
   const { app, sql, close } = await makeCtx();
   try {
@@ -151,8 +152,94 @@ test("BELLA_PROXY_CAPTURE=0 disables capture entirely", async () => {
     await new Promise((r) => setTimeout(r, 400));
     const rows = await sql`SELECT count(*)::int AS n FROM memory_entry`;
     expect(Number(rows[0]!.n)).toBe(0);
+    // Disabled means fully silent — not even a capture trace row (the proxy trace is separate).
+    const traces = await sql`SELECT count(*)::int AS n FROM recall_trace WHERE kind = 'capture'`;
+    expect(Number(traces[0]!.n)).toBe(0);
   } finally {
     delete process.env.BELLA_PROXY_CAPTURE;
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("captureFromTurn flattens array message parts and reads only the LAST user message", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const ctx = { sql, embed };
+    const messages = [
+      { role: "user", content: "I live in Denver." }, // an EARLIER user message — must be ignored
+      { role: "assistant", content: "Noted." },
+      {
+        role: "user",
+        content: [
+          "I prefer metric units.", // bare string part
+          { type: "text", text: "I use Neovim." }, // {text} object part
+          { type: "image_url", image_url: { url: "https://x/y.png" } }, // no text -> contributes nothing
+        ],
+      },
+      { role: "assistant", content: "Great." },
+    ];
+    await captureFromTurn(ctx, { messages, containerTag: DEFAULT_CONTAINER_TAG, proxyTraceId: "trace-array-1" });
+
+    const rows = await sql`SELECT memory FROM memory_entry ORDER BY memory`;
+    expect(rows.map((r) => r.memory)).toEqual(["I prefer metric units.", "I use Neovim."]);
+    const [trace] = await sql`SELECT status, query, result_count, metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(trace).toBeDefined();
+    expect(trace!.status).toBe("ok");
+    expect(trace!.query).toBe("I prefer metric units.\nI use Neovim."); // parts joined with newline, earlier turn absent
+    expect(Number(trace!.result_count)).toBe(2);
+    expect(trace!.metadata?.proxyTraceId).toBe("trace-array-1");
+
+    // Early returns write nothing: no messages / non-string non-array content / no matching facts.
+    await captureFromTurn(ctx, { messages: [], containerTag: DEFAULT_CONTAINER_TAG, proxyTraceId: "t-empty" });
+    await captureFromTurn(ctx, {
+      messages: [{ role: "user", content: { weird: true } }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "t-object",
+    });
+    await captureFromTurn(ctx, {
+      messages: [{ role: "user", content: "What time is it?" }],
+      containerTag: DEFAULT_CONTAINER_TAG,
+      proxyTraceId: "t-question",
+    });
+    const traces = await sql`SELECT count(*)::int AS n FROM recall_trace WHERE kind = 'capture'`;
+    expect(Number(traces[0]!.n)).toBe(1); // still just the one trace from the real capture
+    expect(Number((await sql`SELECT count(*)::int AS n FROM memory_entry`)[0]!.n)).toBe(2);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("a failing capture write resolves quietly and records an error capture trace (never breaks the turn)", async () => {
+  const { sql, close } = await makeCtx();
+  try {
+    const failingEmbed: Embed = async () => {
+      throw new Error("embedder down");
+    };
+    const userId = "u".repeat(22);
+    // Must RESOLVE (fire-and-forget contract) even though the write path throws inside.
+    await captureFromTurn(
+      { sql, embed: failingEmbed },
+      {
+        messages: [{ role: "user", content: "I prefer metric units." }],
+        containerTag: DEFAULT_CONTAINER_TAG,
+        userId,
+        proxyTraceId: "trace-err-1",
+      },
+    );
+
+    const [trace] = await sql`
+      SELECT status, query, user_id, container_tag, result_count, metadata FROM recall_trace WHERE kind = 'capture'`;
+    expect(trace).toBeDefined();
+    expect(trace!.status).toBe("error");
+    expect(trace!.query).toBe("I prefer metric units.");
+    expect(trace!.user_id).toBe(userId);
+    expect(trace!.container_tag).toBe(DEFAULT_CONTAINER_TAG);
+    expect(Number(trace!.result_count)).toBe(0);
+    expect(trace!.metadata?.error).toBe("embedder down");
+    expect(trace!.metadata?.proxyTraceId).toBe("trace-err-1");
+    // ...and nothing was stored.
+    expect(Number((await sql`SELECT count(*)::int AS n FROM memory_entry`)[0]!.n)).toBe(0);
+  } finally {
     await close();
   }
 }, TEST_TIMEOUT_MS);

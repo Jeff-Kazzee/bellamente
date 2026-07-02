@@ -1,11 +1,12 @@
 // search.test.ts - fusion correctness for searchChunks (threshold on the vector leg) and
 // top-level hybrid mode (rank-based RRF instead of raw-score sorting across incompatible scales).
 import { test, expect } from "bun:test";
+import { Hono } from "hono";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { search, searchChunks } from "../src/search";
+import { search, searchChunks, searchRoutes, Q } from "../src/search";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
 
@@ -73,6 +74,97 @@ test("searchChunks keyword=false still enforces the threshold (no keyword rescue
     expect(results.some((r) => r.id === chunkKwId)).toBe(false);
     expect(results.some((r) => r.id === chunkVecId)).toBe(true);
   } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("POST /search: missing q is a 400; an embed failure re-throws (500) after recording an error trace", async () => {
+  const ctx = await makeCtx();
+  try {
+    const failingEmbed: Embed = async () => {
+      throw new Error("embedder offline");
+    };
+    const app = new Hono();
+    app.route("/search", searchRoutes({ sql: ctx.sql, embed: failingEmbed }));
+
+    const bad = await app.request("/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ limit: 5 }),
+    });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toBe("q (string) is required");
+
+    // An unparseable body degrades to {} (the catch), which then fails the same q guard.
+    const unparseable = await app.request("/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    expect(unparseable.status).toBe(400);
+
+    const res = await app.request("/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "zebra", containerTag: DEFAULT_CONTAINER_TAG }),
+    });
+    // The route records the error trace, sets the trace header, then RE-THROWS — Hono's default
+    // error handler turns that into a 500.
+    expect(res.status).toBe(500);
+
+    const [trace] = await ctx.sql`
+      SELECT id, status, query, queries, search_mode, container_tag, result_count, metadata
+      FROM recall_trace WHERE kind = 'search' AND status = 'error'`;
+    expect(trace).toBeDefined();
+    expect(trace!.query).toBe("zebra");
+    expect(trace!.queries).toEqual(["zebra"]);
+    expect(trace!.search_mode).toBe("memories"); // the default mode is recorded even on failure
+    expect(trace!.container_tag).toBe(DEFAULT_CONTAINER_TAG);
+    expect(Number(trace!.result_count)).toBe(0);
+    expect(trace!.metadata?.error).toBe("embedder offline");
+    // The trace id header still points at the recorded error trace, so the failure is inspectable.
+    expect(res.headers.get("x-bella-trace-id")).toBe(trace!.id);
+    // The 400 path records no trace; only the one error trace exists.
+    const n = await ctx.sql`SELECT count(*)::int AS n FROM recall_trace WHERE kind = 'search'`;
+    expect(Number(n[0]!.n)).toBe(1);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("POST /search: a slow search resolves EMPTY at the deadline with a 200 and a 'timeout' trace", async () => {
+  const ctx = await makeCtx();
+  const originalTimeout = Q.SEARCH_TIMEOUT_MS; // read per request, so tunable without env plumbing
+  try {
+    Q.SEARCH_TIMEOUT_MS = 25;
+    const slowEmbed: Embed = async ({ values }) => {
+      await new Promise((r) => setTimeout(r, 250));
+      return values.map(() => [1, 0, 0, 0]);
+    };
+    const app = new Hono();
+    app.route("/search", searchRoutes({ sql: ctx.sql, embed: slowEmbed }));
+
+    const res = await app.request("/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "zebra" }),
+    });
+    // The deadline degrades to an empty result set — NOT an error — and says so in the trace.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.results).toEqual([]);
+    expect(res.headers.get("x-bella-search-results")).toBe("0");
+
+    const [trace] = await ctx.sql`SELECT id, status, result_count FROM recall_trace WHERE kind = 'search'`;
+    expect(trace).toBeDefined();
+    expect(trace!.status).toBe("timeout");
+    expect(Number(trace!.result_count)).toBe(0);
+    expect(res.headers.get("x-bella-trace-id")).toBe(trace!.id);
+
+    // Let the abandoned slow search drain before closing the DB under it.
+    await new Promise((r) => setTimeout(r, 400));
+  } finally {
+    Q.SEARCH_TIMEOUT_MS = originalTimeout;
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);

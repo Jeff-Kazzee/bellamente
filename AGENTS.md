@@ -25,11 +25,28 @@ Bellamente / `bella`. When unsure whether something is copy or contract: it's a 
 - `docs/CHANGES-*.md` — what already shipped and why. `docs/REBRAND-PLAN.md` — rebrand stages.
 - `docs/` is gitignored (local-only, intentionally). Never `git add -f` anything in it.
 
+## Behavior tests FIRST (Jeff's rule, 2026-07-02 — no exceptions)
+Every new epic, feature, or capability starts by writing the behavior tests, BEFORE the
+implementation:
+1. Read the relevant spec (docs/00–10, PRD, BACKLOG item) and enumerate the promised behaviors —
+   including error/degradation paths, not just the happy path.
+2. Write them as failing tests (the test names ARE the spec). Commit message may land them together
+   with the implementation, but the tests must be written first and must fail before the fix.
+3. A feature without behavior tests does not merge. Ever. The coverage gate in bunfig.toml
+   ([test] coverageThreshold) enforces the floor mechanically — `bun test` FAILS below it.
+4. The floors are a RATCHET: when coverage rises, raise the floor in the same PR. Never lower them.
+   Long-term target is 1.0; code that genuinely cannot be unit-tested (WASM embed worker, real
+   model downloads, `Bun.serve` listen) must instead be covered by the release smoke checklist and
+   named in the PR as such — silence is not an option.
+This exists because review passes kept finding capabilities that were coded but never wired or
+never worked (see docs/CHANGES-2026-07-01.md #4, #6): a behavior without a test demanding it
+does not reliably exist.
+
 ## Workflow (no exceptions)
 1. Branch off `dev` (`git checkout dev && git pull && git checkout -b <type>/<slug>`).
    NEVER commit to `prod` or directly to `dev`.
 2. One logical change per commit. The commit message explains WHY, not just what.
-3. Tests ship in the same commit as the change they cover.
+3. Tests ship in the same commit as the change they cover (written first — see above).
 4. Before EVERY commit, all four gates must pass:
    - `git diff --check`   (no whitespace damage)
    - `bunx tsc --noEmit`  (typecheck clean)
