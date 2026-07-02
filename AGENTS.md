@@ -69,6 +69,10 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    NEVER commit to `prod` or directly to `dev`.
 2. One logical change per commit. The commit message explains WHY, not just what.
 3. Tests ship in the same commit as the change they cover (written first — see above).
+3b. DOCS LAW (Jeff, 2026-07-02): any user-facing behavior change updates the matching docs page
+   (website/src/pages/docs/*.md) in the SAME PR. The repo Markdown IS the website — Vercel rebuilds
+   it on every `prod` push, so repo and site cannot drift. test/website.test.ts pins the site
+   structure; ```prompt fences are agent-paste blocks (labeled + copy-buttoned by DocsLayout).
 4. Before EVERY commit, all four gates must pass:
    - `git diff --check`   (no whitespace damage)
    - `bunx tsc --noEmit`  (typecheck clean)

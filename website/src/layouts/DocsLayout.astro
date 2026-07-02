@@ -1,0 +1,91 @@
+---
+// Docs shell: La Macchina system, mono docs-nav, copy buttons on every code block.
+// Blocks fenced as ```prompt get the copper "FOR YOUR AGENT" treatment — content meant to be
+// pasted into an LLM/agent, labeled so users know exactly what to do with it.
+import "../styles/machina.css";
+const { frontmatter } = Astro.props;
+const current = Astro.url.pathname;
+const pages = [
+  { href: "/docs", label: "overview" },
+  { href: "/docs/using", label: "using it" },
+  { href: "/docs/api", label: "api" },
+  { href: "/docs/config", label: "config" },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{frontmatter.title} — Bellamente docs</title>
+    <meta name="description" content={frontmatter.description} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23c4703a'/%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%234fa487' stroke-opacity='.5' stroke-width='1.5'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <main class="db">
+      <div class="docs-wrap">
+        <header class="db-nav">
+          <a class="db-logo" href="/">Bella<span>mente</span></a>
+          <nav aria-label="primary">
+            <a href="/roadmap">Roadmap</a>
+            <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
+            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/latest">Download</a>
+          </nav>
+        </header>
+        <nav class="docs-nav" aria-label="docs">
+          {pages.map((p) => (
+            <a href={p.href} aria-current={current === p.href || current === p.href + "/" ? "page" : undefined}>{p.label}</a>
+          ))}
+        </nav>
+        <article class="docs-article">
+          <slot />
+        </article>
+        <footer class="db-footer">
+          <span>© 2026 The Little AI Co · BELLAMENTE</span>
+          <span class="fine">docs live in the repo (<code>website/src/pages/docs/</code>) and redeploy on every change</span>
+        </footer>
+      </div>
+    </main>
+    <script>
+      document.querySelectorAll(".docs-article pre").forEach((pre) => {
+        const isPrompt = pre.getAttribute("data-language") === "prompt";
+        const wrap = document.createElement("div");
+        wrap.className = "pre-wrap" + (isPrompt ? " prompt" : "");
+        pre.parentNode!.insertBefore(wrap, pre);
+        wrap.appendChild(pre);
+        if (isPrompt) {
+          const tag = document.createElement("div");
+          tag.className = "prompt-tag";
+          tag.textContent = "FOR YOUR AGENT — copy this into its prompt or project instructions";
+          wrap.prepend(tag);
+        }
+        const btn = document.createElement("button");
+        const label = isPrompt ? "Copy for your agent" : "Copy";
+        btn.className = "copy-btn";
+        btn.type = "button";
+        btn.textContent = label;
+        btn.addEventListener("click", async () => {
+          const text = (pre.querySelector("code") ?? pre).textContent ?? "";
+          try {
+            await navigator.clipboard.writeText(text);
+            btn.textContent = "Copied ✓";
+          } catch {
+            btn.textContent = "Select + copy manually";
+          }
+          setTimeout(() => (btn.textContent = label), 1600);
+        });
+        wrap.appendChild(btn);
+      });
+    </script>
+  </body>
+</html>
