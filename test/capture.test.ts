@@ -105,7 +105,7 @@ test("an answered turn captures the fact with provenance + a capture trace; repe
     expect(row).toBeDefined();
     expect(row!.is_inference).toBe(true); // captured, not user-asserted — distinguishable forever
     expect(row!.metadata?.source).toBe("proxy_capture");
-    expect(row!.metadata?.proxyTraceId).toBe(res.headers.get("x-eunoia-trace-id"));
+    expect(row!.metadata?.proxyTraceId).toBe(res.headers.get("x-bella-trace-id"));
 
     const trace = await waitFor(async () => {
       const rows = await sql`SELECT status, retrieved, metadata FROM recall_trace WHERE kind = 'capture'`;

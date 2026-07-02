@@ -1,13 +1,13 @@
 // paths.ts - SAFE, user-customizable per-user storage following OS conventions via `env-paths`
-// (the de-facto cross-platform standard). Eunoia writes ONLY under these dirs - never beside the
+// (the de-facto cross-platform standard). Bellamente writes ONLY under these dirs - never beside the
 // exe, never cwd, never system dirs. mkdir is recursive + non-destructive; no admin/root needed.
 //
 // Defaults (env-paths):
-//   data  (memories/DB) : Win %LOCALAPPDATA%\Eunoia\Data  | macOS ~/Library/Application Support/Eunoia | Linux $XDG_DATA_HOME/eunoia (~/.local/share)
-//   cache (models/libs) : Win %LOCALAPPDATA%\Eunoia\Cache | macOS ~/Library/Caches/Eunoia             | Linux $XDG_CACHE_HOME/eunoia (~/.cache)
-//   logs                : Win %LOCALAPPDATA%\Eunoia\Log   | macOS ~/Library/Logs/Eunoia               | Linux $XDG_STATE_HOME/eunoia (~/.local/state)
+//   data  (memories/DB) : Win %LOCALAPPDATA%\Bellamente\Data  | macOS ~/Library/Application Support/Bellamente | Linux $XDG_DATA_HOME/bellamente (~/.local/share)
+//   cache (models/libs) : Win %LOCALAPPDATA%\Bellamente\Cache | macOS ~/Library/Caches/Bellamente             | Linux $XDG_CACHE_HOME/bellamente (~/.cache)
+//   logs                : Win %LOCALAPPDATA%\Bellamente\Log   | macOS ~/Library/Logs/Bellamente               | Linux $XDG_STATE_HOME/bellamente (~/.local/state)
 //
-// USER OVERRIDES (env vars, easiest first; BELLA_* documented, EUNOIA_* honored as legacy alias):
+// USER OVERRIDES (env vars, easiest first):
 //   BELLA_HOME       - put EVERYTHING under one folder (single-folder / portable install)
 //   BELLA_DATA_DIR   - relocate just the data (memories/DB)
 //   BELLA_CACHE_DIR  - relocate just the cache (model weights / extracted libs) e.g. to a big drive
@@ -19,9 +19,9 @@ import { mkdirSync, readdirSync, lstatSync, readFileSync, writeFileSync } from "
 import { join, resolve } from "node:path";
 import { brandEnv } from "./env";
 
-// The on-disk app-dir name stays "Eunoia" — renaming it orphans existing users' memories.
-// Adoption logic is a future migration slice (docs/REBRAND-PLAN.md slice 3), not a rename.
-const P = envPaths("Eunoia", { suffix: "" });
+// Renamed from the pre-release working-title dir before v0.0.1 shipped — no released install ever
+// wrote to the old name, so there is nothing to adopt.
+const P = envPaths("Bellamente", { suffix: "" });
 const HOME = brandEnv("HOME");
 const dataBase = brandEnv("DATA_DIR") ?? HOME ?? P.data;
 const cacheBase = brandEnv("CACHE_DIR") ?? HOME ?? P.cache;
@@ -79,7 +79,7 @@ export function dirSizeBytes(dir: string): number {
  *  Dedupes overlapping roots so BELLA_HOME (data===cache===HOME) isn't double-counted. */
 export const diskUsedBytes = (): number => {
   const roots = [...new Set([resolve(dataBase), resolve(cacheBase)])];
-  // Drop any root nested inside another so a shared parent (e.g. EUNOIA_HOME) is measured once.
+  // Drop any root nested inside another so a shared parent (e.g. BELLA_HOME) is measured once.
   const top = roots.filter((r) => !roots.some((o) => o !== r && (r.startsWith(o + "/") || r.startsWith(o + "\\"))));
   return top.reduce((sum, r) => sum + dirSizeBytes(r), 0);
 };

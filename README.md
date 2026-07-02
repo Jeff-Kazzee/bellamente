@@ -1,9 +1,6 @@
 # Bellamente
 Memoria Viva for your AI agents.
 
-(formerly Eunoia — the internal identifiers keep that name during the staged
-migration; see Compatibility below)
-
 Bellamente is a local-first memory substrate for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
@@ -99,7 +96,7 @@ Override with `BELLA_EMBED_TIER=quality|light`, `BELLA_EMBED_MIN_RAM_GB`, or pin
 
 ## Build single binary (M2)
 ```
-bun run build      # -> ./bella / bella.exe (+ legacy ./eunoia copy)
+bun run build      # -> ./bella / bella.exe
 ./bella
 ```
 
@@ -128,17 +125,14 @@ See docs/PRD.md and docs/08-api.md.
 - `BELLA_UPSTREAM_TIMEOUT_MS` (default 120000) — proxy upstream deadline (connect + buffered body read).
 - `BELLA_STREAM_IDLE_TIMEOUT_MS` (default 120000) — proxy stream-stall detector (per pending read).
 
-## Compatibility (staged rebrand)
-This is a staged rebrand: everything a human reads says Bellamente, and nothing
-an existing setup depends on breaks.
-- Env vars: `BELLA_*` are the documented names; every one also accepts the legacy
-  `EUNOIA_*` spelling as a permanent alias (`BELLA_` wins when both are set; the
-  server logs a one-line note when a legacy name is used).
-- HTTP headers stay `x-eunoia-*` (wire contract).
-- The data directory is unchanged (renaming it would orphan existing memories).
-- `/health` still reports `service:"eunoia"` (the doctor authenticity contract)
-  plus `brand:"bellamente"`.
-- The build emits a legacy `eunoia` / `eunoia.exe` binary copy alongside `bella`.
+## Naming
+Bellamente is the brand everywhere — copy, CLI (`bella`), and machine identifiers:
+- Env vars: `BELLA_*` only.
+- HTTP headers: `x-bella-*` (wire contract).
+- `/health` reports `service:"bellamente"` (the doctor authenticity contract).
+- The build emits a single `bella` / `bella.exe` binary.
+The pre-release working title was retired before v0.0.1; no released artifact ever
+used it, so there are no legacy aliases to honor.
 
 ## Design principles
 - Local-first by default: no hosted memory account, no model server, no cloud

@@ -186,9 +186,9 @@ export function searchRoutes(ctx: Ctx) {
           includeForgottenMemories: !!body.include?.forgottenMemories,
         },
       });
-      c.header("x-eunoia-trace-id", traceId);
-      c.header("x-eunoia-search-results", String(results.length));
-      c.header("x-eunoia-search-latency-ms", String(latencyMs));
+      c.header("x-bella-trace-id", traceId);
+      c.header("x-bella-search-results", String(results.length));
+      c.header("x-bella-search-latency-ms", String(latencyMs));
       return c.json({ results, traceId });
     } catch (e) {
       const latencyMs = Date.now() - started;
@@ -203,7 +203,7 @@ export function searchRoutes(ctx: Ctx) {
         latencyMs,
         metadata: { error: e instanceof Error ? e.message : String(e) },
       });
-      c.header("x-eunoia-trace-id", traceId);
+      c.header("x-bella-trace-id", traceId);
       throw e;
     }
   });

@@ -54,7 +54,7 @@ test("isValidVector rejects an all-zero vector (whitespace/OOV), accepts a real 
 });
 
 test("acquireDbLock: writes our pid; reclaims OWN pid; refuses live/dead-foreign/garbage; release guards ownership", async () => {
-  const lockPath = join(tmpdir(), `eunoia-lock-test-${process.pid}.lock`);
+  const lockPath = join(tmpdir(), `bella-lock-test-${process.pid}.lock`);
   rmSync(lockPath, { force: true });
 
   // fresh acquire -> the file actually holds OUR pid (not just "exists")
@@ -135,7 +135,7 @@ test("runMigrations: a failing migration rolls back atomically (no SQL applied, 
 }, 20000);
 
 test("concurrent acquirers never double-acquire while a live holder exists", async () => {
-  const lockPath = join(tmpdir(), `eunoia-lock-conc-${process.pid}.lock`);
+  const lockPath = join(tmpdir(), `bella-lock-conc-${process.pid}.lock`);
   rmSync(lockPath, { force: true });
   const held = acquireDbLock(lockPath); // this test process is a LIVE holder
   const childPath = join(import.meta.dir, "lock-child.ts");

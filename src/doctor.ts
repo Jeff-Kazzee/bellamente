@@ -23,8 +23,7 @@ function redactUrl(u: string): string {
 }
 
 // Is a Bellamente server already running (and thus holding the embedded DB's single-writer lock)? Requires
-// the `service: "eunoia"` tag — the machine contract kept stable through the rebrand (BRAND.md) so old and
-// new binaries recognize each other; an unrelated process answering 200 on the port can't produce a false OK.
+// the `service: "bellamente"` tag — an unrelated process answering 200 on the port can't produce a false OK.
 async function serverIsUp(port: number): Promise<boolean> {
   try {
     const ctrl = new AbortController();
@@ -33,7 +32,7 @@ async function serverIsUp(port: number): Promise<boolean> {
     clearTimeout(t);
     if (!res.ok) return false;
     const body = (await res.json().catch(() => ({}))) as { service?: string };
-    return body?.service === "eunoia";
+    return body?.service === "bellamente";
   } catch {
     return false;
   }
@@ -69,7 +68,7 @@ export async function runDoctor(): Promise<number> {
 
   // Model present? (local provider only.) Check the actual .onnx WEIGHTS file (not just the model dir —
   // the tokenizer files are downloaded separately, so a dir-only check would falsely report "cached").
-  // Honor BELLA_MODEL_DIR (legacy EUNOIA_MODEL_DIR) exactly like the embed engine.
+  // Honor BELLA_MODEL_DIR exactly like the embed engine.
   if (PROVIDER === "local") {
     const modelBase = brandEnv("MODEL_DIR") ?? dirs.models;
     // Static (Model2Vec) weights are model.safetensors; the WASM engine's are the .onnx file.

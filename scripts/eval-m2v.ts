@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { statSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 
-const CACHE = join(process.env.LOCALAPPDATA ?? join(homedir(), ".cache"), "Eunoia", "Cache", "models");
+const CACHE = join(process.env.LOCALAPPDATA ?? join(homedir(), ".cache"), "Bellamente", "Cache", "models");
 (env as any).cacheDir = CACHE;
 
 // ---- labeled set (mirrors scripts/eval.ts) ----

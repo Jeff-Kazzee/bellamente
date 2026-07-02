@@ -240,14 +240,14 @@ function upstreamConfig(c: any, ctx: Ctx): UpstreamConfig {
   }
   const url = parsed.toString();
 
-  const explicitAuth = c.req.header("x-eunoia-upstream-authorization");
-  const apiKey = c.req.header("x-eunoia-upstream-api-key") || ctx.upstreamApiKey || brandEnv("UPSTREAM_API_KEY") || "";
+  const explicitAuth = c.req.header("x-bella-upstream-authorization");
+  const apiKey = c.req.header("x-bella-upstream-api-key") || ctx.upstreamApiKey || brandEnv("UPSTREAM_API_KEY") || "";
   const allowNoAuth = ctx.allowUnauthenticatedUpstream || brandEnv("UPSTREAM_ALLOW_NO_AUTH") === "1" || isLoopbackUpstream(parsed);
   if (!explicitAuth && !apiKey && !allowNoAuth) {
     return {
       ok: false,
       status: 502,
-      error: "Missing upstream API key for non-local upstream. Set EUNOIA_UPSTREAM_API_KEY, send x-eunoia-upstream-api-key, or point EUNOIA_UPSTREAM_BASE_URL at a local server.",
+      error: "Missing upstream API key for non-local upstream. Set BELLA_UPSTREAM_API_KEY, send x-bella-upstream-api-key, or point BELLA_UPSTREAM_BASE_URL at a local server.",
       upstreamBase: base,
     };
   }
@@ -484,7 +484,7 @@ async function readStreamDecision(reader: ByteStreamReader, idleMs: number): Pro
 
 function toolResultPayload(queries: string[], results: MemoryResult[], error?: string) {
   return {
-    type: "eunoia_memory_results",
+    type: "bella_memory_results",
     queries,
     ...(error ? { error } : {}),
     results: results.map((r) => ({
@@ -599,14 +599,14 @@ function proxyResponse(
 ) {
   const headers = new Headers();
   headers.set("content-type", contentType || "application/json");
-  headers.set("x-eunoia-trace-id", trace.traceId);
-  headers.set("x-eunoia-conversation-id", trace.traceId);
-  headers.set("x-eunoia-context-modified", String(trace.contextModified));
-  headers.set("x-eunoia-search-results", String(trace.searchResults));
-  headers.set("x-eunoia-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
-  headers.set("x-eunoia-memory-round", String(!!trace.memoryRound));
-  if (trace.toolIntercept) headers.set("x-eunoia-tool-intercept", trace.toolIntercept);
-  if (trace.passthrough) headers.set("x-eunoia-tool-passthrough", "true");
+  headers.set("x-bella-trace-id", trace.traceId);
+  headers.set("x-bella-conversation-id", trace.traceId);
+  headers.set("x-bella-context-modified", String(trace.contextModified));
+  headers.set("x-bella-search-results", String(trace.searchResults));
+  headers.set("x-bella-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
+  headers.set("x-bella-memory-round", String(!!trace.memoryRound));
+  if (trace.toolIntercept) headers.set("x-bella-tool-intercept", trace.toolIntercept);
+  if (trace.passthrough) headers.set("x-bella-tool-passthrough", "true");
   return new Response(body, { status, headers });
 }
 
@@ -625,15 +625,15 @@ function streamTraceHeaders(
   const headers = new Headers();
   headers.set("content-type", contentType || "text/event-stream");
   headers.set("cache-control", "no-cache");
-  headers.set("x-eunoia-trace-id", trace.traceId);
-  headers.set("x-eunoia-conversation-id", trace.traceId);
-  headers.set("x-eunoia-context-modified", String(trace.contextModified));
-  headers.set("x-eunoia-search-results", String(trace.searchResults));
-  headers.set("x-eunoia-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
-  headers.set("x-eunoia-memory-round", String(!!trace.memoryRound));
-  headers.set("x-eunoia-streaming", "true");
-  if (trace.toolIntercept) headers.set("x-eunoia-tool-intercept", trace.toolIntercept);
-  if (trace.passthrough) headers.set("x-eunoia-tool-passthrough", "true");
+  headers.set("x-bella-trace-id", trace.traceId);
+  headers.set("x-bella-conversation-id", trace.traceId);
+  headers.set("x-bella-context-modified", String(trace.contextModified));
+  headers.set("x-bella-search-results", String(trace.searchResults));
+  headers.set("x-bella-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
+  headers.set("x-bella-memory-round", String(!!trace.memoryRound));
+  headers.set("x-bella-streaming", "true");
+  if (trace.toolIntercept) headers.set("x-bella-tool-intercept", trace.toolIntercept);
+  if (trace.passthrough) headers.set("x-bella-tool-passthrough", "true");
   return headers;
 }
 
@@ -751,12 +751,12 @@ export function proxyRoutes(ctx: Ctx) {
     if (!Array.isArray(body.messages)) return c.json({ error: "messages array is required" }, 400);
 
     const userId =
-      c.req.header("x-eunoia-user-id") ||
+      c.req.header("x-bella-user-id") ||
       (typeof body.user === "string" ? body.user : undefined) ||
       new URL(c.req.url).searchParams.get("userId") ||
       undefined;
-    const containerTag = c.req.header("x-eunoia-container-tag") || body.containerTag || DEFAULT_CONTAINER_TAG;
-    delete body.containerTag; // Eunoia routing hint, not an upstream chat-completions parameter.
+    const containerTag = c.req.header("x-bella-container-tag") || body.containerTag || DEFAULT_CONTAINER_TAG;
+    delete body.containerTag; // Bellamente routing hint, not an upstream chat-completions parameter.
     const query = promptText(body);
 
 
@@ -887,7 +887,7 @@ export function proxyRoutes(ctx: Ctx) {
       }),
     ];
 
-    if (c.req.header("x-eunoia-proxy-mode") === "inject-only" || brandEnv("PROXY_INJECT_ONLY") === "1") {
+    if (c.req.header("x-bella-proxy-mode") === "inject-only" || brandEnv("PROXY_INJECT_ONLY") === "1") {
       const latencyMs = Date.now() - started;
       await recordTraceSafe(ctx.sql, {
         id: traceId,

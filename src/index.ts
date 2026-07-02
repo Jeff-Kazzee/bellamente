@@ -55,14 +55,13 @@ function warnIfOverDiskBudget() {
 export function buildApp(ctx: { sql: DB; embed: Embed }) {
   const app = new Hono();
 
-  // The `service` tag is the doctor's authenticity CONTRACT (old binaries check it too) — it stays
-  // "eunoia" through the staged rebrand; `brand` carries the public name (BRAND.md).
-  app.get("/health", (c) => c.json({ ok: true, service: "eunoia", brand: "bellamente" }));
+  // The `service` tag is the doctor's authenticity CONTRACT (doctor checks it before trusting a port).
+  app.get("/health", (c) => c.json({ ok: true, service: "bellamente", brand: "bellamente" }));
   app.route("/", dashboardRoutes()); // the inspect dashboard shell (public HTML; its API calls are still authed)
 
   app.use("*", async (c, next) => {
     if (c.req.path === "/health" || c.req.path === "/") return next(); // defensive: keep public even if reordered
-    if (!EXPECTED_AUTH) return c.json({ error: "BELLA_API_KEY not configured (legacy EUNOIA_API_KEY also works)" }, 500);
+    if (!EXPECTED_AUTH) return c.json({ error: "BELLA_API_KEY not configured" }, 500);
     if (!authOk(c.req.header("authorization") ?? "")) return c.json({ error: "Unauthorized" }, 401);
     await next();
   });
@@ -117,7 +116,7 @@ const isStandalone = import.meta.url.includes("$bunfs") || /%7ebun|~bun/i.test(i
 let served: { port: number; hostname: string; fetch: (req: Request, ...rest: any[]) => Response | Promise<Response> } = {
   port: PORT,
   hostname: HOST,
-  fetch: () => new Response("eunoia: not booted", { status: 503 }),
+  fetch: () => new Response("bellamente: not booted", { status: 503 }),
 };
 if (import.meta.main || isStandalone) {
   const { app, port } = await main();
