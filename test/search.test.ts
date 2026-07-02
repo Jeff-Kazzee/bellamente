@@ -290,3 +290,48 @@ test("hybrid mode ranks keyword-only chunks by RRF rank, not raw similarity", as
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
+
+// --- Codex review follow-ups (PR #79, verdict MERGE-WITH-FOLLOW-UPS) ---
+
+test("RRF tie at limit:1 — the exact keyword hit survives against a tied vector row", async () => {
+  const ctx = await makeCtx();
+  try {
+    // One memory with a HIGH-cosine embedding (same direction as the query embed [1,0,0,0]) and one
+    // keyword-only exact-token memory (orthogonal embedding). Both rank #1 in their leg -> equal RRF
+    // score 1/(K+1). The literal token match is stronger evidence for a token query: it must win the
+    // tie instead of losing to Map insertion order and being sliced off at limit:1.
+    const vecId = "tievec".padEnd(22, "x");
+    const kwId = "tiekw".padEnd(22, "x");
+    await insertMemory(ctx.sql, { id: vecId, memory: "deployment processes are documented", vec: "[1,0,0,0]" });
+    await insertMemory(ctx.sql, { id: kwId, memory: "deploy code XK-42-BETA is live" });
+    const results = await searchMemories(ctx as any, { q: "XK-42-BETA", threshold: 0.5, limit: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.id).toBe(kwId);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("keyword leg respects forget_after expiry (B4 strengthened)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const expiredId = "kwexpired".padEnd(22, "x");
+    await insertMemory(ctx.sql, { id: expiredId, memory: "legacy code XK-42-BETA retired" });
+    await ctx.sql`UPDATE memory_entry SET forget_after = now() - interval '1 hour' WHERE id = ${expiredId}`;
+    const results = await searchMemories(ctx as any, { q: "XK-42-BETA", threshold: 0.5, limit: 10 });
+    // expired-but-unswept memories must not leak through the keyword leg
+    expect(results.some((r) => r.id === expiredId)).toBe(false);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("a query that parses to an empty tsquery degrades to vector-only, never throws", async () => {
+  const ctx = await makeCtx();
+  try {
+    const results = await searchMemories(ctx as any, { q: "&&& |||", threshold: 0, limit: 5 });
+    expect(Array.isArray(results)).toBe(true);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);

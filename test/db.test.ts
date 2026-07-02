@@ -165,3 +165,21 @@ test("concurrent acquirers never double-acquire while a live holder exists", asy
   held();
   rmSync(lockPath, { force: true });
 });
+
+test("migration 003 and schema.sql produce the IDENTICAL index definition (B6 strengthened)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  await runMigrations(sql); // creates schema_migrations + records 1-3 (index already present via schema.sql)
+  const [fresh] = await sql`SELECT indexdef FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  await sql.unsafe("DROP INDEX idx_memory_entry_fulltext");
+  await sql`DELETE FROM schema_migrations WHERE id = 3`;
+  await runMigrations(sql);
+  const [migrated] = await sql`SELECT indexdef FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  // a same-named index with a different expression/method/config in either source would pass a
+  // bare existence check; the definitions themselves must match exactly
+  expect(migrated!.indexdef).toBe(fresh!.indexdef);
+  expect(String(fresh!.indexdef)).toContain("gin");
+  expect(String(fresh!.indexdef)).toContain("to_tsvector('simple'");
+  await sql.end();
+}, 20000);
