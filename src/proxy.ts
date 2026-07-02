@@ -188,37 +188,6 @@ function injectProfileBlock(body: any, block: string) {
   }
 }
 
-function hasMemoryTool(body: any): boolean {
-  return Array.isArray(body.tools) && body.tools.some((t: any) => toolName(t) === MEMORY_TOOL_NAME);
-}
-
-function suppressMemoryToolForStreaming(body: any): { memoryToolSuppressed: boolean; toolChoiceAdjusted: boolean } {
-  let memoryToolSuppressed = false;
-  if (Array.isArray(body.tools)) {
-    const nextTools = body.tools.filter((t: any) => toolName(t) !== MEMORY_TOOL_NAME);
-    memoryToolSuppressed = nextTools.length !== body.tools.length;
-    if (nextTools.length) body.tools = nextTools;
-    else delete body.tools;
-  }
-
-  let toolChoiceAdjusted = false;
-  const choice = body.tool_choice;
-  const forcedName =
-    choice && typeof choice === "object"
-      ? typeof choice?.function?.name === "string"
-        ? choice.function.name
-        : typeof choice?.name === "string"
-          ? choice.name
-          : undefined
-      : undefined;
-  if (forcedName === MEMORY_TOOL_NAME || (body.tool_choice === "required" && !Array.isArray(body.tools))) {
-    body.tool_choice = "none";
-    toolChoiceAdjusted = true;
-  }
-
-  return { memoryToolSuppressed, toolChoiceAdjusted };
-}
-
 type UpstreamConfig =
   | { ok: true; url: string; headers: Headers }
   | { ok: false; error: string; status: number; upstreamBase?: string };
@@ -408,6 +377,111 @@ function firstMemoryToolCalls(upstreamJson: any): { id: string; queries: string[
   return calls;
 }
 
+// Streamed equivalent of firstMemoryToolCalls/externalToolCalls: read the upstream SSE stream just far
+// enough to classify the turn. `function.arguments` arrives as string FRAGMENTS spread across delta
+// chunks (often split mid-JSON), so fragments accumulate per tool-call index and only the concatenated
+// whole is parsed. Every raw chunk read here is kept in `held` so answer/external decisions can replay
+// the bytes to the client unmodified; an "answer" decision returns on the first visible content delta
+// without buffering the rest of the stream.
+type StreamDecision =
+  | { decision: "answer"; held: Uint8Array[] }
+  | { decision: "external_tool"; held: Uint8Array[] }
+  | { decision: "memory_tool"; held: Uint8Array[]; assistantMessage: any; memoryCalls: { id: string; queries: string[] }[] };
+
+// Structural reader type: Bun's getReader() returns a reader with extras (readMany) that the DOM
+// ReadableStreamDefaultReader<Uint8Array> type doesn't unify with under tsc.
+type ByteStreamReader = {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel(reason?: unknown): Promise<unknown> | void;
+};
+
+async function readStreamDecision(reader: ByteStreamReader, idleMs: number): Promise<StreamDecision> {
+  const held: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const calls = new Map<number, { id?: string; name?: string; args: string }>();
+
+  const readChunk = async () => {
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const read = reader.read();
+      read.catch(() => {}); // the race can abandon this promise; don't let its rejection go unhandled
+      return await Promise.race([
+        read,
+        new Promise<never>((_, reject) => {
+          idleTimer = setTimeout(
+            () => reject(new Error(`upstream stream stalled: no data for ${idleMs}ms (BELLA_STREAM_IDLE_TIMEOUT_MS)`)),
+            idleMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+    }
+  };
+
+  let sawFinish = false;
+  reading: while (!sawFinish) {
+    const { done, value } = await readChunk();
+    if (done) break;
+    if (value) {
+      held.push(value);
+      buffer += decoder.decode(value, { stream: true });
+    }
+    let sep: RegExpMatchArray | null;
+    while ((sep = buffer.match(/\r?\n\r?\n/))) {
+      const event = buffer.slice(0, sep.index);
+      buffer = buffer.slice(sep.index! + sep[0].length);
+      const payload = event
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trim())
+        .join("\n");
+      if (!payload) continue;
+      if (payload === "[DONE]") break reading;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      const choice = parsed?.choices?.[0];
+      const delta = choice?.delta;
+      if (Array.isArray(delta?.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const index = typeof tc?.index === "number" ? tc.index : 0;
+          const acc = calls.get(index) ?? { args: "" };
+          if (typeof tc?.id === "string" && tc.id) acc.id = tc.id;
+          if (typeof tc?.function?.name === "string" && tc.function.name) acc.name = tc.function.name;
+          if (typeof tc?.function?.arguments === "string") acc.args += tc.function.arguments;
+          calls.set(index, acc);
+        }
+      }
+      if (!calls.size && typeof delta?.content === "string" && delta.content.length) {
+        return { decision: "answer", held };
+      }
+      if (choice?.finish_reason === "tool_calls") sawFinish = true;
+    }
+  }
+
+  if (!calls.size) return { decision: "answer", held };
+
+  const toolCalls = Array.from(calls.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([, call]) => ({
+      id: call.id || newId(),
+      type: "function",
+      function: { name: call.name ?? "", arguments: call.args },
+    }));
+  if (toolCalls.some((call) => !isMemoryToolCall(call))) return { decision: "external_tool", held };
+  return {
+    decision: "memory_tool",
+    held,
+    assistantMessage: { role: "assistant", content: null, tool_calls: toolCalls },
+    memoryCalls: toolCalls.map((call) => ({ id: call.id, queries: parseToolArgs(call.function.arguments) })),
+  };
+}
+
 function toolResultPayload(queries: string[], results: MemoryResult[], error?: string) {
   return {
     type: "eunoia_memory_results",
@@ -432,6 +506,81 @@ function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
   return Array.from(merged.values())
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, Q.MAX_COMBINED_RESULTS);
+}
+
+// One memory tool round: run the model's searchMemory calls under a shared per-turn query budget and
+// build the role:"tool" result messages. Shared by the buffered and streamed paths so degradation
+// semantics (timeout → empty results, failure → empty results + memory_search_unavailable) stay identical.
+type MemoryToolRound = {
+  toolMessages: any[];
+  allResults: MemoryResult[];
+  usedQueries: string[];
+  toolSearchTimedOut: boolean;
+  toolSearchFailed: boolean;
+  toolSearchError?: string;
+};
+
+async function runMemoryToolRound(
+  ctx: Ctx,
+  calls: { id: string; queries: string[] }[],
+  opts: { userId?: string; containerTag?: string },
+): Promise<MemoryToolRound> {
+  let remainingQueries = MAX_QUERIES_PER_CALL;
+  let toolSearchTimedOut = false;
+  let toolSearchFailed = false;
+  let toolSearchError: string | undefined;
+  const toolMessages: any[] = [];
+  const allResults: MemoryResult[] = [];
+  const usedQueries: string[] = [];
+  for (const call of calls) {
+    const queries = call.queries.slice(0, Math.max(remainingQueries, 0));
+    remainingQueries -= queries.length;
+    usedQueries.push(...queries);
+    let results: MemoryResult[] = [];
+    let failed = false;
+    if (queries.length) {
+      let timedOut = false;
+      const searchPromise = runToolSearch(ctx, queries, { userId: opts.userId, containerTag: opts.containerTag, recordTrace: false }).catch((e) => {
+        if (timedOut) {
+          console.warn("[proxy] memory tool search finished after timeout:", e instanceof Error ? e.message : String(e));
+          return [];
+        }
+        throw e;
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        results = await Promise.race([
+          searchPromise,
+          new Promise<MemoryResult[]>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              toolSearchTimedOut = true;
+              resolve([]);
+            }, Q.SEARCH_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (e) {
+        // Recall failure must not kill a turn the model already answered with a tool call. The model's
+        // response is intact and the timeout path two branches up already proves "continue with empty
+        // results" is safe — reuse it, mark the degradation in the trace, and let the model answer
+        // without memory instead of returning a 500 that discards its work.
+        failed = true;
+        toolSearchFailed = true;
+        toolSearchError = e instanceof Error ? e.message : String(e);
+        console.warn("[proxy] memory tool search failed; continuing with empty results:", toolSearchError);
+        results = [];
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    allResults.push(...results);
+    toolMessages.push({
+      role: "tool",
+      tool_call_id: call.id,
+      content: JSON.stringify(toolResultPayload(queries, results, failed ? "memory_search_unavailable" : undefined)),
+    });
+  }
+  return { toolMessages, allResults, usedQueries, toolSearchTimedOut, toolSearchFailed, ...(toolSearchError ? { toolSearchError } : {}) };
 }
 
 function proxyResponse(
@@ -461,35 +610,43 @@ function proxyResponse(
   return new Response(body, { status, headers });
 }
 
-function proxyStreamResponse(
-  upstreamRes: Response,
+function streamTraceHeaders(
+  contentType: string | null,
   trace: {
     traceId: string;
     contextModified: boolean;
     searchResults: number;
     latencyMs: number;
+    memoryRound?: boolean;
+    toolIntercept?: string;
     passthrough?: boolean;
   },
-  onDone: (info: { chunkCount: number; byteCount: number; error?: string }) => Promise<void>,
 ) {
   const headers = new Headers();
-  headers.set("content-type", upstreamRes.headers.get("content-type") || "text/event-stream");
+  headers.set("content-type", contentType || "text/event-stream");
   headers.set("cache-control", "no-cache");
   headers.set("x-eunoia-trace-id", trace.traceId);
   headers.set("x-eunoia-conversation-id", trace.traceId);
   headers.set("x-eunoia-context-modified", String(trace.contextModified));
   headers.set("x-eunoia-search-results", String(trace.searchResults));
   headers.set("x-eunoia-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
-  headers.set("x-eunoia-memory-round", "false");
+  headers.set("x-eunoia-memory-round", String(!!trace.memoryRound));
   headers.set("x-eunoia-streaming", "true");
+  if (trace.toolIntercept) headers.set("x-eunoia-tool-intercept", trace.toolIntercept);
   if (trace.passthrough) headers.set("x-eunoia-tool-passthrough", "true");
+  return headers;
+}
 
-  if (!upstreamRes.body) {
-    void onDone({ chunkCount: 0, byteCount: 0 });
-    return new Response(null, { status: upstreamRes.status, headers });
-  }
-
-  const reader = upstreamRes.body.getReader();
+// Low-level SSE piping: enqueue `prefix` chunks first (bytes readStreamDecision already consumed from
+// upstream), then pump `reader` until it drains. A null reader means "replay prefix only".
+function pipeStream(
+  reader: ByteStreamReader | null,
+  prefix: Uint8Array[],
+  status: number,
+  headers: Headers,
+  onDone: (info: { chunkCount: number; byteCount: number; error?: string }) => Promise<void>,
+) {
+  const pending = [...prefix];
   let chunkCount = 0;
   let byteCount = 0;
   let finished = false;
@@ -500,6 +657,18 @@ function proxyStreamResponse(
   };
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      if (pending.length) {
+        const value = pending.shift()!;
+        chunkCount += 1;
+        byteCount += value.byteLength;
+        controller.enqueue(value);
+        return;
+      }
+      if (!reader) {
+        await finish();
+        controller.close();
+        return;
+      }
       // Idle timeout per READ, not per stream: the timer only runs while a read is outstanding, so a
       // slow CONSUMER (backpressure, no pull pending) never trips it — only an upstream that goes silent
       // mid-stream does. Without this, a stalled upstream held the response open forever.
@@ -540,14 +709,33 @@ function proxyStreamResponse(
     },
     async cancel(reason) {
       try {
-        await reader.cancel(reason);
+        if (reader) await reader.cancel(reason);
       } finally {
         await finish(reason == null ? "cancelled" : `cancelled: ${String(reason)}`);
       }
     },
   });
 
-  return new Response(body, { status: upstreamRes.status, headers });
+  return new Response(body, { status, headers });
+}
+
+function proxyStreamResponse(
+  upstreamRes: Response,
+  trace: {
+    traceId: string;
+    contextModified: boolean;
+    searchResults: number;
+    latencyMs: number;
+    passthrough?: boolean;
+  },
+  onDone: (info: { chunkCount: number; byteCount: number; error?: string }) => Promise<void>,
+) {
+  const headers = streamTraceHeaders(upstreamRes.headers.get("content-type"), trace);
+  if (!upstreamRes.body) {
+    void onDone({ chunkCount: 0, byteCount: 0 });
+    return new Response(null, { status: upstreamRes.status, headers });
+  }
+  return pipeStream(upstreamRes.body.getReader(), [], upstreamRes.status, headers, onDone);
 }
 
 export function proxyRoutes(ctx: Ctx) {
@@ -680,10 +868,9 @@ export function proxyRoutes(ctx: Ctx) {
       });
     }
 
-    // 2. inject tool unless this is a stream. Streaming gets profile context only until streamed tool reinvocation is wired.
+    // 2. inject tool (buffered and streamed requests both run the memory tool round)
     const streaming = body.stream === true;
-    let toolAlreadyPresent = hasMemoryTool(body);
-    if (!streaming) toolAlreadyPresent = injectMemoryTool(body);
+    const toolAlreadyPresent = injectMemoryTool(body);
 
     // 3. inject profile
     const profile = await loadProfile(ctx.sql, containerTag);
@@ -691,7 +878,7 @@ export function proxyRoutes(ctx: Ctx) {
     injectProfileBlock(body, block);
 
     const contextInjected = [
-      ...(!streaming && !toolAlreadyPresent
+      ...(!toolAlreadyPresent
         ? [traceTextItem("tool", MEMORY_TOOL_DESCRIPTION, { id: MEMORY_TOOL_NAME, name: MEMORY_TOOL_NAME })]
         : []),
       traceTextItem("profile", block.trim(), {
@@ -724,7 +911,6 @@ export function proxyRoutes(ctx: Ctx) {
     }
 
     if (streaming) {
-      const { memoryToolSuppressed, toolChoiceAdjusted } = suppressMemoryToolForStreaming(body);
       const upstream = upstreamConfig(c, ctx);
       if (!upstream.ok) {
         const latencyMs = Date.now() - started;
@@ -739,7 +925,7 @@ export function proxyRoutes(ctx: Ctx) {
           injectedCount: contextInjected.length,
           injected: contextInjected,
           request: requestSummary(body),
-          metadata: { error: upstream.error, upstreamBase: upstream.upstreamBase, streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+          metadata: { error: upstream.error, upstreamBase: upstream.upstreamBase, streaming: true, toolAlreadyPresent },
         });
         return proxyResponse(JSON.stringify({ error: upstream.error, traceId }), upstream.status, "application/json", {
           traceId,
@@ -776,7 +962,7 @@ export function proxyRoutes(ctx: Ctx) {
           injectedCount: contextInjected.length,
           injected: contextInjected,
           request: requestSummary(body),
-          metadata: { error: upstreamError ?? "upstream exchange failed", streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+          metadata: { error: upstreamError ?? "upstream exchange failed", streaming: true, toolAlreadyPresent },
         });
         return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
           traceId,
@@ -786,7 +972,8 @@ export function proxyRoutes(ctx: Ctx) {
         });
       }
 
-      if (!upstreamRes.ok) {
+      const firstRes = upstreamRes;
+      if (!firstRes.ok) {
         const latencyMs = Date.now() - started;
         await recordTraceSafe(ctx.sql, {
           id: traceId,
@@ -799,9 +986,9 @@ export function proxyRoutes(ctx: Ctx) {
           injectedCount: contextInjected.length,
           injected: contextInjected,
           request: requestSummary(body),
-          metadata: { upstreamStatus: upstreamRes.status, streaming: true, memoryToolSuppressed, toolChoiceAdjusted },
+          metadata: { upstreamStatus: firstRes.status, streaming: true, toolAlreadyPresent },
         });
-        return proxyResponse(errorBody?.text ?? "", upstreamRes.status, upstreamRes.headers.get("content-type"), {
+        return proxyResponse(errorBody?.text ?? "", firstRes.status, firstRes.headers.get("content-type"), {
           traceId,
           contextModified: true,
           searchResults: 0,
@@ -809,16 +996,23 @@ export function proxyRoutes(ctx: Ctx) {
         });
       }
 
-      const initialLatencyMs = Date.now() - started;
-      return proxyStreamResponse(
-        upstreamRes,
-        { traceId, contextModified: true, searchResults: 0, latencyMs: initialLatencyMs },
-        async ({ chunkCount, byteCount, error }) => {
+      // Classify the stream before piping anything to the client: plain answer, external tool call,
+      // or a searchMemory call that needs a second upstream round.
+      const firstReader = firstRes.body ? firstRes.body.getReader() : null;
+      let decision: StreamDecision = { decision: "answer", held: [] };
+      if (firstReader) {
+        try {
+          decision = await readStreamDecision(firstReader, streamIdleTimeoutMs());
+        } catch (e) {
+          try {
+            await firstReader.cancel(e); // release the upstream connection on stall/error
+          } catch {}
+          const error = e instanceof Error ? e.message : String(e);
           const latencyMs = Date.now() - started;
           await recordTraceSafe(ctx.sql, {
             id: traceId,
             kind: "proxy",
-            status: error ? "stream_error" : "streamed",
+            status: "stream_error",
             userId,
             containerTag,
             query,
@@ -829,17 +1023,191 @@ export function proxyRoutes(ctx: Ctx) {
             metadata: {
               streaming: true,
               memoryRound: false,
-              upstreamStatus: upstreamRes.status,
+              upstreamStatus: firstRes.status,
               toolAlreadyPresent,
               contextInjectedCount: contextInjected.length,
-              memoryToolSuppressed,
-              toolChoiceAdjusted,
+              error,
+            },
+          });
+          return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
+            traceId,
+            contextModified: true,
+            searchResults: 0,
+            latencyMs,
+          });
+        }
+      }
+
+      if (decision.decision !== "memory_tool") {
+        // answer → replay what classification consumed, then pipe the rest live. external tool call →
+        // same replay; the client owns that tool round (mirrors the buffered external passthrough).
+        const externalTool = decision.decision === "external_tool";
+        const initialLatencyMs = Date.now() - started;
+        const headers = streamTraceHeaders(firstRes.headers.get("content-type"), {
+          traceId,
+          contextModified: true,
+          searchResults: 0,
+          latencyMs: initialLatencyMs,
+        });
+        return pipeStream(firstReader, decision.held, firstRes.status, headers, async ({ chunkCount, byteCount, error }) => {
+          const latencyMs = Date.now() - started;
+          await recordTraceSafe(ctx.sql, {
+            id: traceId,
+            kind: "proxy",
+            status: error ? "stream_error" : externalTool ? "upstream_tool_calls" : "streamed",
+            userId,
+            containerTag,
+            query,
+            latencyMs,
+            injectedCount: contextInjected.length,
+            injected: contextInjected,
+            request: requestSummary(body),
+            metadata: {
+              streaming: true,
+              memoryRound: false,
+              upstreamStatus: firstRes.status,
+              toolAlreadyPresent,
+              contextInjectedCount: contextInjected.length,
               chunkCount,
               byteCount,
               ...(error ? { error } : {}),
             },
           });
-          // Auto-capture after a clean stream completes (fire-and-forget; see src/capture.ts).
+          // Auto-capture after a clean answer stream completes (fire-and-forget; see src/capture.ts).
+          if (!error && !externalTool) {
+            void captureFromTurn(ctx, { messages: body.messages, containerTag, userId, proxyTraceId: traceId });
+          }
+        });
+      }
+
+      // Memory tool round: the held tool-call chunks never reach the client — run the searches, ask
+      // upstream again with the results appended, and stream ONLY the second response.
+      try {
+        await firstReader!.cancel(); // memory_tool implies a reader existed; drop the rest of stream one
+      } catch {}
+      const round = await runMemoryToolRound(ctx, decision.memoryCalls, { userId, containerTag });
+      const finalResults = topMemoryResults(round.allResults);
+      const traceItems = traceItemsFromSearchResults(finalResults);
+      const finalRequest = {
+        ...body,
+        messages: [...body.messages, decision.assistantMessage, ...round.toolMessages],
+        tool_choice: "none",
+      };
+
+      const secondDeadline = upstreamDeadline(upstreamTimeoutMs());
+      let secondRes: Response | null = null;
+      let secondErrorBody: { text: string; json: any } | null = null;
+      let secondError: string | null = null;
+      try {
+        secondRes = await forwardUpstream(fetcher, upstream, finalRequest, secondDeadline.signal);
+        if (!secondRes.ok) secondErrorBody = await readUpstreamBody(secondRes);
+        else secondDeadline.clear(); // headers are in; the per-read idle timeout owns the stream from here
+      } catch (e) {
+        secondError = upstreamErrorMessage(e);
+      } finally {
+        secondDeadline.clear();
+      }
+
+      if (secondError !== null || !secondRes || !secondRes.ok) {
+        const latencyMs = Date.now() - started;
+        await recordTraceSafe(ctx.sql, {
+          id: traceId,
+          kind: "proxy",
+          status: "upstream_error",
+          userId,
+          containerTag,
+          query,
+          queries: round.usedQueries,
+          searchMode: "memories",
+          resultCount: finalResults.length,
+          injectedCount: finalResults.length,
+          latencyMs,
+          retrieved: traceItems,
+          injected: traceItems,
+          request: requestSummary(finalRequest),
+          metadata: {
+            streaming: true,
+            memoryRound: true,
+            toolAlreadyPresent,
+            toolCallCount: round.toolMessages.length,
+            firstUpstreamStatus: firstRes.status,
+            contextInjectedCount: contextInjected.length,
+            toolSearchTimedOut: round.toolSearchTimedOut,
+            toolSearchFailed: round.toolSearchFailed,
+            ...(round.toolSearchError ? { toolSearchError: round.toolSearchError } : {}),
+            ...(secondRes ? { upstreamStatus: secondRes.status } : {}),
+            ...(secondError ? { error: secondError } : {}),
+          },
+        });
+        if (secondRes && !secondRes.ok) {
+          return proxyResponse(secondErrorBody?.text ?? "", secondRes.status, secondRes.headers.get("content-type"), {
+            traceId,
+            contextModified: true,
+            searchResults: finalResults.length,
+            latencyMs,
+            toolIntercept: MEMORY_TOOL_NAME,
+            memoryRound: true,
+          });
+        }
+        return proxyResponse(JSON.stringify({ error: "Upstream request failed", traceId }), 502, "application/json", {
+          traceId,
+          contextModified: true,
+          searchResults: finalResults.length,
+          latencyMs,
+          toolIntercept: MEMORY_TOOL_NAME,
+          memoryRound: true,
+        });
+      }
+
+      const finalStreamRes = secondRes;
+      const initialLatencyMs = Date.now() - started;
+      const headers = streamTraceHeaders(finalStreamRes.headers.get("content-type"), {
+        traceId,
+        contextModified: true,
+        searchResults: finalResults.length,
+        latencyMs: initialLatencyMs,
+        memoryRound: true,
+        toolIntercept: MEMORY_TOOL_NAME,
+      });
+      return pipeStream(
+        finalStreamRes.body ? finalStreamRes.body.getReader() : null,
+        [],
+        finalStreamRes.status,
+        headers,
+        async ({ chunkCount, byteCount, error }) => {
+          const latencyMs = Date.now() - started;
+          await recordTraceSafe(ctx.sql, {
+            id: traceId,
+            kind: "proxy",
+            status: error ? "stream_error" : "streamed",
+            userId,
+            containerTag,
+            query,
+            queries: round.usedQueries,
+            searchMode: "memories",
+            resultCount: finalResults.length,
+            injectedCount: finalResults.length,
+            latencyMs,
+            retrieved: traceItems,
+            injected: traceItems,
+            request: requestSummary(finalRequest),
+            metadata: {
+              streaming: true,
+              memoryRound: true,
+              toolAlreadyPresent,
+              toolCallCount: round.toolMessages.length,
+              upstreamStatus: finalStreamRes.status,
+              firstUpstreamStatus: firstRes.status,
+              contextInjectedCount: contextInjected.length,
+              toolSearchTimedOut: round.toolSearchTimedOut,
+              toolSearchFailed: round.toolSearchFailed,
+              ...(round.toolSearchError ? { toolSearchError: round.toolSearchError } : {}),
+              chunkCount,
+              byteCount,
+              ...(error ? { error } : {}),
+            },
+          });
+          // Auto-capture after the memory-grounded answer stream completes cleanly (see src/capture.ts).
           if (!error) {
             void captureFromTurn(ctx, { messages: body.messages, containerTag, userId, proxyTraceId: traceId });
           }
@@ -977,63 +1345,9 @@ export function proxyRoutes(ctx: Ctx) {
       });
     }
 
-    let remainingQueries = MAX_QUERIES_PER_CALL;
-    let toolSearchTimedOut = false;
-    let toolSearchFailed = false;
-    let toolSearchError: string | undefined;
-    const toolMessages: any[] = [];
-    const allResults: MemoryResult[] = [];
-    const usedQueries: string[] = [];
-    for (const call of toolCalls) {
-      const queries = call.queries.slice(0, Math.max(remainingQueries, 0));
-      remainingQueries -= queries.length;
-      usedQueries.push(...queries);
-      let results: MemoryResult[] = [];
-      let failed = false;
-      if (queries.length) {
-        let timedOut = false;
-        const searchPromise = runToolSearch(ctx, queries, { userId, containerTag, recordTrace: false }).catch((e) => {
-          if (timedOut) {
-            console.warn("[proxy] memory tool search finished after timeout:", e instanceof Error ? e.message : String(e));
-            return [];
-          }
-          throw e;
-        });
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          results = await Promise.race([
-            searchPromise,
-            new Promise<MemoryResult[]>((resolve) => {
-              timer = setTimeout(() => {
-                timedOut = true;
-                toolSearchTimedOut = true;
-                resolve([]);
-              }, Q.SEARCH_TIMEOUT_MS);
-            }),
-          ]);
-        } catch (e) {
-          // Recall failure must not kill a turn the model already answered with a tool call. The model's
-          // response is intact and the timeout path two branches up already proves "continue with empty
-          // results" is safe — reuse it, mark the degradation in the trace, and let the model answer
-          // without memory instead of returning a 500 that discards its work.
-          failed = true;
-          toolSearchFailed = true;
-          toolSearchError = e instanceof Error ? e.message : String(e);
-          console.warn("[proxy] memory tool search failed; continuing with empty results:", toolSearchError);
-          results = [];
-        } finally {
-          if (timer) clearTimeout(timer);
-        }
-      }
-      allResults.push(...results);
-      toolMessages.push({
-        role: "tool",
-        tool_call_id: call.id,
-        content: JSON.stringify(toolResultPayload(queries, results, failed ? "memory_search_unavailable" : undefined)),
-      });
-    }
-
-    const finalResults = topMemoryResults(allResults);
+    const round = await runMemoryToolRound(ctx, toolCalls, { userId, containerTag });
+    const { toolMessages, usedQueries, toolSearchTimedOut, toolSearchFailed, toolSearchError } = round;
+    const finalResults = topMemoryResults(round.allResults);
     const traceItems = traceItemsFromSearchResults(finalResults);
 
     const finalRequest = {
