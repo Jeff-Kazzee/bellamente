@@ -175,11 +175,14 @@ test("POST /search: a slow search resolves EMPTY at the deadline with a 200 and 
 // so cosine similarity is 0.0 and ONLY the keyword leg can find them.
 async function insertMemory(
   sql: Sql,
-  m: { id: string; memory: string; vec?: string; isLatest?: boolean; isForgotten?: boolean; space?: string; createdAt?: string },
+  m: {
+    id: string; memory: string; vec?: string; isLatest?: boolean; isForgotten?: boolean; space?: string; createdAt?: string;
+    root?: string; version?: number; validFrom?: string | null; validTo?: string | null;
+  },
 ) {
   await sql`
-    INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, is_forgotten, version, root_memory_id, memory_embedding, memory_embedding_model, created_at)
-    VALUES (${m.id}, ${ORG_ID}, ${m.space ?? spaceId}, ${m.memory}, ${m.isLatest ?? true}, ${m.isForgotten ?? false}, 1, ${m.id}, ${m.vec ?? "[0,1,0,0]"}::vector, ${"test-embed"}, COALESCE(${m.createdAt ?? null}::timestamp, now()))`;
+    INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, is_forgotten, version, root_memory_id, memory_embedding, memory_embedding_model, created_at, valid_from, valid_to)
+    VALUES (${m.id}, ${ORG_ID}, ${m.space ?? spaceId}, ${m.memory}, ${m.isLatest ?? true}, ${m.isForgotten ?? false}, ${m.version ?? 1}, ${m.root ?? m.id}, ${m.vec ?? "[0,1,0,0]"}::vector, ${"test-embed"}, COALESCE(${m.createdAt ?? null}::timestamp, now()), ${m.validFrom ?? null}::timestamptz, ${m.validTo ?? null}::timestamptz)`;
 }
 
 test("searchMemories finds a rare literal token by keyword when its embedding is orthogonal to the query (B1)", async () => {
@@ -575,6 +578,245 @@ test("hybrid fusion tie-break is deterministic: memories (the primary object) wi
     const results = await search(ctx as any, { q: "alpha", threshold: 0.5, limit: 2, searchMode: "hybrid" });
     expect(results[0]!.type).toBe("memory");
     expect(results[0]!.id).toBe(memIds[0]);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// --- SPEC-P1.8: temporal validity — asOf returns what was believed AT an instant (issue #40) ---
+// Fixture chains carry explicit windows (read-side cases per the spec); the real-write tx stamping
+// is proven in test/memories.test.ts. Window shape: v1 [NULL, T1) -> v2 [T1, T2) -> v3 [T2, NULL).
+const T1 = "2026-01-10T00:00:00.000Z";
+const T2 = "2026-02-10T00:00:00.000Z";
+const ASOF_MID = "2026-01-25T00:00:00.000Z"; // strictly inside v2's window
+
+// Chain A: query-matching embeddings (vector leg), no token overlap with its queries.
+const vaIds = ["va1".padEnd(22, "x"), "va2".padEnd(22, "x"), "va3".padEnd(22, "x")];
+// Chain K: orthogonal embeddings, all versions carry a rare literal token (keyword leg ONLY).
+const kvIds = ["kv1".padEnd(22, "x"), "kv2".padEnd(22, "x"), "kv3".padEnd(22, "x")];
+
+async function seedTemporalChains(sql: Sql) {
+  const windows = [
+    { isLatest: false, version: 1, validFrom: null as string | null, validTo: T1 as string | null },
+    { isLatest: false, version: 2, validFrom: T1, validTo: T2 },
+    { isLatest: true, version: 3, validFrom: T2, validTo: null },
+  ];
+  for (let i = 0; i < 3; i++) {
+    await insertMemory(sql, {
+      id: vaIds[i]!, root: vaIds[0]!, memory: `commute mode fact revision ${i + 1}`,
+      vec: "[1,0,0,0]", ...windows[i]!,
+    });
+    await insertMemory(sql, {
+      id: kvIds[i]!, root: kvIds[0]!, memory: `deploy TVX-77-GAMMA state revision ${i + 1}`,
+      vec: "[0,1,0,0]", ...windows[i]!,
+    });
+  }
+}
+
+test("default search (no asOf) returns ONLY the latest version of a twice-superseded chain (P1.8 B1)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const results = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10 });
+    const ids = results.map((r) => r.id);
+    expect(ids).toContain(vaIds[2]!);
+    expect(ids).not.toContain(vaIds[0]!);
+    expect(ids).not.toContain(vaIds[1]!);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("asOf between v1 and v3 returns the MIDDLE version — not latest, not v1 (P1.8 B2, vector leg)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const mid = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID } as SearchOpts);
+    const midIds = mid.map((r) => r.id);
+    expect(midIds).toContain(vaIds[1]!);
+    expect(midIds).not.toContain(vaIds[0]!);
+    expect(midIds).not.toContain(vaIds[2]!);
+    // Before every stamped window: v1's NULL valid_from means "valid since creation".
+    const early = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: "2025-12-01T00:00:00.000Z" } as SearchOpts);
+    const earlyIds = early.map((r) => r.id);
+    expect(earlyIds).toContain(vaIds[0]!);
+    expect(earlyIds).not.toContain(vaIds[1]!);
+    expect(earlyIds).not.toContain(vaIds[2]!);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("the boundary instant belongs to the NEWER version: valid_to exclusive, valid_from inclusive (P1.8 B2)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const atFlip = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: T2 } as SearchOpts);
+    const ids = atFlip.map((r) => r.id);
+    expect(ids).toContain(vaIds[2]!);
+    expect(ids).not.toContain(vaIds[1]!);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("asOf filters the KEYWORD leg identically — a superseded version is reachable by literal token (P1.8 B2)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    // Orthogonal embeddings: only the keyword leg can find these. asOf must be spliced into BOTH legs.
+    const mid = await searchMemories(ctx as any, { q: "TVX-77-GAMMA", threshold: 0.5, limit: 10, asOf: ASOF_MID } as SearchOpts);
+    const midIds = mid.map((r) => r.id);
+    expect(midIds).toContain(kvIds[1]!);
+    expect(midIds).not.toContain(kvIds[0]!);
+    expect(midIds).not.toContain(kvIds[2]!);
+    // Default (no asOf) keyword search stays latest-only.
+    const noAsOf = await searchMemories(ctx as any, { q: "TVX-77-GAMMA", threshold: 0.5, limit: 10 });
+    const defIds = noAsOf.map((r) => r.id);
+    expect(defIds).toContain(kvIds[2]!);
+    expect(defIds).not.toContain(kvIds[1]!);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("pre-migration rows (NULL windows) are valid for ANY asOf; default search still excludes non-latest (P1.8 B4)", async () => {
+  const ctx = await makeCtx();
+  try {
+    // A legacy superseded row: is_latest=false, both windows NULL (never stamped).
+    const legacyId = "lgcy".padEnd(22, "x");
+    await insertMemory(ctx.sql, { id: legacyId, memory: "legacy commute mode fact", vec: "[1,0,0,0]", isLatest: false });
+    const anyAsOf = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID } as SearchOpts);
+    expect(anyAsOf.map((r) => r.id)).toContain(legacyId);
+    const noAsOf = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10 });
+    expect(noAsOf.map((r) => r.id)).not.toContain(legacyId);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("POST /search: invalid asOf is a 400 with a clear error; valid asOf filters and lands in the trace request (P1.8 B3)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const app = new Hono();
+    app.route("/search", searchRoutes(ctx as any));
+
+    const bad = await app.request("/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "commute mode", asOf: "not-a-date" }),
+    });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toContain("asOf");
+
+    const res = await app.request("/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const ids = body.results.map((r: any) => r.id);
+    expect(ids).toContain(vaIds[1]!);
+    expect(ids).not.toContain(vaIds[2]!);
+    // The asOf that shaped this result set is on the receipt, like diversify/recency.
+    const [trace] = await ctx.sql`SELECT request FROM recall_trace WHERE id = ${body.traceId}`;
+    expect(trace!.request?.asOf).toBe(ASOF_MID);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// --- PR #89 review hardening (solo reviewer + thermonuclear panel, 2026-07-03) ---
+
+test("asOf gate rejects ambiguous or PG-unrepresentable instants; honors offsets and plain dates (review M1/S1)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const app = new Hono();
+    app.route("/search", searchRoutes(ctx as any));
+    const post = (asOf: string) => app.request("/search", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "commute mode", threshold: 0.5, limit: 10, asOf }),
+    });
+    // Timezone-less date-times resolve in the SERVER's zone (deployment-dependent meaning) and
+    // parseable-but-unrepresentable dates crashed the ::timestamptz cast as a 500 — ALL must 400 now.
+    for (const bad of ["2026-01-25T00:00:00", "2026-01-25T00:00", "07/03/2026", "2026", "12345", "+010000-01-01T00:00:00Z", "0000-01-01T00:00:00Z", "+275760-09-13T00:00:00Z"]) {
+      const res = await post(bad);
+      expect([bad, res.status]).toEqual([bad, 400]);
+      expect((await res.json()).error).toContain("asOf");
+    }
+    // Unambiguous forms pass and mean the right instant: date-only = UTC midnight (ECMA-262),
+    // explicit offsets are honored (05:00+05:00 == 00:00Z, inside v2's window).
+    for (const good of ["2026-01-25", "2026-01-25T05:00:00+05:00", "2026-01-25T00:00:00.000Z"]) {
+      const res = await post(good);
+      expect([good, res.status]).toEqual([good, 200]);
+      const ids = (await res.json()).results.map((r: any) => r.id);
+      expect(ids).toContain(vaIds[1]!);
+      expect(ids).not.toContain(vaIds[2]!);
+    }
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("keyword:false + asOf: the pure-vector path carries the same validity filter (review S3)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const mid = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, keyword: false, asOf: ASOF_MID } as SearchOpts);
+    const ids = mid.map((r) => r.id);
+    expect(ids).toContain(vaIds[1]!);
+    expect(ids).not.toContain(vaIds[0]!);
+    expect(ids).not.toContain(vaIds[2]!);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("asOf composes with containerTag isolation and the forgotten filter (review pins)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const otherSpace = "os".padEnd(22, "x");
+    const otherMid = "om".padEnd(22, "x");
+    const fgId = "fg".padEnd(22, "x");
+    await ctx.sql`INSERT INTO space (id, container_tag, org_id) VALUES (${otherSpace}, ${"asof_other"}, ${ORG_ID})`;
+    await insertMemory(ctx.sql, { id: otherMid, memory: "other-space commute mode fact", vec: "[1,0,0,0]", space: otherSpace, isLatest: false, validFrom: T1, validTo: T2 });
+    await insertMemory(ctx.sql, { id: fgId, memory: "forgotten commute mode fact", vec: "[1,0,0,0]", isForgotten: true, isLatest: false, validFrom: T1, validTo: T2 });
+    // Tag isolation: a time-travel query from one container must never see another container's history.
+    const mine = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID, containerTag: DEFAULT_CONTAINER_TAG } as SearchOpts);
+    expect(mine.map((r) => r.id)).toContain(vaIds[1]!);
+    expect(mine.map((r) => r.id)).not.toContain(otherMid);
+    expect(mine.map((r) => r.id)).not.toContain(fgId);
+    const theirs = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID, containerTag: "asof_other" } as SearchOpts);
+    expect(theirs.map((r) => r.id)).toContain(otherMid);
+    expect(theirs.map((r) => r.id)).not.toContain(vaIds[1]!);
+    // Forgetting is a present-time privacy contract: a forgotten fact stays hidden even for a past
+    // asOf that its window covers — unless the caller explicitly asks for forgotten memories.
+    const withForgotten = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID, include: { forgottenMemories: true } } as SearchOpts);
+    expect(withForgotten.map((r) => r.id)).toContain(fgId);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("a FAILED search's trace still records the request, including asOf (review gap finding)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const failingEmbed: Embed = async () => { throw new Error("embedder offline"); };
+    const app = new Hono();
+    app.route("/search", searchRoutes({ sql: ctx.sql, embed: failingEmbed }));
+    const res = await app.request("/search", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "commute mode", asOf: ASOF_MID, limit: 7 }),
+    });
+    expect(res.status).toBe(500);
+    const [trace] = await ctx.sql`SELECT request FROM recall_trace WHERE kind = 'search' AND status = 'error'`;
+    // The receipt for a failure must show WHAT was asked — that is the whole inspect-and-trust story.
+    expect(trace!.request?.asOf).toBe(ASOF_MID);
+    expect(Number(trace!.request?.limit)).toBe(7);
   } finally {
     await ctx.close();
   }

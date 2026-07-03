@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS memory_entry (
   created_at timestamp NOT NULL DEFAULT now(),
   updated_at timestamp NOT NULL DEFAULT now(),
   memory_embedding vector(384),
-  memory_embedding_model text
+  memory_embedding_model text,
+  valid_from timestamptz,
+  valid_to timestamptz
 );
 
 CREATE TABLE IF NOT EXISTS memory_document_source (

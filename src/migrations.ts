@@ -59,6 +59,18 @@ export const MIGRATIONS: Migration[] = [
         ON memory_entry USING gin (to_tsvector('simple', memory));
     `,
   },
+  {
+    id: 4,
+    name: "temporal-validity-windows",
+    // "What was true when" (SPEC-P1.8, issue #40): version chains preserve superseded facts but carried
+    // no validity WINDOW. Nullable timestamptz pair; NULL bound = open-ended, so pre-migration rows are
+    // valid for ANY asOf (no backfill). Stamped by the two version-flip sites in memories.ts; filtered
+    // by search's asOf option.
+    up: `
+      ALTER TABLE memory_entry ADD COLUMN IF NOT EXISTS valid_from timestamptz;
+      ALTER TABLE memory_entry ADD COLUMN IF NOT EXISTS valid_to timestamptz;
+    `,
+  },
 ];
 
 /** Apply every migration not yet recorded in schema_migrations, in id order. Returns applied ids.
