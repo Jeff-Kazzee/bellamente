@@ -54,6 +54,14 @@ Latest checked deterministic run (`seed=20260702`, 110 queries): memories R@1/R@
 `84.1%/100.0%/0.920`, documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, ANN loss@10
 `0.0%`.
 
+## Your memory is a file
+
+`curl localhost:8080/export > bellamente-backup.json` — chains, validity windows, forgotten flags,
+profiles, and documents in one portable JSON. Restore anywhere with
+`curl -X POST localhost:8080/import -H 'content-type: application/json' -d @bellamente-backup.json`;
+embeddings regenerate locally on the way in, so the same file works across machines and embedder
+tiers. Re-importing is a safe no-op.
+
 ## Auto-capture: it remembers for you
 
 After each answered chat turn, Bellamente conservatively captures durable first-person facts

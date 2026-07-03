@@ -8,6 +8,7 @@ import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
 import { inspectRoutes } from "./inspect";
+import { exportRoutes, importRoutes } from "./export";
 import { dashboardRoutes } from "./dashboard";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
 import { brandEnv } from "./env";
@@ -63,6 +64,8 @@ export function buildApp(ctx: { sql: DB; embed: Embed }, auth: AuthConfig = reso
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
   app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+  app.route("/export", exportRoutes(ctx)); // portability: your memory is a file you can take anywhere (SPEC-P1.9)
+  app.route("/import", importRoutes(ctx));
   app.route("/v1", proxyRoutes(ctx));
 
   return app;
