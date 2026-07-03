@@ -53,5 +53,7 @@ description: Every BELLA_* environment variable. All of them optional — zero c
 | `BELLA_TRACE_RETENTION` | `1000` | How many recall/proxy traces to keep (`0` = never prune). |
 | `BELLA_SUPERSEDE_THRESHOLD` | engine-aware | Cosine floor for supersede-on-write. |
 | `SEARCH_THRESHOLD` | per-model | Recall similarity floor. |
+| `BELLA_RECENCY_WEIGHT` | `0.15` | How much freshness matters in memory ranking (`0` = pure relevance; max `1`). An infinitely old memory keeps `1 − weight` of its relevance — decayed, never buried. |
+| `BELLA_RECENCY_TAU_DAYS` | `90` | The freshness half-life-ish time scale: how fast a memory's recency boost fades. |
 
 Run `bella doctor` any time — it verifies the DB, model, ports, and disk against your config.

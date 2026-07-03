@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { search, searchChunks, searchMemories, searchRoutes, Q } from "../src/search";
+import { search, searchChunks, searchMemories, searchRoutes, recencyWeight, recencyTauDays, Q } from "../src/search";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
 
@@ -175,11 +175,11 @@ test("POST /search: a slow search resolves EMPTY at the deadline with a 200 and 
 // so cosine similarity is 0.0 and ONLY the keyword leg can find them.
 async function insertMemory(
   sql: Sql,
-  m: { id: string; memory: string; vec?: string; isLatest?: boolean; isForgotten?: boolean; space?: string },
+  m: { id: string; memory: string; vec?: string; isLatest?: boolean; isForgotten?: boolean; space?: string; createdAt?: string },
 ) {
   await sql`
-    INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, is_forgotten, version, root_memory_id, memory_embedding, memory_embedding_model)
-    VALUES (${m.id}, ${ORG_ID}, ${m.space ?? spaceId}, ${m.memory}, ${m.isLatest ?? true}, ${m.isForgotten ?? false}, 1, ${m.id}, ${m.vec ?? "[0,1,0,0]"}::vector, ${"test-embed"})`;
+    INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, is_forgotten, version, root_memory_id, memory_embedding, memory_embedding_model, created_at)
+    VALUES (${m.id}, ${ORG_ID}, ${m.space ?? spaceId}, ${m.memory}, ${m.isLatest ?? true}, ${m.isForgotten ?? false}, 1, ${m.id}, ${m.vec ?? "[0,1,0,0]"}::vector, ${"test-embed"}, COALESCE(${m.createdAt ?? null}::timestamp, now()))`;
 }
 
 test("searchMemories finds a rare literal token by keyword when its embedding is orthogonal to the query (B1)", async () => {
@@ -331,6 +331,104 @@ test("a query that parses to an empty tsquery degrades to vector-only, never thr
   try {
     const results = await searchMemories(ctx as any, { q: "&&& |||", threshold: 0, limit: 5 });
     expect(Array.isArray(results)).toBe(true);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// --- SPEC P1.2 (issue #36): recency/time-decay ranking (B1-B4) ---
+// Fixtures avoid the query's tokens in memory text so the keyword leg stays empty and only
+// vector rank + recency decay determine ordering. Query embeds to [1,0,0,0] (fake embed).
+
+// Isolated space: the shared seed's m1 (sim 1.0, created now) would win any mixed-fixture race.
+const REC_SPACE = "recspace".padEnd(22, "x");
+const REC_TAG = "recency_test";
+const OLD_EXACT = { id: "recold".padEnd(22, "x"), memory: "prefers dark backgrounds everywhere", vec: "[1,0,0,0]", space: REC_SPACE }; // sim 1.0
+const FRESH_NEAR = { id: "recfresh".padEnd(22, "x"), memory: "prefers light backgrounds lately", vec: "[0.9,0.43589,0,0]", space: REC_SPACE }; // sim 0.9
+const AGO_180D = new Date(Date.now() - 180 * 864e5).toISOString();
+async function seedRecencySpace(sql: Sql) {
+  await sql`INSERT INTO space (id, container_tag, org_id) VALUES (${REC_SPACE}, ${REC_TAG}, ${ORG_ID}) ON CONFLICT (container_tag, org_id) DO NOTHING`;
+}
+
+test("recency default: an older exact-topic memory loses to a fresher near-topic memory (B1)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedRecencySpace(ctx.sql);
+    await insertMemory(ctx.sql, { ...OLD_EXACT, createdAt: AGO_180D });
+    await insertMemory(ctx.sql, { ...FRESH_NEAR });
+    const results = await searchMemories(ctx as any, { q: "which theme", threshold: 0.5, limit: 5, containerTag: REC_TAG });
+    expect(results[0]!.id).toBe(FRESH_NEAR.id);
+    expect(results.map((r) => r.id)).toContain(OLD_EXACT.id); // decayed, not dropped
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("recency off (opts.recency:false): the older exact-topic memory wins again (B2)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedRecencySpace(ctx.sql);
+    await insertMemory(ctx.sql, { ...OLD_EXACT, createdAt: AGO_180D });
+    await insertMemory(ctx.sql, { ...FRESH_NEAR });
+    const results = await searchMemories(ctx as any, { q: "which theme", threshold: 0.5, limit: 5, containerTag: REC_TAG, recency: false });
+    expect(results[0]!.id).toBe(OLD_EXACT.id);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("recency env knobs are read PER CALL: weight 0 disables, then default resumes (B3)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedRecencySpace(ctx.sql);
+    await insertMemory(ctx.sql, { ...OLD_EXACT, createdAt: AGO_180D });
+    await insertMemory(ctx.sql, { ...FRESH_NEAR });
+    process.env.BELLA_RECENCY_WEIGHT = "0";
+    const off = await searchMemories(ctx as any, { q: "which theme", threshold: 0.5, limit: 5, containerTag: REC_TAG });
+    expect(off[0]!.id).toBe(OLD_EXACT.id); // env-disabled without rebuilding anything
+    delete process.env.BELLA_RECENCY_WEIGHT;
+    const on = await searchMemories(ctx as any, { q: "which theme", threshold: 0.5, limit: 5, containerTag: REC_TAG });
+    expect(on[0]!.id).toBe(FRESH_NEAR.id); // default weight resumes on the very next call
+  } finally {
+    delete process.env.BELLA_RECENCY_WEIGHT;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("recency knob semantics: invalid falls back to defaults, out-of-range clamps (B4)", async () => {
+  try {
+    delete process.env.BELLA_RECENCY_WEIGHT;
+    delete process.env.BELLA_RECENCY_TAU_DAYS;
+    expect(recencyWeight()).toBe(0.15); // documented default
+    expect(recencyTauDays()).toBe(90);
+    process.env.BELLA_RECENCY_WEIGHT = "banana";
+    expect(recencyWeight()).toBe(0.15); // invalid -> FALLBACK to default
+    process.env.BELLA_RECENCY_WEIGHT = "-1";
+    expect(recencyWeight()).toBe(0.15); // negative is invalid -> fallback
+    process.env.BELLA_RECENCY_WEIGHT = "2";
+    expect(recencyWeight()).toBe(1); // numeric but out of range -> CLAMP
+    process.env.BELLA_RECENCY_WEIGHT = "0";
+    expect(recencyWeight()).toBe(0); // explicit 0 = disabled, honored
+    process.env.BELLA_RECENCY_TAU_DAYS = "0";
+    expect(recencyTauDays()).toBe(90); // tau <= 0 is invalid -> fallback
+    process.env.BELLA_RECENCY_TAU_DAYS = "30";
+    expect(recencyTauDays()).toBe(30);
+  } finally {
+    delete process.env.BELLA_RECENCY_WEIGHT;
+    delete process.env.BELLA_RECENCY_TAU_DAYS;
+  }
+});
+
+test("results carry the fused score, ordered by it (memories)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedRecencySpace(ctx.sql);
+    await insertMemory(ctx.sql, { ...OLD_EXACT, createdAt: AGO_180D });
+    await insertMemory(ctx.sql, { ...FRESH_NEAR });
+    const results = await searchMemories(ctx as any, { q: "which theme", threshold: 0.5, limit: 5, containerTag: REC_TAG });
+    expect(typeof results[0]!.score).toBe("number");
+    const scores = results.map((r) => r.score);
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores); // descending by fused score
   } finally {
     await ctx.close();
   }

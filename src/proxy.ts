@@ -77,11 +77,13 @@ export async function runToolSearch(ctx: Ctx, queries: string[], opts: ToolSearc
     for (const batch of batches) {
       for (const r of batch) {
         const prev = merged.get(r.id);
-        if (!prev || r.similarity > prev.similarity) merged.set(r.id, r);
+        if (!prev || r.score > prev.score) merged.set(r.id, r);
       }
     }
+    // Order by the FUSED score, not raw cosine: keyword-only hits carry similarity 0 and would sink
+    // (or fall past the cap) under a similarity sort even when RRF ranked them first (PR #79 review).
     const results = Array.from(merged.values())
-      .sort((a, b) => b.similarity - a.similarity)
+      .sort((a, b) => b.score - a.score)
       .slice(0, Q.MAX_COMBINED_RESULTS);
 
     if (opts.recordTrace !== false) {
@@ -425,10 +427,11 @@ function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
   const merged = new Map<string, MemoryResult>();
   for (const result of results) {
     const prev = merged.get(result.id);
-    if (!prev || result.similarity > prev.similarity) merged.set(result.id, result);
+    if (!prev || result.score > prev.score) merged.set(result.id, result);
   }
+  // Fused score, not raw cosine — same rule as runToolSearch (keyword-only hits carry similarity 0).
   return Array.from(merged.values())
-    .sort((a, b) => b.similarity - a.similarity)
+    .sort((a, b) => b.score - a.score)
     .slice(0, Q.MAX_COMBINED_RESULTS);
 }
 

@@ -5,6 +5,7 @@ import type { Embed } from "./embed";
 import { newId, toVector, ORG_ID } from "./util";
 import { DEFAULT_SIMILARITY_THRESHOLD } from "./embed-common";
 import { recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
+import { brandEnv } from "./env";
 
 type Ctx = { sql: DB; embed: Embed };
 
@@ -23,10 +24,28 @@ export type SearchOpts = {
   containerTag?: string;
   searchMode?: "memories" | "documents" | "hybrid";
   keyword?: boolean; // fuse the full-text leg (default true; false = pure vector + cosine threshold)
+  recency?: boolean; // time-decay ranking on memories (default true; false = pure relevance order)
   include?: { forgottenMemories?: boolean };
 };
 
-export type MemoryResult = { type: "memory"; id: string; memory: string; version: number; similarity: number };
+// `score` is the FUSED ranking score (RRF × recency decay) — the order authority. `similarity` stays
+// the raw cosine evidence (0 for keyword-only hits); consumers that merge result sets must sort by
+// score, not similarity, or keyword hits sink (Codex review of PR #79).
+export type MemoryResult = { type: "memory"; id: string; memory: string; version: number; similarity: number; score: number };
+
+// Recency knobs (P1.2, issue #36) — read PER CALL via brandEnv() so tests and long-running processes
+// tune without a restart. Semantics pinned by tests: invalid input FALLS BACK to the default;
+// numeric-but-out-of-range CLAMPS. weight 0 disables recency entirely.
+export function recencyWeight(): number {
+  const n = Number(brandEnv("RECENCY_WEIGHT"));
+  if (!Number.isFinite(n) || n < 0) return 0.15;
+  return Math.min(n, 1);
+}
+export function recencyTauDays(): number {
+  const n = Number(brandEnv("RECENCY_TAU_DAYS"));
+  if (!Number.isFinite(n) || n <= 0) return 90;
+  return Math.min(n, 3650);
+}
 export type ChunkResult = {
   type: "chunk"; id: string; content: string; similarity: number; source: "vector" | "keyword" | "both";
   documentId: string; title: string | null; filepath: string | null; headingPath: string | null;
@@ -56,7 +75,7 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
     ? sql`AND space_id IN (SELECT id FROM space WHERE container_tag = ${opts.containerTag} AND org_id = ${ORG_ID})`
     : sql``;
   const rawVrows = await sql`
-    SELECT id, memory, version, 1 - (memory_embedding <=> ${v}::vector) AS similarity
+    SELECT id, memory, version, created_at, 1 - (memory_embedding <=> ${v}::vector) AS similarity
     FROM memory_entry
     WHERE org_id = ${ORG_ID} AND is_latest = true AND memory_embedding IS NOT NULL
       ${forgottenClause} ${tagClause}
@@ -64,14 +83,14 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
     LIMIT ${N}`;
   // The cosine floor applies to the VECTOR leg only. Keyword hits are exempt: a literal text match is
   // its own relevance evidence, and ts_rank is not on the cosine scale (same rule as searchChunks).
-  const toResult = (r: any, similarity: number): MemoryResult =>
-    ({ type: "memory", id: r.id, memory: r.memory, version: Number(r.version), similarity });
+  const toResult = (r: any, similarity: number, score: number): MemoryResult =>
+    ({ type: "memory", id: r.id, memory: r.memory, version: Number(r.version), similarity, score });
   const vrows = rawVrows.filter((r) => Number(r.similarity) >= threshold);
 
-  if (!useKeyword) return vrows.map((r) => toResult(r, Number(r.similarity))).slice(0, limit);
+  if (!useKeyword) return vrows.map((r) => toResult(r, Number(r.similarity), Number(r.similarity))).slice(0, limit);
 
   const krows = await sql`
-    SELECT id, memory, version,
+    SELECT id, memory, version, created_at,
            ts_rank(to_tsvector('simple', memory), websearch_to_tsquery('simple', ${opts.q})) AS rank
     FROM memory_entry
     WHERE org_id = ${ORG_ID} AND is_latest = true
@@ -81,18 +100,35 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
     LIMIT ${N}`;
 
   // Reciprocal Rank Fusion; keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
-  const score = new Map<string, number>();
+  const rrf = new Map<string, number>();
   const data = new Map<string, MemoryResult>();
+  const createdAt = new Map<string, number>();
   const inKeyword = new Set<string>();
-  vrows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); data.set(r.id, toResult(r, Number(r.similarity))); });
-  krows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); inKeyword.add(r.id); if (!data.has(r.id)) data.set(r.id, toResult(r, 0)); });
+  vrows.forEach((r, i) => { rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
+  krows.forEach((r, i) => { rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); inKeyword.add(r.id); if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
+
+  // Recency decay (P1.2): fused = rrf × (1 − w·(1 − e^(−age/τ))). Multiplicative on the RANK-based
+  // score, so it is scale-free and BOUNDED — an infinitely old memory keeps (1−w) of its relevance
+  // (default 85%), it can lose a close race to a fresher near-match but is never buried outright.
+  // recency:false (per request) or weight 0 (env) restores pure relevance order.
+  const w = opts.recency === false ? 0 : recencyWeight();
+  const tauMs = recencyTauDays() * 864e5;
+  const now = Date.now();
+  const decay = (id: string) => {
+    if (w === 0) return 1;
+    const ageMs = Math.max(0, now - (createdAt.get(id) ?? now));
+    return 1 - w * (1 - Math.exp(-ageMs / tauMs));
+  };
+  const fused = new Map<string, number>();
+  for (const [id, base] of rrf) fused.set(id, base * decay(id));
+
   // Ties are real at small limits (the top row of each leg scores 1/(K+1)). Deterministic tie-break:
   // a literal text match is stronger evidence for the query than semantic similarity, so keyword-leg
   // membership wins; then id, so ordering never depends on Map insertion order (Codex review, PR #79).
-  return [...score.entries()]
+  return [...fused.entries()]
     .sort((a, b) => b[1] - a[1] || Number(inKeyword.has(b[0])) - Number(inKeyword.has(a[0])) || a[0].localeCompare(b[0]))
     .slice(0, limit)
-    .map(([id]) => data.get(id)!);
+    .map(([id, s]) => ({ ...data.get(id)!, score: s }));
 }
 
 // Hybrid chunk search: vector (pgvector cosine) + full-text ('simple' tsvector), fused via RRF.
@@ -217,6 +253,7 @@ export function searchRoutes(ctx: Ctx) {
           limit: body.limit,
           threshold: body.threshold,
           keyword: body.keyword,
+          recency: body.recency,
           includeForgottenMemories: !!body.include?.forgottenMemories,
         },
       });

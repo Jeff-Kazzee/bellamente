@@ -40,9 +40,11 @@ curl -s localhost:8080/search -H 'content-type: application/json' \
   -d '{"q":"what theme does John like","searchMode":"memories"}'
 ```
 
-`searchMode`: `memories` (semantic recall), `documents` (vector + full-text over chunks,
-rank-fused), or `hybrid` (both lists fused). Responses include per-result similarity and a
-`traceId` — the receipt.
+`searchMode`: `memories` (semantic + full-text recall, rank-fused, recency-weighted), `documents`
+(vector + full-text over chunks, rank-fused), or `hybrid` (both lists fused). `recency: false`
+turns off time-decay for a request. Results carry `similarity` (raw cosine evidence; `0` for
+keyword-only hits) and `score` (the fused ranking score — the order authority), plus a `traceId` —
+the receipt.
 
 ## Profile
 
