@@ -166,6 +166,31 @@ test("concurrent acquirers never double-acquire while a live holder exists", asy
   rmSync(lockPath, { force: true });
 });
 
+test("migration 4 ships valid_from/valid_to to legacy installs; fresh installs match via schema.sql; re-run no-op (P1.8 B4)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  const colTypes = async () => sql`
+    SELECT column_name, data_type, is_nullable FROM information_schema.columns
+    WHERE table_name = 'memory_entry' AND column_name IN ('valid_from', 'valid_to')
+    ORDER BY column_name`;
+  // Fresh install: schema.sql itself carries the columns (migrations then no-op over them).
+  const fresh = await colTypes();
+  expect(fresh.map((r) => r.column_name)).toEqual(["valid_from", "valid_to"]);
+  for (const r of fresh) expect(r.is_nullable).toBe("YES"); // nullable = open-ended window
+  await runMigrations(sql);
+  // Legacy install: the columns predate migration 4 on disk — drop them, migrations bring them back.
+  await sql.unsafe("ALTER TABLE memory_entry DROP COLUMN valid_from; ALTER TABLE memory_entry DROP COLUMN valid_to;");
+  await sql`DELETE FROM schema_migrations WHERE id = 4`;
+  await runMigrations(sql);
+  const migrated = await colTypes();
+  // The migrated shape must be IDENTICAL to the fresh schema.sql shape (rule 3: same commit, same type).
+  expect(migrated).toEqual(fresh);
+  // Idempotent: a re-run applies nothing and the ADD COLUMN IF NOT EXISTS guards hold.
+  expect(await runMigrations(sql)).toEqual([]);
+  await sql.end();
+}, 20000);
+
 test("migration 003 and schema.sql produce the IDENTICAL index definition (B6 strengthened)", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
   const sql = makePgliteSql(pg);

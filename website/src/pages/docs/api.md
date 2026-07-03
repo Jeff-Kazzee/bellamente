@@ -20,6 +20,11 @@ when a key is active, send `Authorization: Bearer <key>` (see [config](/docs/con
 | `POST /memories/:id/forget` | Soft-forget the whole chain; `{"undo":true}` reverses it. |
 | `DELETE /memories/:id` | Hard-delete the chain + provenance links. The only true eraser. |
 
+Every version row carries `validFrom` / `validTo` (ISO or `null` = open-ended). Supersedes and
+content edits stamp the flip instant on **both** sides in one transaction, so a chain is a gapless
+timeline of what was believed when — queryable with `asOf` on search (below). Rows written before
+this feature have `null` windows and count as always-valid.
+
 ```sh
 curl -s localhost:8080/memories -H 'content-type: application/json' \
   -d '{"containerTag":"user_123","memories":[{"content":"John prefers dark mode","isStatic":true}]}'
@@ -49,6 +54,11 @@ extra model, no re-embedding. Results carry `similarity` (raw cosine evidence; `
 hits) and `score` (the fused ranking score); the returned order is the ranking authority (with
 diversity on, a redundant high-scorer may rank below a distinct lower-scorer), plus a `traceId` —
 the receipt.
+
+`asOf` (ISO 8601 date-time) asks **"what was believed then?"**: instead of latest-only, memory
+search returns the versions whose validity window covers that instant — including superseded ones
+(`validFrom` inclusive, `validTo` exclusive; the flip boundary belongs to the newer version). An
+unparseable `asOf` is a `400`. Memories only — documents don't version, so chunk results ignore it.
 
 ## Profile
 

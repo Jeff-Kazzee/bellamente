@@ -27,6 +27,7 @@ export type SearchOpts = {
   keyword?: boolean; // fuse the full-text leg (default true; false = pure vector + cosine threshold)
   recency?: boolean; // time-decay ranking on memories (default true; false = pure relevance order)
   diversify?: boolean; // MMR diversity pass on fused memory results (P1.4: default ON for limit >= 5)
+  asOf?: string; // ISO 8601 instant: recall what was believed THEN (P1.8; replaces the latest-only filter, memories only)
   include?: { forgottenMemories?: boolean };
 };
 
@@ -100,6 +101,15 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   const tagClause = opts.containerTag
     ? sql`AND space_id IN (SELECT id FROM space WHERE container_tag = ${opts.containerTag} AND org_id = ${ORG_ID})`
     : sql``;
+  // Temporal validity (SPEC-P1.8, issue #40): asOf REPLACES the latest-only filter — the point is
+  // reaching a superseded (is_latest = false) version whose window covers the instant. NULL bounds
+  // are open-ended, so pre-migration rows match any asOf. valid_from inclusive, valid_to exclusive:
+  // the flip boundary belongs to the NEWER version. ONE fragment spliced into BOTH legs — visibility
+  // filters must never diverge between vector and keyword recall.
+  const asOf = opts.asOf === undefined ? null : new Date(opts.asOf).toISOString();
+  const validityClause = asOf
+    ? sql`AND (valid_from IS NULL OR valid_from <= ${asOf}::timestamptz) AND (valid_to IS NULL OR valid_to > ${asOf}::timestamptz)`
+    : sql`AND is_latest = true`;
   // The two legs are independent (D2): run them in parallel. The cosine floor applies to the VECTOR
   // leg only. Keyword hits are exempt: a literal text match is its own relevance evidence, and
   // ts_rank is not on the cosine scale (same rule as searchChunks).
@@ -108,8 +118,8 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
       SELECT id, memory, version, created_at, memory_embedding,
              1 - (memory_embedding <=> ${v}::vector) AS similarity
       FROM memory_entry
-      WHERE org_id = ${ORG_ID} AND is_latest = true AND memory_embedding IS NOT NULL
-        ${forgottenClause} ${tagClause}
+      WHERE org_id = ${ORG_ID} AND memory_embedding IS NOT NULL
+        ${validityClause} ${forgottenClause} ${tagClause}
       ORDER BY memory_embedding <=> ${v}::vector
       LIMIT ${N}`,
     useKeyword
@@ -117,8 +127,8 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
           SELECT id, memory, version, created_at, memory_embedding,
                  ts_rank(to_tsvector('simple', memory), websearch_to_tsquery('simple', ${opts.q})) AS rank
           FROM memory_entry
-          WHERE org_id = ${ORG_ID} AND is_latest = true
-            ${forgottenClause} ${tagClause}
+          WHERE org_id = ${ORG_ID}
+            ${validityClause} ${forgottenClause} ${tagClause}
             AND to_tsvector('simple', memory) @@ websearch_to_tsquery('simple', ${opts.q})
           ORDER BY rank DESC
           LIMIT ${N}`
@@ -279,6 +289,9 @@ export function searchRoutes(ctx: Ctx) {
   app.post("/", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as SearchOpts;
     if (!body.q || typeof body.q !== "string") return c.json({ error: "q (string) is required" }, 400);
+    if (body.asOf !== undefined && (typeof body.asOf !== "string" || Number.isNaN(Date.parse(body.asOf)))) {
+      return c.json({ error: "asOf must be an ISO 8601 date-time string" }, 400);
+    }
 
     const traceId = newId();
     const started = Date.now();
@@ -306,6 +319,7 @@ export function searchRoutes(ctx: Ctx) {
           keyword: body.keyword,
           recency: body.recency,
           diversify: body.diversify,
+          asOf: body.asOf,
           includeForgottenMemories: !!body.include?.forgottenMemories,
         },
       });

@@ -159,6 +159,67 @@ test("POST supersedes a near-duplicate: new version, old flipped is_latest=false
   }
 }, TEST_TIMEOUT_MS);
 
+// --- SPEC-P1.8: temporal validity — both flip sites stamp windows inside their transaction ---
+
+test("supersede stamps validity windows transactionally: old.valid_to === new.valid_from EXACTLY (P1.8 B2)", async () => {
+  process.env.BELLA_SUPERSEDE_THRESHOLD = "0.9";
+  const { app, sql, close } = await makeApp();
+  try {
+    const first = await (await post(app, "/memories", { memories: [{ content: "John prefers dark mode" }] })).json();
+    const v1Id = first.memories[0].id;
+    // A freshly created memory has an OPEN window: NULL = "valid since creation".
+    const [created] = await sql`SELECT valid_from, valid_to FROM memory_entry WHERE id = ${v1Id}`;
+    expect(created!.valid_from).toBeNull();
+    expect(created!.valid_to).toBeNull();
+
+    const second = await (await post(app, "/memories", { memories: [{ content: "John prefers light mode" }] })).json();
+    expect(second.memories[0].action).toBe("superseded");
+    const v2Id = second.memories[0].id;
+
+    const [oldRow] = await sql`SELECT valid_from, valid_to FROM memory_entry WHERE id = ${v1Id}`;
+    const [newRow] = await sql`SELECT valid_from, valid_to FROM memory_entry WHERE id = ${v2Id}`;
+    expect(oldRow!.valid_to).not.toBeNull();
+    expect(newRow!.valid_from).not.toBeNull();
+    expect(newRow!.valid_to).toBeNull();
+    // now() is transaction-frozen: the INSERT and the flip UPDATE run in ONE tx, so the boundary
+    // is gapless and overlap-free BY CONSTRUCTION — this equality is the acceptance for it.
+    expect(new Date(oldRow!.valid_to).toISOString()).toBe(new Date(newRow!.valid_from).toISOString());
+
+    // GET /:id exposes the windows on EVERY chain row (ISO or null) — B3's read surface.
+    const chain = await (await app.request(`/memories/${v1Id}`)).json();
+    expect(chain.versions).toHaveLength(2);
+    expect(chain.versions[0].validFrom).toBeNull();
+    expect(chain.versions[0].validTo).toBe(new Date(oldRow!.valid_to).toISOString());
+    expect(chain.versions[1].validFrom).toBe(new Date(newRow!.valid_from).toISOString());
+    expect(chain.versions[1].validTo).toBeNull();
+  } finally {
+    delete process.env.BELLA_SUPERSEDE_THRESHOLD;
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("PATCH content edit stamps windows the same way as supersede (P1.8 B2, second flip site)", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const created = await (await post(app, "/memories", { memories: [{ content: "John lives in Denver" }] })).json();
+    const id = created.memories[0].id;
+    const edited = await (await patch(app, `/memories/${id}`, { content: "John lives in Boulder now" })).json();
+    expect(edited.action).toBe("versioned");
+    const newVersionId = edited.memory.id;
+
+    const [oldRow] = await sql`SELECT valid_from, valid_to FROM memory_entry WHERE id = ${id}`;
+    const [newRow] = await sql`SELECT valid_from, valid_to FROM memory_entry WHERE id = ${newVersionId}`;
+    expect(oldRow!.valid_to).not.toBeNull();
+    expect(newRow!.valid_from).not.toBeNull();
+    expect(new Date(oldRow!.valid_to).toISOString()).toBe(new Date(newRow!.valid_from).toISOString());
+    // The PATCH response body carries the window too (normalizeMemory).
+    expect(edited.memory.validFrom).toBe(new Date(newRow!.valid_from).toISOString());
+    expect(edited.memory.validTo).toBeNull();
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
 test("PATCH: content change writes a new version; flag change edits in place; stale version 409s", async () => {
   const { app, sql, close } = await makeApp();
   try {

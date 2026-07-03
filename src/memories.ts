@@ -66,6 +66,9 @@ function normalizeMemory(r: any) {
     metadata: r.metadata ?? null,
     createdAt: toIso(r.created_at),
     updatedAt: toIso(r.updated_at),
+    // Validity window (SPEC-P1.8): null = open-ended (valid since creation / still valid).
+    validFrom: r.valid_from ? toIso(r.valid_from) : null,
+    validTo: r.valid_to ? toIso(r.valid_to) : null,
   };
 }
 
@@ -147,16 +150,19 @@ async function writeMemory(
       const root = nearest.root_memory_id ?? nearest.id;
       // source_count = old + 1: a near-duplicate write is a RE-OBSERVATION of the fact, and the count
       // survives the version chain as a reinforcement signal (PATCH corrections carry it unchanged).
+      // Validity window (SPEC-P1.8): Postgres now() is TRANSACTION-frozen, so this INSERT's valid_from
+      // and the flip UPDATE's valid_to see the identical timestamp — old.valid_to == new.valid_from
+      // exactly: no gap, no overlap, by construction.
       await tx`
         INSERT INTO memory_entry
           (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
-           source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
+           source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model, valid_from)
         VALUES
           (${id}, ${ORG_ID}, ${args.spaceId}, ${args.content}, ${args.isStatic}, ${args.isInference}, true, ${Number(nearest.version) + 1},
            ${nearest.id}, ${root}, ${Number(nearest.source_count ?? 1) + 1}, ${tx.json({ updates: [nearest.id] })},
            ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
-           ${v}::vector, ${args.model})`;
-      await tx`UPDATE memory_entry SET is_latest = false, updated_at = now() WHERE id = ${nearest.id}`;
+           ${v}::vector, ${args.model}, now())`;
+      await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${nearest.id}`;
       return { id, action: "superseded", version: Number(nearest.version) + 1, supersededId: nearest.id };
     }
   }
@@ -397,16 +403,18 @@ export function memoriesRoutes(ctx: Ctx) {
       await sql.begin(async (tx) => {
         // is_inference carries forward like every other provenance field — a typo fix on a captured
         // memory must not silently reclassify it as user-asserted (review finding).
+        // Validity window stamping mirrors the supersede site (SPEC-P1.8): same tx-frozen now(), so
+        // the corrected version's valid_from equals the old version's valid_to exactly.
         await tx`
           INSERT INTO memory_entry
             (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
-             source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model)
+             source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model, valid_from)
           VALUES
             (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${body.content}, ${isStatic}, ${!!row.is_inference}, true, ${Number(row.version) + 1},
              ${row.id}, ${root}, ${Number(row.source_count ?? 1)}, ${tx.json({ updates: [row.id] })},
              ${metadata ? tx.json(metadata) : null}, ${forgetAfter}, ${forgetReason},
-             ${toVector(vec)}::vector, ${embedModelName()})`;
-        await tx`UPDATE memory_entry SET is_latest = false, updated_at = now() WHERE id = ${row.id}`;
+             ${toVector(vec)}::vector, ${embedModelName()}, now())`;
+        await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${row.id}`;
       });
       const created = await loadMemory(sql, newVersionId);
       return c.json({
