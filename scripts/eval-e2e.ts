@@ -327,51 +327,54 @@ function cosine(a: number[], b: number[]): number {
   return dot;
 }
 
-async function bruteForceList(embed: Embed, sql: Sql, mode: "memories" | "documents", q: string, containerTag: string, limit: number): Promise<Candidate[]> {
-  const [queryVec] = await embed({ values: [q], taskType: "QUESTION_ANSWERING" });
-  if (!queryVec) return [];
+type EmbeddedCandidate = { key: string; vector: number[] };
+type BruteForceCorpus = { memories: EmbeddedCandidate[]; documents: EmbeddedCandidate[] };
 
-  if (mode === "memories") {
-    const rows = await sql<{ id: string; text: string }[]>`
+async function loadBruteForceCorpus(embed: Embed, sql: Sql, containerTag: string): Promise<BruteForceCorpus> {
+  const [memoryRows, documentRows] = await Promise.all([
+    sql<{ id: string; text: string }[]>`
       SELECT id, memory AS text
       FROM memory_entry
       WHERE org_id = ${ORG_ID} AND is_latest = true AND is_forgotten = false
         AND (forget_after IS NULL OR forget_after > now())
-        AND space_id IN (SELECT id FROM space WHERE container_tag = ${containerTag} AND org_id = ${ORG_ID})`;
-    const vectors = await embed({ values: rows.map((r) => r.text), taskType: "RETRIEVAL_DOCUMENT" });
-    return rows
-      .map((r, i) => ({ key: `memory:${r.id}`, score: cosine(queryVec, vectors[i]!) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-  }
+        AND space_id IN (SELECT id FROM space WHERE container_tag = ${containerTag} AND org_id = ${ORG_ID})`,
+    sql<{ id: string; text: string }[]>`
+      SELECT c.id, COALESCE(c.embedded_content, c.content) AS text
+      FROM chunk c JOIN document d ON d.id = c.document_id
+      WHERE d.org_id = ${ORG_ID} AND d.container_tags @> ARRAY[${containerTag}]::text[]`,
+  ]);
+  const [memoryVectors, documentVectors] = await Promise.all([
+    embed({ values: memoryRows.map((r) => r.text), taskType: "RETRIEVAL_DOCUMENT" }),
+    embed({ values: documentRows.map((r) => r.text), taskType: "RETRIEVAL_DOCUMENT" }),
+  ]);
+  return {
+    memories: memoryRows.flatMap((r, i) => memoryVectors[i] ? [{ key: `memory:${r.id}`, vector: memoryVectors[i]! }] : []),
+    documents: documentRows.flatMap((r, i) => documentVectors[i] ? [{ key: `chunk:${r.id}`, vector: documentVectors[i]! }] : []),
+  };
+}
 
-  const rows = await sql<{ id: string; text: string }[]>`
-    SELECT c.id, COALESCE(c.embedded_content, c.content) AS text
-    FROM chunk c JOIN document d ON d.id = c.document_id
-    WHERE d.org_id = ${ORG_ID} AND d.container_tags @> ARRAY[${containerTag}]::text[]`;
-  const vectors = await embed({ values: rows.map((r) => r.text), taskType: "RETRIEVAL_DOCUMENT" });
-  return rows
-    .map((r, i) => ({ key: `chunk:${r.id}`, score: cosine(queryVec, vectors[i]!) }))
+function rankCorpus(queryVec: number[], corpus: EmbeddedCandidate[], limit: number): Candidate[] {
+  return corpus
+    .map((candidate) => ({ key: candidate.key, score: cosine(queryVec, candidate.vector) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }
 
-async function bruteForceSearch(embed: Embed, sql: Sql, query: EvalQuery, containerTag: string, limit: number): Promise<string[]> {
-  if (query.searchMode === "memories") return (await bruteForceList(embed, sql, "memories", query.q, containerTag, limit)).map((r) => r.key);
-  if (query.searchMode === "documents") return (await bruteForceList(embed, sql, "documents", query.q, containerTag, limit)).map((r) => r.key);
+async function bruteForceSearch(embed: Embed, corpus: BruteForceCorpus, query: EvalQuery, limit: number): Promise<string[]> {
+  const [queryVec] = await embed({ values: [query.q], taskType: "QUESTION_ANSWERING" });
+  if (!queryVec) return [];
+  if (query.searchMode === "memories") return rankCorpus(queryVec, corpus.memories, limit).map((r) => r.key);
+  if (query.searchMode === "documents") return rankCorpus(queryVec, corpus.documents, limit).map((r) => r.key);
 
-  const lists = await Promise.all([
-    bruteForceList(embed, sql, "memories", query.q, containerTag, limit),
-    bruteForceList(embed, sql, "documents", query.q, containerTag, limit),
-  ]);
+  const memoryRank = rankCorpus(queryVec, corpus.memories, limit);
+  const documentRank = rankCorpus(queryVec, corpus.documents, limit);
   return rrfFuse([
-    { ids: lists[0]!.map((candidate) => candidate.key), tiePriority: 1 },
-    { ids: lists[1]!.map((candidate) => candidate.key), tiePriority: 0 },
+    { ids: memoryRank.map((candidate) => candidate.key), tiePriority: 1 },
+    { ids: documentRank.map((candidate) => candidate.key), tiePriority: 0 },
   ])
     .slice(0, limit)
     .map(({ id }) => id);
 }
-
 async function makeEvalApp(embed: Embed) {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
   const sql = makePgliteSql(pg);
@@ -382,12 +385,11 @@ async function makeEvalApp(embed: Embed) {
 
 async function evaluateMode(
   app: ReturnType<typeof buildApp>,
-  sql: Sql,
   routeCounts: Record<string, number>,
   dataset: EvalDataset,
   loaded: LoadedIds,
   mode: SearchMode,
-  opts: { limit: number; threshold?: number; embed: Embed },
+  opts: { limit: number; threshold?: number; embed: Embed; bruteForceCorpus: BruteForceCorpus },
 ): Promise<ModeMetrics> {
   const queries = dataset.queries.filter((q) => q.searchMode === mode);
   const latencies: number[] = [];
@@ -432,7 +434,7 @@ async function evaluateMode(
       }),
     });
     indexedR10 += scoreRanking(indexedVector.json.results.map(resultKey), gold).r10;
-    bruteR10 += scoreRanking(await bruteForceSearch(opts.embed, sql, query, dataset.containerTag, opts.limit), gold).r10;
+    bruteR10 += scoreRanking(await bruteForceSearch(opts.embed, opts.bruteForceCorpus, query, opts.limit), gold).r10;
   }
 
   const n = Math.max(queries.length, 1);
@@ -462,9 +464,10 @@ export async function runEvalE2E(opts: RunOptions = {}): Promise<EvalReport> {
   const { app, sql, close } = await makeEvalApp(embed);
   try {
     const loaded = await loadFixtures(app, routeCounts, dataset);
+    const bruteForceCorpus = await loadBruteForceCorpus(embed, sql, dataset.containerTag);
     const rows = {} as Record<SearchMode, ModeMetrics>;
     for (const mode of MODES) {
-      rows[mode] = await evaluateMode(app, sql, routeCounts, dataset, loaded, mode, { limit, threshold: opts.threshold, embed });
+      rows[mode] = await evaluateMode(app, routeCounts, dataset, loaded, mode, { limit, threshold: opts.threshold, embed, bruteForceCorpus });
     }
     const report: EvalReport = {
       generatedAt: new Date().toISOString(),
