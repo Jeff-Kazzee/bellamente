@@ -1352,3 +1352,22 @@ test("BELLA_STREAM_DECISION_HOLD_CHARS=0 restores commit-on-first-content", asyn
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("runToolSearch orders by the fused score — keyword-only hits no longer sink below cosine hits", async () => {
+  const ctx = await makeCtx();
+  try {
+    // Seeded memory: "John prefers dark mode", embedding [1,0,0,0] == the fake query embedding (cosine 1.0).
+    // Add a keyword-only memory: contains the literal query token, embedding orthogonal (cosine 0.0).
+    const kwId = "kwtool".padEnd(22, "x");
+    await ctx.sql`
+      INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, memory_embedding, memory_embedding_model)
+      VALUES (${kwId}, ${ORG_ID}, ${spaceId}, ${"deploy code XK-42-BETA is live"}, true, 1, ${kwId}, ${"[0,1,0,0]"}::vector, ${"test-embed"})`;
+    const results = await runToolSearch(ctx as any, ["XK-42-BETA"], { containerTag: DEFAULT_CONTAINER_TAG, recordTrace: false });
+    // Both rank #1 in their leg (RRF tie); the literal match wins the tie in searchMemories, and the
+    // proxy merge must PRESERVE that fused order instead of re-sorting by cosine similarity.
+    expect(results.length).toBeGreaterThanOrEqual(2);
+    expect(results[0]!.id).toBe(kwId);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);

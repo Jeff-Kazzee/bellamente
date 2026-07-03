@@ -67,22 +67,14 @@ function chatCompletionsToolDefinition() {
   return { type: "function", function: toolDescription() };
 }
 
-// Run up to MAX_QUERIES_PER_CALL searches, merge by id keep max similarity, cap MAX_COMBINED_RESULTS.
+// Run up to MAX_QUERIES_PER_CALL searches, merge via topMemoryResults (the ONE merge/cap rule —
+// its inline twin here had to be edited in lockstep twice; thermonuclear review D-finding 2).
 export async function runToolSearch(ctx: Ctx, queries: string[], opts: ToolSearchTraceOpts = {}) {
   const started = Date.now();
   const capped = queries.slice(0, MAX_QUERIES_PER_CALL);
   try {
     const batches = await Promise.all(capped.map((q) => searchMemories(ctx, { q, containerTag: opts.containerTag })));
-    const merged = new Map<string, MemoryResult>();
-    for (const batch of batches) {
-      for (const r of batch) {
-        const prev = merged.get(r.id);
-        if (!prev || r.similarity > prev.similarity) merged.set(r.id, r);
-      }
-    }
-    const results = Array.from(merged.values())
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, Q.MAX_COMBINED_RESULTS);
+    const results = topMemoryResults(batches.flat());
 
     if (opts.recordTrace !== false) {
       const items = traceItemsFromSearchResults(results);
@@ -421,14 +413,18 @@ function toolResultPayload(queries: string[], results: MemoryResult[], error?: s
   };
 }
 
+// INVARIANT: every input batch must come from the keyword-default search path. `score` is
+// RRF-scale (~0.016) there but raw-cosine-scale (~1.0) on keyword:false — mixing the two in this
+// max-by-score merge would silently bias toward the cosine-scale batch (PR #86 review, follow-up B).
 function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
   const merged = new Map<string, MemoryResult>();
   for (const result of results) {
     const prev = merged.get(result.id);
-    if (!prev || result.similarity > prev.similarity) merged.set(result.id, result);
+    if (!prev || result.score > prev.score) merged.set(result.id, result);
   }
+  // Fused score, not raw cosine — same rule as runToolSearch (keyword-only hits carry similarity 0).
   return Array.from(merged.values())
-    .sort((a, b) => b.similarity - a.similarity)
+    .sort((a, b) => b.score - a.score)
     .slice(0, Q.MAX_COMBINED_RESULTS);
 }
 
