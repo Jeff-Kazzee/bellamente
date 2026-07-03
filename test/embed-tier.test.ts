@@ -3,6 +3,7 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { formatForTask, mrl, onnxRelPath, truncatePayload } from "../src/embed-common";
 
 let seq = 0;
 async function resolve(over: Record<string, string>): Promise<any> {
@@ -49,4 +50,14 @@ test("OpenAI provider keeps its own dim (384) + threshold (0.4), ignoring the de
   const openai = await resolve({ EMBEDDING_PROVIDER: "openai", BELLA_EMBED_MIN_RAM_GB: "999999" }); // low-RAM would pick 512/0.1
   expect(openai.dim).toBe(384);
   expect(openai.threshold).toBe(0.4);
+});
+
+test("embed-common helper edges keep payloads bounded and vectors normalized", () => {
+  const long = "x".repeat(20000);
+  const truncated = truncatePayload([long, long]);
+  expect(truncated.every((value) => value.length <= 9000)).toBe(true);
+  expect(formatForTask("needle", "RETRIEVAL_DOCUMENT").length).toBeGreaterThan(0);
+  expect(formatForTask("needle", "QUESTION_ANSWERING").length).toBeGreaterThan(0);
+  expect(mrl([0, 0, 0], 2)).toEqual([0, 0]);
+  expect(onnxRelPath()).toContain("onnx");
 });

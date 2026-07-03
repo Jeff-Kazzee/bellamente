@@ -2,7 +2,7 @@
 import { Hono } from "hono";
 import type { DB } from "./db";
 import type { Embed } from "./embed";
-import { searchMemories, Q, type MemoryResult } from "./search";
+import { searchMemories, rrfFuse, Q, type MemoryResult } from "./search";
 import { formatProfile, profileContextBlock, loadProfile } from "./profile";
 import { DEFAULT_CONTAINER_TAG, newId } from "./util";
 import { brandEnv } from "./env";
@@ -67,22 +67,14 @@ function chatCompletionsToolDefinition() {
   return { type: "function", function: toolDescription() };
 }
 
-// Run up to MAX_QUERIES_PER_CALL searches, merge by id keep max similarity, cap MAX_COMBINED_RESULTS.
+// Run up to MAX_QUERIES_PER_CALL searches, merge via topMemoryResults (the ONE merge/cap rule —
+// its inline twin here had to be edited in lockstep twice; thermonuclear review D-finding 2).
 export async function runToolSearch(ctx: Ctx, queries: string[], opts: ToolSearchTraceOpts = {}) {
   const started = Date.now();
   const capped = queries.slice(0, MAX_QUERIES_PER_CALL);
   try {
     const batches = await Promise.all(capped.map((q) => searchMemories(ctx, { q, containerTag: opts.containerTag })));
-    const merged = new Map<string, MemoryResult>();
-    for (const batch of batches) {
-      for (const r of batch) {
-        const prev = merged.get(r.id);
-        if (!prev || r.similarity > prev.similarity) merged.set(r.id, r);
-      }
-    }
-    const results = Array.from(merged.values())
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, Q.MAX_COMBINED_RESULTS);
+    const results = topMemoryResults(batches);
 
     if (opts.recordTrace !== false) {
       const items = traceItemsFromSearchResults(results);
@@ -421,15 +413,23 @@ function toolResultPayload(queries: string[], results: MemoryResult[], error?: s
   };
 }
 
-function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
+// INVARIANT: every input batch must come from the keyword-default search path. `score` is
+// RRF-scale (~0.016) there but raw-cosine-scale (~1.0) on keyword:false — mixing the two in the
+// max-by-score dedupe would silently bias toward the cosine-scale batch (PR #86 review, follow-up B).
+// Merge across batches by RANK (rrfFuse, the ONE fusion primitive), never by score: each batch's
+// order is MMR-diversified (P1.4), so a score re-sort would put the near-duplicates right back on
+// top (Codex review of PR #88, finding 1). A single batch passes through in its own order.
+function topMemoryResults(batches: MemoryResult[][]): MemoryResult[] {
   const merged = new Map<string, MemoryResult>();
-  for (const result of results) {
-    const prev = merged.get(result.id);
-    if (!prev || result.similarity > prev.similarity) merged.set(result.id, result);
+  for (const batch of batches) {
+    for (const result of batch) {
+      const prev = merged.get(result.id);
+      if (!prev || result.score > prev.score) merged.set(result.id, result);
+    }
   }
-  return Array.from(merged.values())
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, Q.MAX_COMBINED_RESULTS);
+  return rrfFuse(batches.map((b) => ({ ids: b.map((r) => r.id), tiePriority: 0 })))
+    .slice(0, Q.MAX_COMBINED_RESULTS)
+    .map(({ id }) => merged.get(id)!);
 }
 
 // One memory tool round: run the model's searchMemory calls under a shared per-turn query budget and
@@ -437,7 +437,9 @@ function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
 // semantics (timeout → empty results, failure → empty results + memory_search_unavailable) stay identical.
 type MemoryToolRound = {
   toolMessages: any[];
-  allResults: MemoryResult[];
+  // Per-tool-call result batches, boundaries kept: the final injection merge fuses them by rank
+  // (topMemoryResults), which needs each batch's internal (diversified) order intact.
+  allBatches: MemoryResult[][];
   usedQueries: string[];
   toolSearchTimedOut: boolean;
   toolSearchFailed: boolean;
@@ -454,7 +456,7 @@ async function runMemoryToolRound(
   let toolSearchFailed = false;
   let toolSearchError: string | undefined;
   const toolMessages: any[] = [];
-  const allResults: MemoryResult[] = [];
+  const allBatches: MemoryResult[][] = [];
   const usedQueries: string[] = [];
   for (const call of calls) {
     const queries = call.queries.slice(0, Math.max(remainingQueries, 0));
@@ -497,14 +499,14 @@ async function runMemoryToolRound(
         if (timer) clearTimeout(timer);
       }
     }
-    allResults.push(...results);
+    if (results.length) allBatches.push(results);
     toolMessages.push({
       role: "tool",
       tool_call_id: call.id,
       content: JSON.stringify(toolResultPayload(queries, results, failed ? "memory_search_unavailable" : undefined)),
     });
   }
-  return { toolMessages, allResults, usedQueries, toolSearchTimedOut, toolSearchFailed, ...(toolSearchError ? { toolSearchError } : {}) };
+  return { toolMessages, allBatches, usedQueries, toolSearchTimedOut, toolSearchFailed, ...(toolSearchError ? { toolSearchError } : {}) };
 }
 
 function proxyResponse(
@@ -1017,7 +1019,7 @@ export function proxyRoutes(ctx: Ctx) {
         await firstReader!.cancel(); // memory_tool implies a reader existed; drop the rest of stream one
       } catch {}
       const round = await runMemoryToolRound(ctx, decision.memoryCalls, { userId, containerTag });
-      const finalResults = topMemoryResults(round.allResults);
+      const finalResults = topMemoryResults(round.allBatches);
       const traceItems = traceItemsFromSearchResults(finalResults);
       const finalRequest = {
         ...body,
@@ -1290,7 +1292,7 @@ export function proxyRoutes(ctx: Ctx) {
 
     const round = await runMemoryToolRound(ctx, toolCalls, { userId, containerTag });
     const { toolMessages, usedQueries, toolSearchTimedOut, toolSearchFailed, toolSearchError } = round;
-    const finalResults = topMemoryResults(round.allResults);
+    const finalResults = topMemoryResults(round.allBatches);
     const traceItems = traceItemsFromSearchResults(finalResults);
 
     const finalRequest = {

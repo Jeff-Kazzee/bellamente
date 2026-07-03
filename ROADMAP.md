@@ -16,16 +16,17 @@ Also on the website: https://bellamente.vercel.app/roadmap
 - Auto-capture with **local LLM distillation**: durable facts extracted from your chats by your own
   local model — heuristic fallback, sensitive-content exclusion, every capture traced and reversible.
 - Recall traces (`/inspect`) + a dashboard with edit / forget / delete / history.
+- Retrieval eval harness: `bun run bench` loads fixtures through HTTP routes and prints recall@k, MRR,
+  latency p50/p95, and route-vector-vs-brute-force recall and exact-vs-route delta.
 - One binary; embedded Postgres + pgvector; local device-scaled embeddings; loopback by default;
   append-only migrations.
-- 116 behavior tests under a coverage-gated build.
+- Coverage-gated behavior test suite.
 
 ## Next — the trust loop, finished
 
 - Full-text search over memories (exact names, codes, rare tokens — not just semantic).
 - MCP server (`bella mcp`) so agent harnesses plug in directly.
 - Recency-aware ranking.
-- Retrieval eval harness with published recall@k / latency numbers.
 - Richer trust views: rejected-capture reasons, version diffs, provenance trees.
 - Export / import — your memory is a file you can take anywhere.
 

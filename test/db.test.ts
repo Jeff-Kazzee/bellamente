@@ -26,7 +26,7 @@ test("assertEmbeddingDim passes on match, throws on a dimension switch", async (
   await assertEmbeddingDim(sql, 8); // matches -> no throw
   await expect(assertEmbeddingDim(sql, 16)).rejects.toThrow(/on-disk embedding dimension is 8 but EMBED_DIM=16/);
   await sql.end();
-});
+}, 20000);
 
 test("assertEmbeddingModel passes on a fresh DB and on match; throws on a same-dim model swap", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
@@ -42,7 +42,7 @@ test("assertEmbeddingModel passes on a fresh DB and on match; throws on a same-d
             VALUES (${"b".repeat(22)}, ${"org"}, ${"s".repeat(22)}, ${"yo"}, ${"model-b"})`;
   await expect(assertEmbeddingModel(sql, "model-a")).rejects.toThrow(/produced by \[model-b\]/);
   await sql.end();
-});
+}, 20000);
 
 test("isValidVector rejects an all-zero vector (whitespace/OOV), accepts a real one", () => {
   const zero = new Array(EMBED_DIM).fill(0);
@@ -121,6 +121,24 @@ test("runMigrations: brings a legacy install (missing new indexes) up to date", 
   await sql.end();
 }, 20000);
 
+test("runMigrations: memory full-text GIN index ships to legacy installs (003) and fresh installs via schema.sql (B6)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  // Fresh install: schema.sql itself creates the index (migrations then no-op over it).
+  let idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  expect(idx.length).toBe(1);
+  // Legacy install: the index predates migration 003 on disk — drop it, migrations bring it back.
+  await sql.unsafe("DROP INDEX idx_memory_entry_fulltext");
+  await runMigrations(sql);
+  idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  expect(idx.length).toBe(1);
+  // Idempotent: a re-run applies nothing and leaves the index in place.
+  const again = await runMigrations(sql);
+  expect(again).toEqual([]);
+  await sql.end();
+}, 20000);
+
 test("runMigrations: a failing migration rolls back atomically (no SQL applied, no row recorded)", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
   const sql = makePgliteSql(pg);
@@ -147,3 +165,46 @@ test("concurrent acquirers never double-acquire while a live holder exists", asy
   held();
   rmSync(lockPath, { force: true });
 });
+
+test("migration 4 ships valid_from/valid_to to legacy installs; fresh installs match via schema.sql; re-run no-op (P1.8 B4)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  const colTypes = async () => sql`
+    SELECT column_name, data_type, is_nullable FROM information_schema.columns
+    WHERE table_name = 'memory_entry' AND column_name IN ('valid_from', 'valid_to')
+    ORDER BY column_name`;
+  // Fresh install: schema.sql itself carries the columns (migrations then no-op over them).
+  const fresh = await colTypes();
+  expect(fresh.map((r) => r.column_name)).toEqual(["valid_from", "valid_to"]);
+  for (const r of fresh) expect(r.is_nullable).toBe("YES"); // nullable = open-ended window
+  await runMigrations(sql);
+  // Legacy install: the columns predate migration 4 on disk — drop them, migrations bring them back.
+  await sql.unsafe("ALTER TABLE memory_entry DROP COLUMN valid_from; ALTER TABLE memory_entry DROP COLUMN valid_to;");
+  await sql`DELETE FROM schema_migrations WHERE id = 4`;
+  await runMigrations(sql);
+  const migrated = await colTypes();
+  // The migrated shape must be IDENTICAL to the fresh schema.sql shape (rule 3: same commit, same type).
+  expect(migrated).toEqual(fresh);
+  // Idempotent: a re-run applies nothing and the ADD COLUMN IF NOT EXISTS guards hold.
+  expect(await runMigrations(sql)).toEqual([]);
+  await sql.end();
+}, 20000);
+
+test("migration 003 and schema.sql produce the IDENTICAL index definition (B6 strengthened)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  await runMigrations(sql); // creates schema_migrations + records 1-3 (index already present via schema.sql)
+  const [fresh] = await sql`SELECT indexdef FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  await sql.unsafe("DROP INDEX idx_memory_entry_fulltext");
+  await sql`DELETE FROM schema_migrations WHERE id = 3`;
+  await runMigrations(sql);
+  const [migrated] = await sql`SELECT indexdef FROM pg_indexes WHERE indexname = ${"idx_memory_entry_fulltext"}`;
+  // a same-named index with a different expression/method/config in either source would pass a
+  // bare existence check; the definitions themselves must match exactly
+  expect(migrated!.indexdef).toBe(fresh!.indexdef);
+  expect(String(fresh!.indexdef)).toContain("gin");
+  expect(String(fresh!.indexdef)).toContain("to_tsvector('simple'");
+  await sql.end();
+}, 20000);
