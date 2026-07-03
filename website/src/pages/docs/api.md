@@ -42,8 +42,12 @@ curl -s localhost:8080/search -H 'content-type: application/json' \
 
 `searchMode`: `memories` (semantic + full-text recall, rank-fused, recency-weighted), `documents`
 (vector + full-text over chunks, rank-fused), or `hybrid` (both lists fused). `recency: false`
-turns off time-decay for a request. Results carry `similarity` (raw cosine evidence; `0` for
-keyword-only hits) and `score` (the fused ranking score — the order authority), plus a `traceId` —
+turns off time-decay for a request. Memory results also get an MMR **diversity pass** so
+near-duplicate memories don't crowd out distinct ones: on by default when `limit >= 5`,
+`diversify: false` turns it off, `diversify: true` forces it at any limit. It reorders only — no
+extra model, no re-embedding. Results carry `similarity` (raw cosine evidence; `0` for keyword-only
+hits) and `score` (the fused ranking score); the returned order is the ranking authority (with
+diversity on, a redundant high-scorer may rank below a distinct lower-scorer), plus a `traceId` —
 the receipt.
 
 ## Profile

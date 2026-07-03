@@ -4,7 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { searchRoutes } from "../src/search";
+import { searchRoutes, Q } from "../src/search";
 import { inspectRoutes, recordTrace } from "../src/inspect";
 import { proxyRoutes, runToolSearch } from "../src/proxy";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
@@ -1353,7 +1353,41 @@ test("BELLA_STREAM_DECISION_HOLD_CHARS=0 restores commit-on-first-content", asyn
   }
 }, TEST_TIMEOUT_MS);
 
-test("runToolSearch orders by the fused score — keyword-only hits no longer sink below cosine hits", async () => {
+test("runToolSearch preserves the diversified memory order — the proxy merge must not re-sort by score (P1.4)", async () => {
+  const ctx = await makeCtx();
+  const originalThreshold = Q.SIMILARITY_THRESHOLD;
+  try {
+    Q.SIMILARITY_THRESHOLD = 0.3; // fixture sims (0.6..0.35) sit below some engine-calibrated default floors
+    const TAG = "mmr_tool_test";
+    const SPACE = "mmrtoolspace".padEnd(22, "x");
+    await ctx.sql`INSERT INTO space (id, container_tag, org_id) VALUES (${SPACE}, ${TAG}, ${ORG_ID})`;
+    // Same shape as the P1.4 fixtures in search.test.ts: three near-identical dups + one distinct
+    // relevant memory; texts avoid the query's tokens so only vector rank + MMR set the order.
+    const dupA = "tooldupa".padEnd(22, "x");
+    const distinct = "tooldist".padEnd(22, "x");
+    const rows = [
+      { id: dupA, memory: "dark mode on every surface", vec: "[0.6,0.8,0,0]" },
+      { id: "tooldupb".padEnd(22, "x"), memory: "dark mode on all surfaces", vec: "[0.59,0.8074,0,0]" },
+      { id: "tooldupc".padEnd(22, "x"), memory: "dark mode everywhere always", vec: "[0.58,0.8146,0,0]" },
+      { id: distinct, memory: "compact font sizing everywhere", vec: "[0.35,0,0.9368,0]" },
+    ];
+    for (const r of rows) {
+      await ctx.sql`
+        INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, memory_embedding, memory_embedding_model)
+        VALUES (${r.id}, ${ORG_ID}, ${SPACE}, ${r.memory}, true, 1, ${r.id}, ${r.vec}::vector, ${"test-embed"})`;
+    }
+    const results = await runToolSearch(ctx as any, ["preferred ui theme"], { containerTag: TAG, recordTrace: false });
+    // searchMemories returns the MMR order [dupA, distinct, dupB, dupC]; a score re-sort in the
+    // proxy merge would bury the distinct memory at #4 again (Codex review of PR #88, finding 1).
+    expect(results[0]!.id).toBe(dupA);
+    expect(results.slice(0, 3).map((r) => r.id)).toContain(distinct);
+  } finally {
+    Q.SIMILARITY_THRESHOLD = originalThreshold;
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("runToolSearch keeps keyword-only hits from sinking below cosine hits (rank order, not similarity)", async () => {
   const ctx = await makeCtx();
   try {
     // Seeded memory: "John prefers dark mode", embedding [1,0,0,0] == the fake query embedding (cosine 1.0).
