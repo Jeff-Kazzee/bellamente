@@ -37,7 +37,7 @@ export type ModeMetrics = {
   latencyP95Ms: number;
   indexedVectorRecallAt10: number;
   bruteForceRecallAt10: number;
-  annLossAt10: number;
+  exactVsRouteDeltaAt10: number;
 };
 
 export type EvalReport = {
@@ -304,14 +304,14 @@ async function loadFixtures(app: ReturnType<typeof buildApp>, routeCounts: Recor
   return { goldToActual };
 }
 
-function percentile(values: number[], pct: number): number {
+export function percentile(values: number[], pct: number): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((pct / 100) * sorted.length) - 1));
   return sorted[index]!;
 }
 
-function scoreRanking(keys: string[], gold: Set<string>): { r1: number; r5: number; r10: number; reciprocalRank: number } {
+export function scoreRanking(keys: string[], gold: Set<string>): { r1: number; r5: number; r10: number; reciprocalRank: number } {
   const rank = keys.findIndex((key) => gold.has(key));
   return {
     r1: rank >= 0 && rank < 1 ? 1 : 0,
@@ -319,6 +319,10 @@ function scoreRanking(keys: string[], gold: Set<string>): { r1: number; r5: numb
     r10: rank >= 0 && rank < 10 ? 1 : 0,
     reciprocalRank: rank >= 0 ? 1 / (rank + 1) : 0,
   };
+}
+
+export function exactVsRouteDelta(bruteForceRecallAt10: number, indexedVectorRecallAt10: number): number {
+  return Math.abs(bruteForceRecallAt10 - indexedVectorRecallAt10);
 }
 
 function cosine(a: number[], b: number[]): number {
@@ -331,6 +335,7 @@ type EmbeddedCandidate = { key: string; vector: number[] };
 type BruteForceCorpus = { memories: EmbeddedCandidate[]; documents: EmbeddedCandidate[] };
 
 async function loadBruteForceCorpus(embed: Embed, sql: Sql, containerTag: string): Promise<BruteForceCorpus> {
+  // Mirrors searchMemories' default P1.8 visibility path: no asOf means latest, non-forgotten rows only.
   const [memoryRows, documentRows] = await Promise.all([
     sql<{ id: string; text: string }[]>`
       SELECT id, memory AS text
@@ -451,7 +456,7 @@ async function evaluateMode(
     latencyP95Ms: percentile(latencies, 95),
     indexedVectorRecallAt10,
     bruteForceRecallAt10,
-    annLossAt10: Math.max(0, bruteForceRecallAt10 - indexedVectorRecallAt10),
+    exactVsRouteDeltaAt10: exactVsRouteDelta(bruteForceRecallAt10, indexedVectorRecallAt10),
   };
 }
 
@@ -502,7 +507,7 @@ export function formatMetricsTable(report: EvalReport): string {
     "Bellamente P1.1 E2E retrieval benchmark",
     `seed=${report.dataset.seed} embedder=${report.dataset.embedder} memories=${report.dataset.memoryCount} documents=${report.dataset.documentCount} queries=${report.dataset.queryCount}`,
     "",
-    "| mode | queries | recall@1 | recall@5 | recall@10 | MRR | p50 ms | p95 ms | indexed vec recall@10 | brute-force recall@10 | ANN loss@10 |",
+    "| mode | queries | recall@1 | recall@5 | recall@10 | MRR | p50 ms | p95 ms | route vec recall@10 | brute-force recall@10 | exact-vs-route delta@10 |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const mode of MODES) {
@@ -510,7 +515,7 @@ export function formatMetricsTable(report: EvalReport): string {
     lines.push(
       `| ${mode} | ${row.queryCount} | ${pct(row.recallAt1)} | ${pct(row.recallAt5)} | ${pct(row.recallAt10)} | ` +
         `${row.mrr.toFixed(3)} | ${ms(row.latencyP50Ms)} | ${ms(row.latencyP95Ms)} | ` +
-        `${pct(row.indexedVectorRecallAt10)} | ${pct(row.bruteForceRecallAt10)} | ${pct(row.annLossAt10)} |`,
+        `${pct(row.indexedVectorRecallAt10)} | ${pct(row.bruteForceRecallAt10)} | ${pct(row.exactVsRouteDeltaAt10)} |`,
     );
   }
   lines.push(
