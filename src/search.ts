@@ -63,8 +63,10 @@ const clampLimit = (n: number | undefined) => Math.min(Math.max(n ?? 10, 1), 100
 // Legs are best-first id lists. Ties are real at small limits (the top row of each leg scores
 // 1/(K+1)); ids from higher-tiePriority legs win them (literal text evidence beats semantic
 // similarity; memories beat chunks), then id — ordering never depends on Map insertion order.
-type FuseLeg = { ids: string[]; tiePriority: number };
-function rrfFuse(legs: FuseLeg[], decay?: (id: string) => number): { id: string; score: number }[] {
+// Exported for the proxy's cross-batch merge (topMemoryResults) — a score re-sort there undid the
+// MMR order (Codex review of PR #88, finding 1); rank fusion is the only merge that respects it.
+export type FuseLeg = { ids: string[]; tiePriority: number };
+export function rrfFuse(legs: FuseLeg[], decay?: (id: string) => number): { id: string; score: number }[] {
   const base = new Map<string, number>();
   const priority = new Map<string, number>();
   for (const leg of legs) {
@@ -126,7 +128,22 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
     ({ type: "memory", id: r.id, memory: r.memory, version: Number(r.version), similarity, score });
   const vrows = rawVrows.filter((r) => Number(r.similarity) >= threshold);
 
-  if (!useKeyword) return vrows.map((r) => toResult(r, Number(r.similarity), Number(r.similarity))).slice(0, limit);
+  // MMR diversity gating (P1.4, issue #37): ON by default for limit >= 5, OFF when explicitly
+  // false, explicit true forces it at any limit — on BOTH paths (the keyword:false early return
+  // used to skip the gate entirely; Codex review of PR #88, finding 2).
+  const diversify = opts.diversify === false ? false : opts.diversify === true || limit >= 5;
+
+  if (!useKeyword) {
+    const all = vrows.map((r) => toResult(r, Number(r.similarity), Number(r.similarity)));
+    if (!diversify) return all.slice(0, limit);
+    const byId = new Map(all.map((m) => [m.id, m]));
+    // Scores here are raw cosine — the penalty's own scale — so no normalization (classic MMR).
+    return mmrRerank(
+      vrows.slice(0, limit * MMR_POOL_MULTIPLIER).map((r) => ({ id: r.id, score: Number(r.similarity), embedding: parseVector(r.memory_embedding) })),
+      limit,
+      { normalizeScores: false },
+    ).map(({ id }) => byId.get(id)!);
+  }
 
   // Keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric). Embeddings ride
   // along for the diversity pass (P1.4) — already on the row, so MMR costs zero extra embed calls.
@@ -153,14 +170,13 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
     w === 0 ? undefined : decay,
   );
 
-  // MMR diversity pass (P1.4, issue #37): default gating is ON for limit >= 5, OFF when explicitly
-  // false; explicit true forces it on at any limit. Reorders only — membership beyond the top-k cut,
-  // scores, and similarity are untouched.
-  const diversify = opts.diversify === false ? false : opts.diversify === true || limit >= 5;
+  // MMR diversity pass (P1.4, issue #37). Reorders only — membership beyond the top-k cut, scores,
+  // and similarity are untouched. RRF scores are rank-shaped, so they DO get normalized here.
   const ordered = diversify
     ? mmrRerank(
         fused.slice(0, limit * MMR_POOL_MULTIPLIER).map(({ id, score }) => ({ id, score, embedding: embeddings.get(id) ?? null })),
         limit,
+        { normalizeScores: true },
       )
     : fused.slice(0, limit);
   return ordered.map(({ id, score }) => ({ ...data.get(id)!, score }));

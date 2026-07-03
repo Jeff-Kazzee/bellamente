@@ -38,18 +38,26 @@ function cosine(a: number[], b: number[]): number {
 
 // Greedy MMR over a fused-order pool (best first): each pick maximizes
 //   λ·relevance − (1−λ)·max cosine(candidate, already-picked).
-// Relevance is the fused score min-max normalized WITHIN the pool — RRF scores are rank-shaped
-// (~1/60), not cosine-shaped, and raw they would drown under the similarity penalty.
+// normalizeScores is the CALLER's statement about score shape, and it changes outcomes (Codex
+// review of PR #88, finding 2): RRF scores are rank-shaped (~1/60) and raw would drown under the
+// similarity penalty — min-max normalize them within the pool (true, the default). Cosine scores
+// already live on the penalty's own scale and classic MMR uses them raw — min-max would stretch
+// tightly-packed duplicate sims to the top and block every promotion (false).
 // Deterministic by construction: strict `>` keeps the earliest (fused-order) candidate on ties,
 // so pick #1 is always the fused head and tie-break policy survives the rerank. A candidate with
 // no embedding takes no similarity penalty (it cannot be shown redundant) rather than being dropped.
-export function mmrRerank<T extends MmrCandidate>(pool: T[], limit: number, lambda = MMR_LAMBDA): T[] {
+export function mmrRerank<T extends MmrCandidate>(
+  pool: T[],
+  limit: number,
+  opts: { lambda?: number; normalizeScores?: boolean } = {},
+): T[] {
+  const lambda = opts.lambda ?? MMR_LAMBDA;
   if (limit <= 0) return [];
   if (pool.length <= 1 || limit <= 1) return pool.slice(0, limit);
   let lo = Infinity, hi = -Infinity;
   for (const c of pool) { lo = Math.min(lo, c.score); hi = Math.max(hi, c.score); }
   const range = hi - lo;
-  const rel = (c: T) => (range > 0 ? (c.score - lo) / range : 1);
+  const rel = (c: T) => (opts.normalizeScores === false ? c.score : range > 0 ? (c.score - lo) / range : 1);
   const selected: T[] = [];
   const remaining = pool.slice();
   while (selected.length < limit && remaining.length > 0) {

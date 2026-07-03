@@ -516,6 +516,27 @@ test("diversified ranking is stable and deterministic for fixed fixtures (P1.4 B
   }
 }, TEST_TIMEOUT_MS);
 
+test("diversify honors the keyword:false vector path too — the gate is not skipped (P1.4 review fix)", async () => {
+  // Codex review of PR #88, finding 2: the keyword:false early return skipped the diversify gate,
+  // silently ignoring an explicit diversify:true. On this path scores are raw cosine, so MMR must
+  // use them RAW (classic MMR) — min-max normalization is for rank-shaped RRF scores and would
+  // stretch the tightly-packed duplicate sims to the top, blocking promotion.
+  const ctx = await makeCtx();
+  try {
+    await seedMmrSpace(ctx.sql);
+    const on = await mmrSearch(ctx, { limit: 3, keyword: false, diversify: true });
+    expect(on).toHaveLength(3);
+    expect(on[0]!.id).toBe(MMR_DUPS[0]!.id);
+    expect(on.map((r) => r.id)).toContain(MMR_DISTINCT.id);
+    const gated = await mmrSearch(ctx, { keyword: false }); // limit 5 -> the default gate applies here too
+    expect(gated.slice(0, 3).map((r) => r.id)).toContain(MMR_DISTINCT.id);
+    const off = await mmrSearch(ctx, { limit: 3, keyword: false, diversify: false });
+    expect(off.map((r) => r.id)).toEqual(MMR_DUPS.map((d) => d.id)); // legacy pure-vector order when off
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
 test("diversify makes NO additional embed calls — candidate embeddings ride along from the DB (P1.4)", async () => {
   const ctx = await makeCtx();
   try {
