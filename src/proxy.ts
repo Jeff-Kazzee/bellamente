@@ -67,24 +67,14 @@ function chatCompletionsToolDefinition() {
   return { type: "function", function: toolDescription() };
 }
 
-// Run up to MAX_QUERIES_PER_CALL searches, merge by id keep max similarity, cap MAX_COMBINED_RESULTS.
+// Run up to MAX_QUERIES_PER_CALL searches, merge via topMemoryResults (the ONE merge/cap rule —
+// its inline twin here had to be edited in lockstep twice; thermonuclear review D-finding 2).
 export async function runToolSearch(ctx: Ctx, queries: string[], opts: ToolSearchTraceOpts = {}) {
   const started = Date.now();
   const capped = queries.slice(0, MAX_QUERIES_PER_CALL);
   try {
     const batches = await Promise.all(capped.map((q) => searchMemories(ctx, { q, containerTag: opts.containerTag })));
-    const merged = new Map<string, MemoryResult>();
-    for (const batch of batches) {
-      for (const r of batch) {
-        const prev = merged.get(r.id);
-        if (!prev || r.score > prev.score) merged.set(r.id, r);
-      }
-    }
-    // Order by the FUSED score, not raw cosine: keyword-only hits carry similarity 0 and would sink
-    // (or fall past the cap) under a similarity sort even when RRF ranked them first (PR #79 review).
-    const results = Array.from(merged.values())
-      .sort((a, b) => b.score - a.score)
-      .slice(0, Q.MAX_COMBINED_RESULTS);
+    const results = topMemoryResults(batches.flat());
 
     if (opts.recordTrace !== false) {
       const items = traceItemsFromSearchResults(results);

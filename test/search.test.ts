@@ -433,3 +433,32 @@ test("results carry the fused score, ordered by it (memories)", async () => {
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
+
+// --- Thermonuclear review D1: ONE fusion primitive, tie-break universal (was memories-only) ---
+
+test("chunk fusion tie-break is deterministic: the literal keyword hit wins an RRF tie", async () => {
+  const ctx = await makeCtx();
+  try {
+    // Both chunks rank #1 in their leg for this query -> equal RRF score. Pre-D1 the order fell to
+    // Map insertion (vector leg first); the rule is now universal: literal text evidence wins ties.
+    const results = await searchChunks(ctx as any, { q: "zebra", threshold: 0.5, limit: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.id).toBe(chunkKwId);
+    expect(results[0]!.source).toBe("keyword");
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("hybrid fusion tie-break is deterministic: memories (the primary object) win cross-type ties", async () => {
+  const ctx = await makeCtx();
+  try {
+    // m1 (memories leg #1) and chunkVec (chunks leg #1) tie on RRF; memories are the primary object
+    // and now win ties EXPLICITLY instead of by insertion luck.
+    const results = await search(ctx as any, { q: "alpha", threshold: 0.5, limit: 2, searchMode: "hybrid" });
+    expect(results[0]!.type).toBe("memory");
+    expect(results[0]!.id).toBe(memIds[0]);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);

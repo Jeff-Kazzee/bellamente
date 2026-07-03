@@ -54,6 +54,26 @@ export type SearchResult = MemoryResult | ChunkResult;
 
 const clampLimit = (n: number | undefined) => Math.min(Math.max(n ?? 10, 1), 100);
 
+// The ONE place rank fusion + ordering lives (thermonuclear review of PR #86, demand D1 — this
+// codebase briefly had FOUR hand-rolled RRF copies, three missing the PR #79 tie-break fix).
+// Legs are best-first id lists. Ties are real at small limits (the top row of each leg scores
+// 1/(K+1)); ids from higher-tiePriority legs win them (literal text evidence beats semantic
+// similarity; memories beat chunks), then id — ordering never depends on Map insertion order.
+type FuseLeg = { ids: string[]; tiePriority: number };
+function rrfFuse(legs: FuseLeg[], decay?: (id: string) => number): { id: string; score: number }[] {
+  const base = new Map<string, number>();
+  const priority = new Map<string, number>();
+  for (const leg of legs) {
+    leg.ids.forEach((id, i) => {
+      base.set(id, (base.get(id) ?? 0) + 1 / (Q.RRF_K + i + 1));
+      priority.set(id, Math.max(priority.get(id) ?? 0, leg.tiePriority));
+    });
+  }
+  return [...base.entries()]
+    .map(([id, b]) => ({ id, score: decay ? b * decay(id) : b }))
+    .sort((a, b) => b.score - a.score || priority.get(b.id)! - priority.get(a.id)! || a.id.localeCompare(b.id));
+}
+
 // Hybrid memory search (SPEC-P1.3): vector (pgvector cosine) + full-text ('simple' tsvector), fused via
 // RRF — the same pattern as searchChunks. Memories are the PRIMARY object; vector-only recall missed
 // exact names, codes, and rare tokens whose embeddings drift away from the query's.
@@ -74,38 +94,40 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   const tagClause = opts.containerTag
     ? sql`AND space_id IN (SELECT id FROM space WHERE container_tag = ${opts.containerTag} AND org_id = ${ORG_ID})`
     : sql``;
-  const rawVrows = await sql`
-    SELECT id, memory, version, created_at, 1 - (memory_embedding <=> ${v}::vector) AS similarity
-    FROM memory_entry
-    WHERE org_id = ${ORG_ID} AND is_latest = true AND memory_embedding IS NOT NULL
-      ${forgottenClause} ${tagClause}
-    ORDER BY memory_embedding <=> ${v}::vector
-    LIMIT ${N}`;
-  // The cosine floor applies to the VECTOR leg only. Keyword hits are exempt: a literal text match is
-  // its own relevance evidence, and ts_rank is not on the cosine scale (same rule as searchChunks).
+  // The two legs are independent (D2): run them in parallel. The cosine floor applies to the VECTOR
+  // leg only. Keyword hits are exempt: a literal text match is its own relevance evidence, and
+  // ts_rank is not on the cosine scale (same rule as searchChunks).
+  const [rawVrows, krows] = await Promise.all([
+    sql`
+      SELECT id, memory, version, created_at, 1 - (memory_embedding <=> ${v}::vector) AS similarity
+      FROM memory_entry
+      WHERE org_id = ${ORG_ID} AND is_latest = true AND memory_embedding IS NOT NULL
+        ${forgottenClause} ${tagClause}
+      ORDER BY memory_embedding <=> ${v}::vector
+      LIMIT ${N}`,
+    useKeyword
+      ? sql`
+          SELECT id, memory, version, created_at,
+                 ts_rank(to_tsvector('simple', memory), websearch_to_tsquery('simple', ${opts.q})) AS rank
+          FROM memory_entry
+          WHERE org_id = ${ORG_ID} AND is_latest = true
+            ${forgottenClause} ${tagClause}
+            AND to_tsvector('simple', memory) @@ websearch_to_tsquery('simple', ${opts.q})
+          ORDER BY rank DESC
+          LIMIT ${N}`
+      : Promise.resolve([] as any[]),
+  ]);
   const toResult = (r: any, similarity: number, score: number): MemoryResult =>
     ({ type: "memory", id: r.id, memory: r.memory, version: Number(r.version), similarity, score });
   const vrows = rawVrows.filter((r) => Number(r.similarity) >= threshold);
 
   if (!useKeyword) return vrows.map((r) => toResult(r, Number(r.similarity), Number(r.similarity))).slice(0, limit);
 
-  const krows = await sql`
-    SELECT id, memory, version, created_at,
-           ts_rank(to_tsvector('simple', memory), websearch_to_tsquery('simple', ${opts.q})) AS rank
-    FROM memory_entry
-    WHERE org_id = ${ORG_ID} AND is_latest = true
-      ${forgottenClause} ${tagClause}
-      AND to_tsvector('simple', memory) @@ websearch_to_tsquery('simple', ${opts.q})
-    ORDER BY rank DESC
-    LIMIT ${N}`;
-
-  // Reciprocal Rank Fusion; keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
-  const rrf = new Map<string, number>();
+  // Keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
   const data = new Map<string, MemoryResult>();
   const createdAt = new Map<string, number>();
-  const inKeyword = new Set<string>();
-  vrows.forEach((r, i) => { rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
-  krows.forEach((r, i) => { rrf.set(r.id, (rrf.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); inKeyword.add(r.id); if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
+  vrows.forEach((r) => { data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
+  krows.forEach((r) => { if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
 
   // Recency decay (P1.2): fused = rrf × (1 − w·(1 − e^(−age/τ))). Multiplicative on the RANK-based
   // score, so it is scale-free and BOUNDED — an infinitely old memory keeps (1−w) of its relevance
@@ -114,21 +136,17 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   const w = opts.recency === false ? 0 : recencyWeight();
   const tauMs = recencyTauDays() * 864e5;
   const now = Date.now();
-  const decay = (id: string) => {
-    if (w === 0) return 1;
-    const ageMs = Math.max(0, now - (createdAt.get(id) ?? now));
-    return 1 - w * (1 - Math.exp(-ageMs / tauMs));
-  };
-  const fused = new Map<string, number>();
-  for (const [id, base] of rrf) fused.set(id, base * decay(id));
+  const decay = (id: string) => 1 - w * (1 - Math.exp(-Math.max(0, now - (createdAt.get(id) ?? now)) / tauMs));
 
-  // Ties are real at small limits (the top row of each leg scores 1/(K+1)). Deterministic tie-break:
-  // a literal text match is stronger evidence for the query than semantic similarity, so keyword-leg
-  // membership wins; then id, so ordering never depends on Map insertion order (Codex review, PR #79).
-  return [...fused.entries()]
-    .sort((a, b) => b[1] - a[1] || Number(inKeyword.has(b[0])) - Number(inKeyword.has(a[0])) || a[0].localeCompare(b[0]))
+  return rrfFuse(
+    [
+      { ids: vrows.map((r) => r.id), tiePriority: 0 },
+      { ids: krows.map((r) => r.id), tiePriority: 1 }, // literal text evidence wins ties
+    ],
+    w === 0 ? undefined : decay,
+  )
     .slice(0, limit)
-    .map(([id, s]) => ({ ...data.get(id)!, score: s }));
+    .map(({ id, score }) => ({ ...data.get(id)!, score }));
 }
 
 // Hybrid chunk search: vector (pgvector cosine) + full-text ('simple' tsvector), fused via RRF.
@@ -145,16 +163,28 @@ export async function searchChunks({ sql, embed }: Ctx, opts: SearchOpts): Promi
     ? sql`AND d.container_tags @> ARRAY[${opts.containerTag}]::text[]`
     : sql``;
 
-  const rawVrows = await sql`
-    SELECT c.id, c.content, c.document_id, c.metadata, d.title, d.filepath,
-           1 - (c.embedding <=> ${v}::vector) AS similarity
-    FROM chunk c JOIN document d ON d.id = c.document_id
-    WHERE d.org_id = ${ORG_ID} AND c.embedding IS NOT NULL ${tagClause}
-    ORDER BY c.embedding <=> ${v}::vector
-    LIMIT ${N}`;
-  // The cosine floor applies to the VECTOR leg on both paths (it used to be skipped when keyword=true,
-  // silently letting sub-threshold vector hits through RRF). Keyword hits are exempt: a literal text match
-  // is its own relevance evidence, and ts_rank is not on the cosine scale.
+  // Independent legs in parallel (D2). The cosine floor applies to the VECTOR leg on both paths
+  // (it used to be skipped when keyword=true, silently letting sub-threshold vector hits through
+  // RRF). Keyword hits are exempt: a literal text match is its own relevance evidence, and ts_rank
+  // is not on the cosine scale.
+  const [rawVrows, krows] = await Promise.all([
+    sql`
+      SELECT c.id, c.content, c.document_id, c.metadata, d.title, d.filepath,
+             1 - (c.embedding <=> ${v}::vector) AS similarity
+      FROM chunk c JOIN document d ON d.id = c.document_id
+      WHERE d.org_id = ${ORG_ID} AND c.embedding IS NOT NULL ${tagClause}
+      ORDER BY c.embedding <=> ${v}::vector
+      LIMIT ${N}`,
+    useKeyword
+      ? sql`
+          SELECT c.id, ts_rank(to_tsvector('simple', c.content), websearch_to_tsquery('simple', ${opts.q})) AS rank
+          FROM chunk c JOIN document d ON d.id = c.document_id
+          WHERE d.org_id = ${ORG_ID} ${tagClause}
+            AND to_tsvector('simple', c.content) @@ websearch_to_tsquery('simple', ${opts.q})
+          ORDER BY rank DESC
+          LIMIT ${N}`
+      : Promise.resolve([] as any[]),
+  ]);
   const vrows = rawVrows.filter((r) => Number(r.similarity) >= threshold);
 
   if (!useKeyword) {
@@ -164,23 +194,15 @@ export async function searchChunks({ sql, embed }: Ctx, opts: SearchOpts): Promi
       .slice(0, limit);
   }
 
-  const krows = await sql`
-    SELECT c.id, ts_rank(to_tsvector('simple', c.content), websearch_to_tsquery('simple', ${opts.q})) AS rank
-    FROM chunk c JOIN document d ON d.id = c.document_id
-    WHERE d.org_id = ${ORG_ID} ${tagClause}
-      AND to_tsvector('simple', c.content) @@ websearch_to_tsquery('simple', ${opts.q})
-    ORDER BY rank DESC
-    LIMIT ${N}`;
-
-  // Reciprocal Rank Fusion
-  const score = new Map<string, number>();
-  const inVec = new Set<string>();
-  const inKw = new Set<string>();
-  const data = new Map<string, any>();
-  vrows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); inVec.add(r.id); data.set(r.id, r); });
-  krows.forEach((r, i) => { score.set(r.id, (score.get(r.id) ?? 0) + 1 / (Q.RRF_K + i + 1)); inKw.add(r.id); });
-
-  const topIds = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map((e) => e[0]);
+  const inVec = new Set(vrows.map((r) => r.id));
+  const inKw = new Set(krows.map((r) => r.id));
+  const data = new Map<string, any>(vrows.map((r) => [r.id, r]));
+  const topIds = rrfFuse([
+    { ids: vrows.map((r) => r.id), tiePriority: 0 },
+    { ids: krows.map((r) => r.id), tiePriority: 1 }, // literal text evidence wins ties
+  ])
+    .slice(0, limit)
+    .map((e) => e.id);
   const missing = topIds.filter((id) => !data.has(id));
   if (missing.length) {
     const mrows = await sql`
@@ -208,19 +230,15 @@ export async function search(ctx: Ctx, opts: SearchOpts): Promise<SearchResult[]
   // which only assumes each list is ordered best-first.
   const limit = clampLimit(opts.limit);
   const [mem, chunks] = await Promise.all([searchMemories(ctx, opts), searchChunks(ctx, opts)]);
-  const score = new Map<string, number>();
-  const byKey = new Map<string, SearchResult>();
-  for (const list of [mem, chunks] as SearchResult[][]) {
-    list.forEach((r, i) => {
-      const key = `${r.type}:${r.id}`;
-      score.set(key, (score.get(key) ?? 0) + 1 / (Q.RRF_K + i + 1));
-      if (!byKey.has(key)) byKey.set(key, r);
-    });
-  }
-  return [...score.entries()]
-    .sort((a, b) => b[1] - a[1])
+  const byKey = new Map<string, SearchResult>(
+    [...mem, ...chunks].map((r) => [`${r.type}:${r.id}`, r]),
+  );
+  return rrfFuse([
+    { ids: mem.map((r) => `memory:${r.id}`), tiePriority: 1 }, // memories are the primary object: they win cross-type ties
+    { ids: chunks.map((r) => `chunk:${r.id}`), tiePriority: 0 },
+  ])
     .slice(0, Math.min(limit, Q.MAX_COMBINED_RESULTS))
-    .map(([key]) => byKey.get(key)!);
+    .map(({ id }) => byKey.get(id)!);
 }
 
 export function searchRoutes(ctx: Ctx) {
