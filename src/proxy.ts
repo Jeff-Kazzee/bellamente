@@ -413,6 +413,9 @@ function toolResultPayload(queries: string[], results: MemoryResult[], error?: s
   };
 }
 
+// INVARIANT: every input batch must come from the keyword-default search path. `score` is
+// RRF-scale (~0.016) there but raw-cosine-scale (~1.0) on keyword:false — mixing the two in this
+// max-by-score merge would silently bias toward the cosine-scale batch (PR #86 review, follow-up B).
 function topMemoryResults(results: MemoryResult[]): MemoryResult[] {
   const merged = new Map<string, MemoryResult>();
   for (const result of results) {

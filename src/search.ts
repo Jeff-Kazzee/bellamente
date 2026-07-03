@@ -126,8 +126,8 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   // Keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
   const data = new Map<string, MemoryResult>();
   const createdAt = new Map<string, number>();
-  vrows.forEach((r) => { data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
-  krows.forEach((r) => { if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, Date.parse(r.created_at)); });
+  vrows.forEach((r) => { data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, new Date(r.created_at).getTime()); });
+  krows.forEach((r) => { if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, new Date(r.created_at).getTime()); });
 
   // Recency decay (P1.2): fused = rrf × (1 − w·(1 − e^(−age/τ))). Multiplicative on the RANK-based
   // score, so it is scale-free and BOUNDED — an infinitely old memory keeps (1−w) of its relevance

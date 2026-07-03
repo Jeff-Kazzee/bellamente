@@ -343,8 +343,8 @@ test("a query that parses to an empty tsquery degrades to vector-only, never thr
 // Isolated space: the shared seed's m1 (sim 1.0, created now) would win any mixed-fixture race.
 const REC_SPACE = "recspace".padEnd(22, "x");
 const REC_TAG = "recency_test";
-const OLD_EXACT = { id: "recold".padEnd(22, "x"), memory: "prefers dark backgrounds everywhere", vec: "[1,0,0,0]", space: REC_SPACE }; // sim 1.0
-const FRESH_NEAR = { id: "recfresh".padEnd(22, "x"), memory: "prefers light backgrounds lately", vec: "[0.9,0.43589,0,0]", space: REC_SPACE }; // sim 0.9
+const OLD_EXACT = { id: "reca-old".padEnd(22, "x"), memory: "prefers dark backgrounds everywhere", vec: "[1,0,0,0]", space: REC_SPACE }; // sim 1.0
+const FRESH_NEAR = { id: "recz-fresh".padEnd(22, "x"), memory: "prefers light backgrounds lately", vec: "[0.9,0.43589,0,0]", space: REC_SPACE }; // sim 0.9
 const AGO_180D = new Date(Date.now() - 180 * 864e5).toISOString();
 async function seedRecencySpace(sql: Sql) {
   await sql`INSERT INTO space (id, container_tag, org_id) VALUES (${REC_SPACE}, ${REC_TAG}, ${ORG_ID}) ON CONFLICT (container_tag, org_id) DO NOTHING`;
@@ -357,7 +357,11 @@ test("recency default: an older exact-topic memory loses to a fresher near-topic
     await insertMemory(ctx.sql, { ...OLD_EXACT, createdAt: AGO_180D });
     await insertMemory(ctx.sql, { ...FRESH_NEAR });
     const results = await searchMemories(ctx as any, { q: "which theme", threshold: 0.5, limit: 5, containerTag: REC_TAG });
+    // Fixture ids are chosen so the id TIE-BREAK favors OLD — fresh-first can only come from a real,
+    // finite decay, never from NaN falling through to the tiebreak (review follow-up A).
     expect(results[0]!.id).toBe(FRESH_NEAR.id);
+    expect(Number.isFinite(results[0]!.score)).toBe(true);
+    expect(results[0]!.score).toBeGreaterThan(results[1]!.score); // strict ordering by magnitude, not tiebreak
     expect(results.map((r) => r.id)).toContain(OLD_EXACT.id); // decayed, not dropped
   } finally {
     await ctx.close();
