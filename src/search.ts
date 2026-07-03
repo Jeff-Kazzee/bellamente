@@ -6,6 +6,7 @@ import { newId, toVector, ORG_ID } from "./util";
 import { DEFAULT_SIMILARITY_THRESHOLD } from "./embed-common";
 import { recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
 import { brandEnv } from "./env";
+import { mmrRerank, parseVector, MMR_POOL_MULTIPLIER } from "./rerank";
 
 type Ctx = { sql: DB; embed: Embed };
 
@@ -25,12 +26,15 @@ export type SearchOpts = {
   searchMode?: "memories" | "documents" | "hybrid";
   keyword?: boolean; // fuse the full-text leg (default true; false = pure vector + cosine threshold)
   recency?: boolean; // time-decay ranking on memories (default true; false = pure relevance order)
+  diversify?: boolean; // MMR diversity pass on fused memory results (P1.4: default ON for limit >= 5)
   include?: { forgottenMemories?: boolean };
 };
 
-// `score` is the FUSED ranking score (RRF × recency decay) — the order authority. `similarity` stays
-// the raw cosine evidence (0 for keyword-only hits); consumers that merge result sets must sort by
-// score, not similarity, or keyword hits sink (Codex review of PR #79).
+// `score` is the FUSED ranking score (RRF × recency decay); `similarity` stays the raw cosine
+// evidence (0 for keyword-only hits). Consumers that merge result sets must never sort by
+// similarity, or keyword hits sink (Codex review of PR #79) — and with the P1.4 diversity pass the
+// returned ORDER is the authority (rank-fuse it, as search() does): re-sorting by score would undo
+// the MMR reordering, whose whole point is demoting redundant high-scorers.
 export type MemoryResult = { type: "memory"; id: string; memory: string; version: number; similarity: number; score: number };
 
 // Recency knobs (P1.2, issue #36) — read PER CALL via brandEnv() so tests and long-running processes
@@ -99,7 +103,8 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   // ts_rank is not on the cosine scale (same rule as searchChunks).
   const [rawVrows, krows] = await Promise.all([
     sql`
-      SELECT id, memory, version, created_at, 1 - (memory_embedding <=> ${v}::vector) AS similarity
+      SELECT id, memory, version, created_at, memory_embedding,
+             1 - (memory_embedding <=> ${v}::vector) AS similarity
       FROM memory_entry
       WHERE org_id = ${ORG_ID} AND is_latest = true AND memory_embedding IS NOT NULL
         ${forgottenClause} ${tagClause}
@@ -107,7 +112,7 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
       LIMIT ${N}`,
     useKeyword
       ? sql`
-          SELECT id, memory, version, created_at,
+          SELECT id, memory, version, created_at, memory_embedding,
                  ts_rank(to_tsvector('simple', memory), websearch_to_tsquery('simple', ${opts.q})) AS rank
           FROM memory_entry
           WHERE org_id = ${ORG_ID} AND is_latest = true
@@ -123,11 +128,13 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
 
   if (!useKeyword) return vrows.map((r) => toResult(r, Number(r.similarity), Number(r.similarity))).slice(0, limit);
 
-  // Keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric).
+  // Keyword-only hits carry similarity 0 (no cosine evidence, shape stays numeric). Embeddings ride
+  // along for the diversity pass (P1.4) — already on the row, so MMR costs zero extra embed calls.
   const data = new Map<string, MemoryResult>();
   const createdAt = new Map<string, number>();
-  vrows.forEach((r) => { data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, new Date(r.created_at).getTime()); });
-  krows.forEach((r) => { if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, new Date(r.created_at).getTime()); });
+  const embeddings = new Map<string, number[] | null>();
+  vrows.forEach((r) => { data.set(r.id, toResult(r, Number(r.similarity), 0)); createdAt.set(r.id, new Date(r.created_at).getTime()); embeddings.set(r.id, parseVector(r.memory_embedding)); });
+  krows.forEach((r) => { if (!data.has(r.id)) data.set(r.id, toResult(r, 0, 0)); createdAt.set(r.id, new Date(r.created_at).getTime()); if (!embeddings.has(r.id)) embeddings.set(r.id, parseVector(r.memory_embedding)); });
 
   // Recency decay (P1.2): fused = rrf × (1 − w·(1 − e^(−age/τ))). Multiplicative on the RANK-based
   // score, so it is scale-free and BOUNDED — an infinitely old memory keeps (1−w) of its relevance
@@ -138,15 +145,25 @@ export async function searchMemories({ sql, embed }: Ctx, opts: SearchOpts): Pro
   const now = Date.now();
   const decay = (id: string) => 1 - w * (1 - Math.exp(-Math.max(0, now - (createdAt.get(id) ?? now)) / tauMs));
 
-  return rrfFuse(
+  const fused = rrfFuse(
     [
       { ids: vrows.map((r) => r.id), tiePriority: 0 },
       { ids: krows.map((r) => r.id), tiePriority: 1 }, // literal text evidence wins ties
     ],
     w === 0 ? undefined : decay,
-  )
-    .slice(0, limit)
-    .map(({ id, score }) => ({ ...data.get(id)!, score }));
+  );
+
+  // MMR diversity pass (P1.4, issue #37): default gating is ON for limit >= 5, OFF when explicitly
+  // false; explicit true forces it on at any limit. Reorders only — membership beyond the top-k cut,
+  // scores, and similarity are untouched.
+  const diversify = opts.diversify === false ? false : opts.diversify === true || limit >= 5;
+  const ordered = diversify
+    ? mmrRerank(
+        fused.slice(0, limit * MMR_POOL_MULTIPLIER).map(({ id, score }) => ({ id, score, embedding: embeddings.get(id) ?? null })),
+        limit,
+      )
+    : fused.slice(0, limit);
+  return ordered.map(({ id, score }) => ({ ...data.get(id)!, score }));
 }
 
 // Hybrid chunk search: vector (pgvector cosine) + full-text ('simple' tsvector), fused via RRF.
@@ -272,6 +289,7 @@ export function searchRoutes(ctx: Ctx) {
           threshold: body.threshold,
           keyword: body.keyword,
           recency: body.recency,
+          diversify: body.diversify,
           includeForgottenMemories: !!body.include?.forgottenMemories,
         },
       });

@@ -6,7 +6,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { search, searchChunks, searchMemories, searchRoutes, recencyWeight, recencyTauDays, Q } from "../src/search";
+import { search, searchChunks, searchMemories, searchRoutes, recencyWeight, recencyTauDays, Q, type SearchOpts } from "../src/search";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
 
@@ -433,6 +433,98 @@ test("results carry the fused score, ordered by it (memories)", async () => {
     expect(typeof results[0]!.score).toBe("number");
     const scores = results.map((r) => r.score);
     expect([...scores].sort((a, b) => b - a)).toEqual(scores); // descending by fused score
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// --- SPEC P1.4 (issue #37): MMR diversity rerank after fusion (B1-B4) ---
+// Isolated space; memory texts avoid the query's tokens so the keyword leg stays empty and the
+// fused order IS the vector order — any reordering can then only come from the diversity pass.
+const MMR_SPACE = "mmrspace".padEnd(22, "x");
+const MMR_TAG = "mmr_test";
+// Three near-identical memories (pairwise cosine ≈ 0.9999) and one distinct relevant memory
+// (cosine ≈ 0.21 to the dups, 0.35 to the query — above the 0.3 test floor). Pure relevance order
+// is dupA > dupB > dupC > distinct: the three dups own the top-3 unless diversity intervenes.
+const MMR_DUPS = [
+  { id: "mmrdupa".padEnd(22, "x"), memory: "dark mode on every surface", vec: "[0.6,0.8,0,0]", space: MMR_SPACE },
+  { id: "mmrdupb".padEnd(22, "x"), memory: "dark mode on all surfaces", vec: "[0.59,0.8074,0,0]", space: MMR_SPACE },
+  { id: "mmrdupc".padEnd(22, "x"), memory: "dark mode everywhere always", vec: "[0.58,0.8146,0,0]", space: MMR_SPACE },
+];
+const MMR_DISTINCT = { id: "mmrdist".padEnd(22, "x"), memory: "compact font sizing everywhere", vec: "[0.35,0,0.9368,0]", space: MMR_SPACE };
+async function seedMmrSpace(sql: Sql) {
+  await sql`INSERT INTO space (id, container_tag, org_id) VALUES (${MMR_SPACE}, ${MMR_TAG}, ${ORG_ID}) ON CONFLICT (container_tag, org_id) DO NOTHING`;
+  for (const m of [...MMR_DUPS, MMR_DISTINCT]) await insertMemory(sql, m);
+}
+const mmrSearch = (ctx: { sql: Sql; embed: Embed }, extra: Partial<SearchOpts> = {}) =>
+  searchMemories(ctx as any, { q: "preferred ui theme", threshold: 0.3, containerTag: MMR_TAG, limit: 5, ...extra });
+
+test("diversify ON: the distinct memory breaks into the top-3 past near-duplicates (P1.4 B1)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedMmrSpace(ctx.sql);
+    const results = await mmrSearch(ctx, { limit: 3, diversify: true });
+    expect(results).toHaveLength(3);
+    expect(results.map((r) => r.id)).toContain(MMR_DISTINCT.id);
+    expect(results[0]!.id).toBe(MMR_DUPS[0]!.id); // relevance still leads: the best duplicate stays #1
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("diversify OFF (opts.diversify:false): near-duplicates crowd out the distinct memory (P1.4 B2)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedMmrSpace(ctx.sql);
+    const results = await mmrSearch(ctx, { limit: 3, diversify: false });
+    // Pure fused order: the three dups fill the top-3 and the distinct memory is sliced off.
+    expect(results.map((r) => r.id)).toEqual(MMR_DUPS.map((d) => d.id));
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("diversify default gating: on for limit >= 5, off below, off when explicitly false (P1.4 B3)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedMmrSpace(ctx.sql);
+    const on = await mmrSearch(ctx); // limit 5, diversify unset -> ON
+    expect(on.slice(0, 3).map((r) => r.id)).toContain(MMR_DISTINCT.id);
+    const below = await mmrSearch(ctx, { limit: 4 }); // limit < 5, diversify unset -> OFF
+    expect(below.slice(0, 3).map((r) => r.id)).toEqual(MMR_DUPS.map((d) => d.id));
+    const forcedOff = await mmrSearch(ctx, { diversify: false }); // explicit false beats the limit gate
+    expect(forcedOff.slice(0, 3).map((r) => r.id)).toEqual(MMR_DUPS.map((d) => d.id));
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("diversified ranking is stable and deterministic for fixed fixtures (P1.4 B4)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedMmrSpace(ctx.sql);
+    const first = await mmrSearch(ctx);
+    for (let i = 0; i < 3; i++) {
+      const again = await mmrSearch(ctx);
+      expect(again.map((r) => r.id)).toEqual(first.map((r) => r.id));
+    }
+    // The diversified order for these fixtures is pinned: best dup first (relevance), then the
+    // distinct memory (diversity), then the remaining dups in relevance order.
+    expect(first.map((r) => r.id)).toEqual([MMR_DUPS[0]!.id, MMR_DISTINCT.id, MMR_DUPS[1]!.id, MMR_DUPS[2]!.id]);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("diversify makes NO additional embed calls — candidate embeddings ride along from the DB (P1.4)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedMmrSpace(ctx.sql);
+    let embedCalls = 0;
+    const countingEmbed: Embed = async ({ values }) => { embedCalls++; return values.map(() => [1, 0, 0, 0]); };
+    const results = await mmrSearch({ sql: ctx.sql, embed: countingEmbed }, { diversify: true });
+    expect(results.length).toBeGreaterThan(0);
+    expect(embedCalls).toBe(1); // exactly the one query embedding — no hidden N+1 re-embeds
   } finally {
     await ctx.close();
   }

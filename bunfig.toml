@@ -8,7 +8,8 @@ preload = ["./scripts/ort-alias-preload.ts"]
 [test]
 coverage = true
 coverageSkipTestFiles = true
-coverageThreshold = { functions = 0.85, lines = 0.89 }
+coverageThreshold = { functions = 0.86, lines = 0.90 }
+# Ratchet raised 2026-07-02 (P1.4 PR, measured functions 86.38 / lines 90.04).
 # Initial calibration (2026-07-02, src-only after coverageSkipTestFiles): functions 84.48 / lines 89.17.
 # Remaining gap lives in embed.ts (worker dispatch), embed-common, db.ts lock/signal paths, index.ts
 # boot — tracked in docs/BACKLOG.md as the coverage-ratchet task.
