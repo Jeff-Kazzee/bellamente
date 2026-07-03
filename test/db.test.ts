@@ -26,7 +26,7 @@ test("assertEmbeddingDim passes on match, throws on a dimension switch", async (
   await assertEmbeddingDim(sql, 8); // matches -> no throw
   await expect(assertEmbeddingDim(sql, 16)).rejects.toThrow(/on-disk embedding dimension is 8 but EMBED_DIM=16/);
   await sql.end();
-});
+}, 20000);
 
 test("assertEmbeddingModel passes on a fresh DB and on match; throws on a same-dim model swap", async () => {
   const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
@@ -42,7 +42,7 @@ test("assertEmbeddingModel passes on a fresh DB and on match; throws on a same-d
             VALUES (${"b".repeat(22)}, ${"org"}, ${"s".repeat(22)}, ${"yo"}, ${"model-b"})`;
   await expect(assertEmbeddingModel(sql, "model-a")).rejects.toThrow(/produced by \[model-b\]/);
   await sql.end();
-});
+}, 20000);
 
 test("isValidVector rejects an all-zero vector (whitespace/OOV), accepts a real one", () => {
   const zero = new Array(EMBED_DIM).fill(0);

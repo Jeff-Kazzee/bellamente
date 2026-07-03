@@ -38,6 +38,22 @@ This machine runs Bellamente, a local memory service, at http://127.0.0.1:8080 (
 
 (A native MCP server — `bella mcp` — is on the [roadmap](/roadmap).)
 
+## Measure retrieval quality
+
+Run the deterministic E2E benchmark from the repo root:
+
+```sh
+bun run bench
+```
+
+It loads fixtures through `POST /memories` and `POST /documents`, queries `POST /search` in
+`memories`, `documents`, and `hybrid` modes, then reports recall@1/5/10, MRR, p50/p95 latency, and
+indexed-vs-brute-force recall. The default run uses `embedder=deterministic-hash` so it measures the
+retrieval pipeline reproducibly; set `BELLA_EVAL_REAL_EMBED=1` to use the active local embedder.
+Latest checked deterministic run (`seed=20260702`, 110 queries): memories R@1/R@10/MRR
+`84.1%/100.0%/0.920`, documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, ANN loss@10
+`0.0%`.
+
 ## Auto-capture: it remembers for you
 
 After each answered chat turn, Bellamente conservatively captures durable first-person facts

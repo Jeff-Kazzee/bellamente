@@ -8,7 +8,8 @@
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
     "build": "bun run build.ts",
-    "bench": "bun run scripts/eval.ts",
+    "bench": "bun run scripts/eval-e2e.ts",
+    "bench:models": "bun run scripts/eval.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
