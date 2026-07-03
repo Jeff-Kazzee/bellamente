@@ -84,7 +84,12 @@ test("POST /search: missing q is a 400; an embed failure re-throws (500) after r
     const failingEmbed: Embed = async () => {
       throw new Error("embedder offline");
     };
+    let reraised: Error | undefined;
     const app = new Hono();
+    app.onError((err, c) => {
+      reraised = err instanceof Error ? err : new Error(String(err));
+      return c.text("Internal Server Error", 500);
+    });
     app.route("/search", searchRoutes({ sql: ctx.sql, embed: failingEmbed }));
 
     const bad = await app.request("/search", {
@@ -108,9 +113,10 @@ test("POST /search: missing q is a 400; an embed failure re-throws (500) after r
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ q: "zebra", containerTag: DEFAULT_CONTAINER_TAG }),
     });
-    // The route records the error trace, sets the trace header, then RE-THROWS — Hono's default
-    // error handler turns that into a 500.
+    // The route records the error trace, sets the trace header, then RE-THROWS; the test app's
+    // error handler turns that into a 500 without logging an expected error as a runner failure.
     expect(res.status).toBe(500);
+    expect(reraised?.message).toBe("embedder offline");
 
     const [trace] = await ctx.sql`
       SELECT id, status, query, queries, search_mode, container_tag, result_count, metadata
