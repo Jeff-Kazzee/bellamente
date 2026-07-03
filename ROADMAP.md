@@ -20,7 +20,7 @@ Also on the website: https://bellamente.vercel.app/roadmap
   latency p50/p95, and indexed-vs-brute-force recall.
 - One binary; embedded Postgres + pgvector; local device-scaled embeddings; loopback by default;
   append-only migrations.
-- 116 behavior tests under a coverage-gated build.
+- Coverage-gated behavior test suite.
 
 ## Next — the trust loop, finished
 

@@ -429,6 +429,8 @@ async function evaluateMode(
         limit: opts.limit,
         threshold: 0,
         keyword: false,
+        recency: false,
+        diversify: false,
       }),
     });
     indexedR10 += scoreRanking(indexedVector.json.results.map(resultKey), gold).r10;
@@ -519,9 +521,7 @@ export function formatMetricsTable(report: EvalReport): string {
 
 type CliDeps = {
   env?: Pick<NodeJS.ProcessEnv, "BELLA_EVAL_REAL_EMBED">;
-  makeEmbed?: () => Embed;
-  prewarmEmbed?: (embed: Embed) => Promise<void>;
-  run?: (opts?: RunOptions) => Promise<EvalReport>;
+  run?: (opts?: RunOptions) => Promise<void | EvalReport>;
   loadEmbedModule?: () => Promise<{ makeEmbed: () => Embed; prewarmEmbed: (embed: Embed) => Promise<void> }>;
 };
 
@@ -529,13 +529,7 @@ export async function runEvalCli(deps: CliDeps = {}): Promise<void> {
   const env = deps.env ?? process.env;
   const run = deps.run ?? runEvalE2E;
   if (env.BELLA_EVAL_REAL_EMBED === "1") {
-    let makeEmbedForCli = deps.makeEmbed;
-    let prewarmEmbedForCli = deps.prewarmEmbed;
-    if (!makeEmbedForCli || !prewarmEmbedForCli) {
-      const embedModule = await (deps.loadEmbedModule ?? (() => import("../src/embed")))();
-      makeEmbedForCli = embedModule.makeEmbed;
-      prewarmEmbedForCli = embedModule.prewarmEmbed;
-    }
+    const { makeEmbed: makeEmbedForCli, prewarmEmbed: prewarmEmbedForCli } = await (deps.loadEmbedModule ?? (() => import("../src/embed")))();
     const embed = makeEmbedForCli();
     await prewarmEmbedForCli(embed);
     await run({ embed, embedder: `active:${embedModelName()}` });

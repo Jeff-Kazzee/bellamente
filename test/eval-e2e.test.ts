@@ -2,6 +2,7 @@
 // The harness must exercise the HTTP app routes, not direct search helpers.
 import { test, expect } from "bun:test";
 import { createEvalDataset, evalEmbed, formatMetricsTable, runEvalCli, runEvalE2E } from "../scripts/eval-e2e";
+import { EMBED_DIM } from "../src/embed-common";
 
 const TEST_TIMEOUT_MS = 30000;
 
@@ -14,7 +15,7 @@ test("P1.1 fixture generation is reproducible for the same seed", () => {
 });
 test("P1.1 deterministic embedder has a stable non-zero fallback for empty input", async () => {
   const [vector] = await evalEmbed({ values: ["   "] });
-  expect(vector).toHaveLength(384);
+  expect(vector).toHaveLength(EMBED_DIM);
   expect(vector[0]).toBe(1);
   expect(vector.slice(1).every((x) => x === 0)).toBe(true);
 });
@@ -26,10 +27,9 @@ test("P1.1 fixture loading fails fast with the route that rejected the payload",
 }, TEST_TIMEOUT_MS);
 
 test("P1.1 CLI runner defaults to deterministic mode and can opt into injected active embedder", async () => {
-  const calls: Array<unknown> = [];
+  const calls: Array<Parameters<typeof runEvalE2E>[0] | undefined> = [];
   const run = async (opts?: Parameters<typeof runEvalE2E>[0]) => {
     calls.push(opts);
-    return {} as Awaited<ReturnType<typeof runEvalE2E>>;
   };
 
   await runEvalCli({ env: {}, run });
@@ -49,8 +49,8 @@ test("P1.1 CLI runner defaults to deterministic mode and can opt into injected a
   });
 
   expect(prewarmed).toBe(true);
-  expect((calls[1] as { embed?: unknown }).embed).toBe(evalEmbed);
-  expect((calls[1] as { embedder?: string }).embedder?.startsWith("active:")).toBe(true);
+  expect(calls[1]?.embed).toBe(evalEmbed);
+  expect(calls[1]?.embedder?.startsWith("active:")).toBe(true);
 });
 
 test("P1.1 bench harness loads fixtures through HTTP routes and reports comparable retrieval metrics", async () => {
@@ -79,6 +79,7 @@ test("P1.1 bench harness loads fixtures through HTTP routes and reports comparab
     expect(row.indexedVectorRecallAt10).toBeGreaterThanOrEqual(0);
     expect(row.bruteForceRecallAt10).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(row.annLossAt10)).toBe(true);
+    expect(row.indexedVectorRecallAt10).toBe(row.bruteForceRecallAt10);
   }
 
   const table = formatMetricsTable(report);

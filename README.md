@@ -47,7 +47,7 @@ change to `prod`.
 - Retrieval benchmark: `bun run bench` runs a deterministic E2E harness through the real HTTP app routes
   (`POST /memories`, `POST /documents`, `POST /search`) against PGlite. Latest checked run
   (`seed=20260702`, `embedder=deterministic-hash`, 110 queries): memories R@1/R@10/MRR `84.1%/100.0%/0.920`,
-  documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, ANN loss@10 `2.3%`.
+  documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, ANN loss@10 `0.0%`.
   Set `BELLA_EVAL_REAL_EMBED=1` to run the same route harness with the active local embedder; use
   `bun run bench:models` for the old model-selection A/B script.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
