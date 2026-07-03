@@ -9,7 +9,7 @@ import { EMBED_DIM, embedModelName } from "../src/embed-common";
 import type { Embed } from "../src/embed";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { ORG_ID } from "../src/util";
-import type { SearchResult } from "../src/search";
+import { rrfFuse, type SearchResult } from "../src/search";
 
 export type SearchMode = "memories" | "documents" | "hybrid";
 
@@ -72,7 +72,6 @@ type Candidate = { key: string; score: number };
 const MODES: SearchMode[] = ["memories", "documents", "hybrid"];
 const DEFAULT_SEED = 20260702;
 const DEFAULT_LIMIT = 10;
-const RRF_K = 60;
 
 function makeRng(seed: number): () => number {
   let state = seed >>> 0;
@@ -365,13 +364,12 @@ async function bruteForceSearch(embed: Embed, sql: Sql, query: EvalQuery, contai
     bruteForceList(embed, sql, "memories", query.q, containerTag, limit),
     bruteForceList(embed, sql, "documents", query.q, containerTag, limit),
   ]);
-  const score = new Map<string, number>();
-  for (const list of lists) {
-    list.forEach((candidate, i) => {
-      score.set(candidate.key, (score.get(candidate.key) ?? 0) + 1 / (RRF_K + i + 1));
-    });
-  }
-  return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([key]) => key);
+  return rrfFuse([
+    { ids: lists[0]!.map((candidate) => candidate.key), tiePriority: 1 },
+    { ids: lists[1]!.map((candidate) => candidate.key), tiePriority: 0 },
+  ])
+    .slice(0, limit)
+    .map(({ id }) => id);
 }
 
 async function makeEvalApp(embed: Embed) {
