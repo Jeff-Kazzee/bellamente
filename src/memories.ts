@@ -162,7 +162,9 @@ async function writeMemory(
            ${nearest.id}, ${root}, ${Number(nearest.source_count ?? 1) + 1}, ${tx.json({ updates: [nearest.id] })},
            ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
            ${v}::vector, ${args.model}, now())`;
-      await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${nearest.id}`;
+      // AND is_latest = true: if a concurrent writer already closed this row, a lost race must
+      // no-op rather than OVERWRITE its stamped valid_to (window overlap — PR #89 review).
+      await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${nearest.id} AND is_latest = true`;
       return { id, action: "superseded", version: Number(nearest.version) + 1, supersededId: nearest.id };
     }
   }
@@ -414,7 +416,9 @@ export function memoriesRoutes(ctx: Ctx) {
              ${row.id}, ${root}, ${Number(row.source_count ?? 1)}, ${tx.json({ updates: [row.id] })},
              ${metadata ? tx.json(metadata) : null}, ${forgetAfter}, ${forgetReason},
              ${toVector(vec)}::vector, ${embedModelName()}, now())`;
-        await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${row.id}`;
+        // AND is_latest = true: the row was read BEFORE this tx (and an embed call sits between);
+        // if a concurrent supersede closed it first, do not overwrite its valid_to (PR #89 review).
+        await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${row.id} AND is_latest = true`;
       });
       const created = await loadMemory(sql, newVersionId);
       return c.json({

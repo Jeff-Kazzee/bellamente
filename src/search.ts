@@ -284,18 +284,43 @@ export async function search(ctx: Ctx, opts: SearchOpts): Promise<SearchResult[]
     .map(({ id }) => byKey.get(id)!);
 }
 
+// asOf gate (PR #89 review, M1/S1): Date.parse alone admitted two defect classes — timezone-less
+// date-times, which JS resolves in the SERVER's zone so one request means different instants per
+// deployment, and parseable-but-PG-unrepresentable dates (expanded years, year zero) that crashed
+// the ::timestamptz cast into a 500. Accept ONLY unambiguous, representable instants: a date-time
+// with an explicit Z/±hh:mm offset, or a plain date (UTC midnight per ECMA-262), year 0001–9999.
+const ASOF_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2}))?$/;
+const ASOF_MIN_MS = -62135596800000; // 0001-01-01T00:00:00Z
+const ASOF_MAX_MS = 253402300799999; // 9999-12-31T23:59:59.999Z
+function isValidAsOf(v: unknown): boolean {
+  if (typeof v !== "string" || !ASOF_RE.test(v)) return false;
+  const t = Date.parse(v);
+  return Number.isFinite(t) && t >= ASOF_MIN_MS && t <= ASOF_MAX_MS;
+}
+
 export function searchRoutes(ctx: Ctx) {
   const app = new Hono();
   app.post("/", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as SearchOpts;
     if (!body.q || typeof body.q !== "string") return c.json({ error: "q (string) is required" }, 400);
-    if (body.asOf !== undefined && (typeof body.asOf !== "string" || Number.isNaN(Date.parse(body.asOf)))) {
-      return c.json({ error: "asOf must be an ISO 8601 date-time string" }, 400);
+    if (body.asOf !== undefined && !isValidAsOf(body.asOf)) {
+      return c.json({ error: "asOf must be an ISO 8601 instant with an explicit timezone (e.g. 2026-07-03T12:00:00Z) or a date (YYYY-MM-DD), year 0001-9999" }, 400);
     }
 
     const traceId = newId();
     const started = Date.now();
     let timedOut = false;
+    // One request shape for BOTH trace paths: a FAILED search's receipt must still show what was
+    // asked (review gap finding — the catch path used to record request: {}).
+    const requestShape = {
+      limit: body.limit,
+      threshold: body.threshold,
+      keyword: body.keyword,
+      recency: body.recency,
+      diversify: body.diversify,
+      asOf: body.asOf,
+      includeForgottenMemories: !!body.include?.forgottenMemories,
+    };
     try {
       const results = (await Promise.race([
         search(ctx, body),
@@ -313,15 +338,7 @@ export function searchRoutes(ctx: Ctx) {
         resultCount: results.length,
         latencyMs,
         retrieved: traceItemsFromSearchResults(results),
-        request: {
-          limit: body.limit,
-          threshold: body.threshold,
-          keyword: body.keyword,
-          recency: body.recency,
-          diversify: body.diversify,
-          asOf: body.asOf,
-          includeForgottenMemories: !!body.include?.forgottenMemories,
-        },
+        request: requestShape,
       });
       c.header("x-bella-trace-id", traceId);
       c.header("x-bella-search-results", String(results.length));
@@ -338,6 +355,7 @@ export function searchRoutes(ctx: Ctx) {
         queries: [body.q],
         searchMode: body.searchMode ?? "memories",
         latencyMs,
+        request: requestShape,
         metadata: { error: e instanceof Error ? e.message : String(e) },
       });
       c.header("x-bella-trace-id", traceId);

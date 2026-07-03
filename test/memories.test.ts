@@ -184,6 +184,11 @@ test("supersede stamps validity windows transactionally: old.valid_to === new.va
     // now() is transaction-frozen: the INSERT and the flip UPDATE run in ONE tx, so the boundary
     // is gapless and overlap-free BY CONSTRUCTION — this equality is the acceptance for it.
     expect(new Date(oldRow!.valid_to).toISOString()).toBe(new Date(newRow!.valid_from).toISOString());
+    // SQL-level equality at FULL microsecond precision: separate-tx now() pairs collide at JS ms
+    // precision ~9% of the time (review measured 18/200), which would let a stamp-outside-the-tx
+    // mutation survive probabilistically. Postgres compares its own precision — deterministic kill.
+    const [eq] = await sql`SELECT (SELECT valid_to FROM memory_entry WHERE id = ${v1Id}) = (SELECT valid_from FROM memory_entry WHERE id = ${v2Id}) AS eq`;
+    expect(eq!.eq).toBe(true);
 
     // GET /:id exposes the windows on EVERY chain row (ISO or null) — B3's read surface.
     const chain = await (await app.request(`/memories/${v1Id}`)).json();
@@ -212,6 +217,9 @@ test("PATCH content edit stamps windows the same way as supersede (P1.8 B2, seco
     expect(oldRow!.valid_to).not.toBeNull();
     expect(newRow!.valid_from).not.toBeNull();
     expect(new Date(oldRow!.valid_to).toISOString()).toBe(new Date(newRow!.valid_from).toISOString());
+    // Full-precision SQL equality — same rationale as the supersede-site test above.
+    const [eq] = await sql`SELECT (SELECT valid_to FROM memory_entry WHERE id = ${id}) = (SELECT valid_from FROM memory_entry WHERE id = ${newVersionId}) AS eq`;
+    expect(eq!.eq).toBe(true);
     // The PATCH response body carries the window too (normalizeMemory).
     expect(edited.memory.validFrom).toBe(new Date(newRow!.valid_from).toISOString());
     expect(edited.memory.validTo).toBeNull();

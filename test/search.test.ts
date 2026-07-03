@@ -727,3 +727,97 @@ test("POST /search: invalid asOf is a 400 with a clear error; valid asOf filters
     await ctx.close();
   }
 }, TEST_TIMEOUT_MS);
+
+// --- PR #89 review hardening (solo reviewer + thermonuclear panel, 2026-07-03) ---
+
+test("asOf gate rejects ambiguous or PG-unrepresentable instants; honors offsets and plain dates (review M1/S1)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const app = new Hono();
+    app.route("/search", searchRoutes(ctx as any));
+    const post = (asOf: string) => app.request("/search", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "commute mode", threshold: 0.5, limit: 10, asOf }),
+    });
+    // Timezone-less date-times resolve in the SERVER's zone (deployment-dependent meaning) and
+    // parseable-but-unrepresentable dates crashed the ::timestamptz cast as a 500 — ALL must 400 now.
+    for (const bad of ["2026-01-25T00:00:00", "2026-01-25T00:00", "07/03/2026", "2026", "12345", "+010000-01-01T00:00:00Z", "0000-01-01T00:00:00Z", "+275760-09-13T00:00:00Z"]) {
+      const res = await post(bad);
+      expect([bad, res.status]).toEqual([bad, 400]);
+      expect((await res.json()).error).toContain("asOf");
+    }
+    // Unambiguous forms pass and mean the right instant: date-only = UTC midnight (ECMA-262),
+    // explicit offsets are honored (05:00+05:00 == 00:00Z, inside v2's window).
+    for (const good of ["2026-01-25", "2026-01-25T05:00:00+05:00", "2026-01-25T00:00:00.000Z"]) {
+      const res = await post(good);
+      expect([good, res.status]).toEqual([good, 200]);
+      const ids = (await res.json()).results.map((r: any) => r.id);
+      expect(ids).toContain(vaIds[1]!);
+      expect(ids).not.toContain(vaIds[2]!);
+    }
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("keyword:false + asOf: the pure-vector path carries the same validity filter (review S3)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const mid = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, keyword: false, asOf: ASOF_MID } as SearchOpts);
+    const ids = mid.map((r) => r.id);
+    expect(ids).toContain(vaIds[1]!);
+    expect(ids).not.toContain(vaIds[0]!);
+    expect(ids).not.toContain(vaIds[2]!);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("asOf composes with containerTag isolation and the forgotten filter (review pins)", async () => {
+  const ctx = await makeCtx();
+  try {
+    await seedTemporalChains(ctx.sql);
+    const otherSpace = "os".padEnd(22, "x");
+    const otherMid = "om".padEnd(22, "x");
+    const fgId = "fg".padEnd(22, "x");
+    await ctx.sql`INSERT INTO space (id, container_tag, org_id) VALUES (${otherSpace}, ${"asof_other"}, ${ORG_ID})`;
+    await insertMemory(ctx.sql, { id: otherMid, memory: "other-space commute mode fact", vec: "[1,0,0,0]", space: otherSpace, isLatest: false, validFrom: T1, validTo: T2 });
+    await insertMemory(ctx.sql, { id: fgId, memory: "forgotten commute mode fact", vec: "[1,0,0,0]", isForgotten: true, isLatest: false, validFrom: T1, validTo: T2 });
+    // Tag isolation: a time-travel query from one container must never see another container's history.
+    const mine = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID, containerTag: DEFAULT_CONTAINER_TAG } as SearchOpts);
+    expect(mine.map((r) => r.id)).toContain(vaIds[1]!);
+    expect(mine.map((r) => r.id)).not.toContain(otherMid);
+    expect(mine.map((r) => r.id)).not.toContain(fgId);
+    const theirs = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID, containerTag: "asof_other" } as SearchOpts);
+    expect(theirs.map((r) => r.id)).toContain(otherMid);
+    expect(theirs.map((r) => r.id)).not.toContain(vaIds[1]!);
+    // Forgetting is a present-time privacy contract: a forgotten fact stays hidden even for a past
+    // asOf that its window covers — unless the caller explicitly asks for forgotten memories.
+    const withForgotten = await searchMemories(ctx as any, { q: "commute mode", threshold: 0.5, limit: 10, asOf: ASOF_MID, include: { forgottenMemories: true } } as SearchOpts);
+    expect(withForgotten.map((r) => r.id)).toContain(fgId);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("a FAILED search's trace still records the request, including asOf (review gap finding)", async () => {
+  const ctx = await makeCtx();
+  try {
+    const failingEmbed: Embed = async () => { throw new Error("embedder offline"); };
+    const app = new Hono();
+    app.route("/search", searchRoutes({ sql: ctx.sql, embed: failingEmbed }));
+    const res = await app.request("/search", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "commute mode", asOf: ASOF_MID, limit: 7 }),
+    });
+    expect(res.status).toBe(500);
+    const [trace] = await ctx.sql`SELECT request FROM recall_trace WHERE kind = 'search' AND status = 'error'`;
+    // The receipt for a failure must show WHAT was asked — that is the whole inspect-and-trust story.
+    expect(trace!.request?.asOf).toBe(ASOF_MID);
+    expect(Number(trace!.request?.limit)).toBe(7);
+  } finally {
+    await ctx.close();
+  }
+}, TEST_TIMEOUT_MS);
