@@ -17,7 +17,7 @@ Also on the website: https://bellamente.vercel.app/roadmap
   local model — heuristic fallback, sensitive-content exclusion, every capture traced and reversible.
 - Recall traces (`/inspect`) + a dashboard with edit / forget / delete / history.
 - Retrieval eval harness: `bun run bench` loads fixtures through HTTP routes and prints recall@k, MRR,
-  latency p50/p95, and indexed-vs-brute-force recall.
+  latency p50/p95, and route-vector-vs-brute-force recall and exact-vs-route delta.
 - One binary; embedded Postgres + pgvector; local device-scaled embeddings; loopback by default;
   append-only migrations.
 - Coverage-gated behavior test suite.

@@ -48,11 +48,19 @@ bun run bench
 
 It loads fixtures through `POST /memories` and `POST /documents`, queries `POST /search` in
 `memories`, `documents`, and `hybrid` modes, then reports recall@1/5/10, MRR, p50/p95 latency, and
-indexed-vs-brute-force recall. The default run uses `embedder=deterministic-hash` so it measures the
-retrieval pipeline reproducibly; set `BELLA_EVAL_REAL_EMBED=1` to use the active local embedder.
+route-vector-vs-brute-force recall. The default run uses `embedder=deterministic-hash` so it measures the
+retrieval pipeline reproducibly. At this fixture size PGlite does not engage HNSW, so the vector comparison is an exact-vs-route delta; the 50k-row P1.5/#39 probe is where real ANN-loss behavior is measured. Set `BELLA_EVAL_REAL_EMBED=1` to use the active local embedder.
 Latest checked deterministic run (`seed=20260702`, 110 queries): memories R@1/R@10/MRR
-`84.1%/100.0%/0.920`, documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, ANN loss@10
-`0.0%`.
+`84.1%/100.0%/0.920`, documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, exact-vs-route delta@10
+`0.0%`. Hybrid recall is an any-gold hit across the paired memory/document golds; the document and hybrid rows are deterministic ceiling checks, not a broad claim about every document corpus.
+
+## Your memory is a file
+
+`curl localhost:8080/export > bellamente-backup.json` — chains, validity windows, forgotten flags,
+profiles, and documents in one portable JSON. Restore anywhere with
+`curl -X POST localhost:8080/import -H 'content-type: application/json' -d @bellamente-backup.json`;
+embeddings regenerate locally on the way in, so the same file works across machines and embedder
+tiers. Re-importing is a safe no-op.
 
 ## Auto-capture: it remembers for you
 
