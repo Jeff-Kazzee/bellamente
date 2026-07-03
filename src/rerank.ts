@@ -4,13 +4,18 @@
 // no downloads, no extra embed calls: candidate embeddings ride along on the rows the search
 // already fetched from the DB.
 
-// Relevance vs redundancy trade-off (the classic MMR midpoint). RRF gaps between adjacent ranks
-// are tiny (~1/K²) while near-duplicate cosines approach 1.0, so a higher λ would let redundancy
-// win every contest and make the pass a no-op in practice.
+// Relevance vs redundancy trade-off. 0.5 is the industry-standard default (LangChain's
+// lambda_mult, the midpoint of the original MMR paper's tested 0.3-0.7 range), and here it is
+// also load-bearing: RRF gaps between adjacent ranks are tiny (~1/K²) while near-duplicate
+// cosines approach 1.0, so a higher λ would let redundancy win every contest and make the pass
+// a no-op in practice (pinned by P1.4 B1).
 export const MMR_LAMBDA = 0.5;
 
-// MMR only ever needs to promote from just below the cut — bound the pool so the pass stays
-// O(pool × limit) instead of scanning every fused candidate (up to 30× limit) per pick.
+// Candidate-pool depth for the pass, as a multiple of the requested limit. This bounds PROMOTION
+// depth only — the non-diversified top-limit is always inside the pool, so no result that would
+// have been returned can ever be lost to this cap; it just keeps the pass O(pool × limit) instead
+// of scanning every fused candidate (up to 30× limit) per pick. 5× matches or exceeds the
+// fetch_k:k ratio common in deployed MMR retrievers (e.g. LangChain's fetch_k=20 for k=4).
 export const MMR_POOL_MULTIPLIER = 5;
 
 export type MmrCandidate = { id: string; score: number; embedding: number[] | null };
