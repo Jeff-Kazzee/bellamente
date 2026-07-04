@@ -1,0 +1,11 @@
+#!/bin/sh
+# Bellamente local pre-push guard. GitHub Actions is disabled on this repo — CI runs locally.
+# Enable this hook once per clone:   git config core.hooksPath .githooks
+# It runs the FAST gates (typecheck + build) on every push so nothing broken leaves your machine.
+# Run the FULL suite with `bun run ci` before opening a PR. Bypass in a pinch with `git push --no-verify`.
+set -e
+echo "[pre-push] typecheck (tsc --noEmit)..."
+bunx tsc --noEmit
+echo "[pre-push] build..."
+bun run build >/dev/null
+echo "[pre-push] fast gates OK — run 'bun run ci' for the full suite before a PR."

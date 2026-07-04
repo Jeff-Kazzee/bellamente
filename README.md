@@ -52,6 +52,24 @@ change to `prod`.
   `bun run bench:models` for the old model-selection A/B script. Hybrid recall is an any-gold hit metric across the memory and document golds, so the deterministic document/hybrid rows are ceiling checks rather than broad retrieval claims.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
 
+## Testing & CI (runs locally, not on GitHub)
+Bellamente's CI runs **on the maintainer's machine, not on GitHub Actions** — Actions is intentionally
+disabled on this repo, because local-first should mean no cloud dependency for *quality* either. Anyone
+who clones it reproduces the exact gates:
+
+```sh
+bun run ci     # typecheck (tsc --noEmit) + the full test suite + the binary build, in one command
+```
+
+`bun run ci` judges the test suite by its printed `0 fail` summary rather than the exit code (bun exits
+1 under coverage even when every test passes — a known bun quirk). Beyond the gates, substantial changes
+are proven with an **adversarial end-to-end shakedown** that boots the real server + real embedder and
+drives every route — including the memory-injection proxy loop and the MCP tools — deliberately trying
+to break each one. We report the pass/fail result on each pull request instead of relying on a cloud
+badge; there is no green checkmark to trust blindly, and that's the point.
+
+**Last verified:** 2026-07-04 (`dev`) — ✅ PASSING · `tsc` clean · 196 tests / 0 fail · build ok.
+
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
 feature is a route module sharing `ctx = { sql, embed }`. The proxy calls

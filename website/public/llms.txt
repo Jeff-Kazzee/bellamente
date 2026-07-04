@@ -43,6 +43,7 @@ Core claims:
 - Inspect: every recall is durably logged with the query, matched memories, scores, latency, and below-threshold misses.
 - Correct: edits create new versions; previous versions remain in the chain. Forgetting is reversible and audited. Hard delete is explicit.
 - Local: Bellamente runs with embedded Postgres plus pgvector, local embedding models, and loopback binding by default. There is no hosted Bellamente memory service in v0.0.1.
+- Tested locally: CI runs on the maintainer's machine, not GitHub Actions (which is disabled on the repo). Reproduce it with `bun run ci` (typecheck + full test suite + binary build); substantial changes are also proven by an adversarial end-to-end shakedown of the real server. Pass/fail is reported on each pull request — there is no cloud CI badge to trust blindly.
 - Drop-in proxy: any OpenAI-compatible client can point at `http://127.0.0.1:8080/v1`. Bellamente retrieves relevant memories, injects them into the request, and returns the upstream model answer with `x-bella-trace-id` for inspection.
 
 Example CLI flow:
