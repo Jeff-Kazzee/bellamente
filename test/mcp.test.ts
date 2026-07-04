@@ -1,0 +1,179 @@
+// test/mcp.test.ts — behavior tests for `bella mcp` (P1.7, issue #42), written RED first.
+// Round-trips a real MCP Client <-> Server in-process via InMemoryTransport (no spawned process),
+// exercising every tool through the actual MCP protocol. RED until src/mcp.ts exports makeMcpServer.
+import { test, expect } from "bun:test";
+import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite/vector";
+import { makePgliteSql } from "../src/pg-shim";
+import { schemaForDim } from "../src/db";
+import { EMBED_DIM } from "../src/embed-common";
+import type { Embed } from "../src/embed";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { makeMcpServer } from "../src/mcp"; // <-- built to satisfy these tests
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), ".."); // repo root (this file lives in test/)
+
+const T = 20000;
+// Constant embedder, ZERO-PADDED to the machine-resolved EMBED_DIM (repo convention — AGENTS.md,
+// test/memories.test.ts `pad()`): every item is similarity 1.0, so single-item corpora always
+// retrieve — these tests check the MCP round-trip + lifecycle, not embedding quality (covered
+// elsewhere). A fixed small dim (e.g. 4) would mismatch `isValidVector`'s real EMBED_DIM check in
+// src/embed-common.ts and silently drop every write — the schema dim and the embed dim must both
+// track EMBED_DIM, exactly like every other PGlite-backed test in this repo.
+const pad = (v: number[]): number[] => [...v, ...new Array(Math.max(EMBED_DIM - v.length, 0)).fill(0)];
+const embed: Embed = async ({ values }) => values.map(() => pad([1, 0, 0, 0]));
+
+async function makeCtx() {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(EMBED_DIM));
+  return { sql, embed };
+}
+
+async function connect(ctx: Awaited<ReturnType<typeof makeCtx>>) {
+  const server = makeMcpServer(ctx as any);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "mcp-test", version: "0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  return { server, client, close: async () => { await client.close(); await server.close(); } };
+}
+
+async function call(client: Client, name: string, args: Record<string, unknown> = {}) {
+  const res: any = await client.callTool({ name, arguments: args });
+  const text: string = res.content?.[0]?.text ?? "";
+  let json: any; try { json = JSON.parse(text); } catch {}
+  return { res, text, json, isError: !!res.isError };
+}
+
+const TOOLS = ["document_ingest", "memory_forget", "memory_list", "memory_search", "memory_write", "trace_inspect"];
+
+test("B1 listTools exposes exactly the 6 memory tools, each with description + inputSchema", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const { tools } = await client.listTools();
+  expect(tools.map((t) => t.name).sort()).toEqual(TOOLS);
+  for (const t of tools) { expect(typeof t.description).toBe("string"); expect(t.description!.length).toBeGreaterThan(0); expect(t.inputSchema).toBeTruthy(); }
+  await close();
+}, T);
+
+test("B2 memory_write stores and memory_search retrieves it (full MCP round-trip)", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const w = await call(client, "memory_write", { content: "The deploy token for Atlas is ZEBRA-9." });
+  expect(w.isError).toBe(false);
+  expect(typeof w.json?.id).toBe("string");
+  const s = await call(client, "memory_search", { query: "Atlas deploy token" });
+  expect(JSON.stringify(s.json?.results ?? [])).toContain("ZEBRA-9");
+  await close();
+}, T);
+
+test("B3 memory_list includes a written memory", async () => {
+  const { client, close } = await connect(await makeCtx());
+  await call(client, "memory_write", { content: "Ben uses Neovim." });
+  const l = await call(client, "memory_list", {});
+  expect(JSON.stringify(l.json?.memories ?? [])).toContain("Neovim");
+  await close();
+}, T);
+
+test("B4 memory_forget soft-forgets (excluded from search) and undo restores", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const w = await call(client, "memory_write", { content: "Nightly backups at 02:00 UTC." });
+  const id = w.json.id;
+  await call(client, "memory_forget", { id });
+  const s1 = await call(client, "memory_search", { query: "backups" });
+  expect(JSON.stringify(s1.json?.results ?? [])).not.toContain("Nightly backups");
+  const undo = await call(client, "memory_forget", { id, undo: true });
+  expect(undo.isError).toBe(false);
+  const s2 = await call(client, "memory_search", { query: "backups" });
+  expect(JSON.stringify(s2.json?.results ?? [])).toContain("Nightly backups");
+  await close();
+}, T);
+
+test("B5 memory_forget is a reversible soft-forget — it does NOT hard-delete the row", async () => {
+  const ctx = await makeCtx();
+  const { client, close } = await connect(ctx);
+  const w = await call(client, "memory_write", { content: "keep the row, just forget it" });
+  await call(client, "memory_forget", { id: w.json.id });
+  const rows = await ctx.sql`SELECT is_forgotten FROM memory_entry WHERE memory = ${"keep the row, just forget it"}`;
+  expect(rows.length).toBeGreaterThan(0); // row still physically present
+  expect(rows[0].is_forgotten).toBe(true);
+  await close();
+}, T);
+
+test("B6 document_ingest chunks + embeds; documents search returns a chunk", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const d = await call(client, "document_ingest", { title: "Runbook", content: "# Runbook\n\nTo recover Atlas, run reindex then rotate the token." });
+  expect(d.json?.chunkCount).toBeGreaterThanOrEqual(1);
+  const s = await call(client, "memory_search", { query: "recover Atlas", searchMode: "documents" });
+  expect((s.json?.results ?? []).some((r: any) => r.type === "chunk")).toBe(true);
+  await close();
+}, T);
+
+test("B7 trace_inspect returns the trace produced by a prior search", async () => {
+  const { client, close } = await connect(await makeCtx());
+  await call(client, "memory_write", { content: "a fact to search for" });
+  await call(client, "memory_search", { query: "a fact" });
+  const traces = await call(client, "trace_inspect", {});
+  const first = (traces.json?.traces ?? [traces.json?.trace])[0];
+  expect(first).toBeTruthy();
+  const one = await call(client, "trace_inspect", { traceId: first.id });
+  expect(one.json?.trace?.id ?? one.json?.id).toBe(first.id);
+  await close();
+}, T);
+
+test("B8 all tools operate on the SAME ctx.sql (single writer — no second connection)", async () => {
+  const ctx = await makeCtx();
+  const { client, close } = await connect(ctx);
+  await call(client, "memory_write", { content: "single-writer marker" });
+  const rows = await ctx.sql`SELECT memory FROM memory_entry WHERE is_latest = true`;
+  expect(rows.some((r: any) => r.memory === "single-writer marker")).toBe(true);
+  await close();
+}, T);
+
+test("B9 invalid input returns isError, not an unhandled throw", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const r = await call(client, "memory_write", {}); // missing required `content`
+  expect(r.isError).toBe(true);
+  await close();
+}, T);
+
+// B10 spawns the REAL `bella mcp` subcommand as a child process (not InMemoryTransport) and drives a
+// real JSON-RPC initialize + tools/list over its actual stdin/stdout. This is the only way to prove
+// the stdout-safety rule (SPEC-P1.7 CRITICAL): the SDK's ReadBuffer parses each stdout line as strict
+// JSON-RPC (JSON.parse + schema validation) and reports ANY line that fails that as a transport error
+// via `onerror` — so a clean round-trip with zero onerror calls IS the proof that no diagnostic text
+// (console.log from migrations/embed-prewarm etc.) ever hit stdout. Needs the local embedder to boot
+// (model is already cached on disk for this repo), hence the generous timeout.
+test("B10 stdout-safety: `bella mcp` speaks ONLY JSON-RPC on stdout (diagnostics go to stderr)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "bella-mcp-b10-"));
+  const transport = new StdioClientTransport({
+    command: process.execPath, // absolute path to the running bun — avoids any PATH/shell resolution
+    args: ["run", "src/index.ts", "mcp"],
+    cwd: ROOT,
+    // BELLA_DATA_DIR isolates the DB from the real local install; everything else (incl. the model
+    // cache, so no re-download) is inherited from the current environment.
+    env: { ...process.env, BELLA_DATA_DIR: dataDir } as Record<string, string>,
+  });
+  const transportErrors: unknown[] = [];
+  const client = new Client({ name: "mcp-b10-test", version: "0" });
+  client.onerror = (e) => transportErrors.push(e);
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(TOOLS);
+    expect(transportErrors).toEqual([]); // no stray stdout byte ever failed JSON-RPC parsing
+  } finally {
+    await client.close().catch(() => {});
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}, 60000);
+
+test("B11 clean shutdown — client.close() + server.close() resolve without hanging", async () => {
+  const { close } = await connect(await makeCtx());
+  await close();
+  expect(true).toBe(true);
+}, T);

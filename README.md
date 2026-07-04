@@ -71,6 +71,7 @@ src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget gua
 src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, per-model threshold, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
 src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: memory tool loop for buffered + streamed requests, upstream timeouts)
+src/mcp.ts       `bella mcp`: stdio MCP server, 6 tools as thin wrappers over the same functions/routes above
 schema.sql       full pgvector DDL (applied at boot; changes to shipped tables go through src/migrations.ts)
 docs/            PRD + 11 subsystem specs
 ```
@@ -110,6 +111,15 @@ Override with `BELLA_EMBED_TIER=quality|light`, `BELLA_EMBED_MIN_RAM_GB`, or pin
 bun run build      # -> ./bella / bella.exe
 ./bella
 ```
+
+## MCP: native tool access for MCP agents
+```
+claude mcp add bellamente -- bella mcp
+```
+`bella mcp` speaks JSON-RPC over stdio (no HTTP) and exposes 6 tools on the SAME `ctx.sql`/`ctx.embed`
+this process already opened — no second DB, no second writer: `memory_search`, `memory_write`,
+`memory_forget` (reversible soft-forget only — never hard-deletes), `memory_list`, `document_ingest`,
+`trace_inspect`. All diagnostics route to stderr in this mode; stdout carries JSON-RPC only.
 
 ## API
 - POST   /memories            - write 1..100 memories (exact dups -> "unchanged"; near-dups -> "superseded"
