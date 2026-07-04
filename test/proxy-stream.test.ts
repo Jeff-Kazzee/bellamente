@@ -1,8 +1,5 @@
 import { test, expect } from "bun:test";
-import { Hono } from "hono";
-import { inspectRoutes } from "../src/inspect";
-import { proxyRoutes } from "../src/proxy";
-import { encoder, makeCtx, memId, spaceId, sseResponse, TEST_TIMEOUT_MS } from "./proxy-fixture";
+import { encoder, makeCtx, memId, proxyInspectApp, readTrace, spaceId, sseResponse, TEST_TIMEOUT_MS } from "./proxy-fixture";
 
 test("proxy streams upstream responses with profile context and trace visibility", async () => {
   const upstreamCalls: any[] = [];
@@ -26,9 +23,7 @@ test("proxy streams upstream responses with profile context and trace visibility
       UPDATE space SET metadata = ${ctx.sql.json({ profile: { static: ["John prefers concise answers"], dynamic: [] } })}
       WHERE id = ${spaceId}`;
 
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -48,8 +43,7 @@ test("proxy streams upstream responses with profile context and trace visibility
     expect(streamText).toContain("data: [DONE]");
 
     const traceId = res.headers.get("x-bella-trace-id");
-    const inspect = await app.request(`/inspect/${traceId}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, traceId);
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream", resultCount: 0, injectedCount: 2 });
     expect(trace.injected[0]).toMatchObject({ type: "tool" });
     expect(trace.injected[1]).toMatchObject({ type: "profile" });
@@ -97,9 +91,7 @@ test("proxy runs a streamed memory tool round and streams only the final answer"
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -120,8 +112,7 @@ test("proxy runs a streamed memory tool round and streams only the final answer"
     expect(streamText).not.toContain("tool_calls");
 
     const traceId = res.headers.get("x-bella-trace-id");
-    const inspect = await app.request(`/inspect/${traceId}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, traceId);
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", userId: "external-user-stream-round", resultCount: 1, injectedCount: 1 });
     expect(trace.queries).toEqual(["which theme"]);
     expect(trace.retrieved[0]).toMatchObject({ type: "memory", id: memId, content: "John prefers dark mode" });
@@ -156,9 +147,7 @@ test("proxy passes streamed external tool calls through verbatim", async () => {
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -181,8 +170,7 @@ test("proxy passes streamed external tool calls through verbatim", async () => {
     expect(streamText).toContain("data: [DONE]");
 
     const traceId = res.headers.get("x-bella-trace-id");
-    const inspect = await app.request(`/inspect/${traceId}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, traceId);
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls", resultCount: 0 });
     expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: false, upstreamStatus: 200 });
   } finally {
@@ -220,9 +208,7 @@ test("proxy streamed memory round degrades to an answer when search fails", asyn
     },
   });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -238,8 +224,7 @@ test("proxy streamed memory round degrades to an answer when search fails", asyn
     expect(streamText).toContain("Pick whichever theme you like.");
 
     const traceId = res.headers.get("x-bella-trace-id");
-    const inspect = await app.request(`/inspect/${traceId}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, traceId);
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", resultCount: 0 });
     expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: true, toolSearchFailed: true });
     expect(trace.metadata.toolSearchError).toContain("embedder offline");
@@ -262,9 +247,7 @@ test("proxy streams passthrough requests that already contain tool results", asy
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -287,8 +270,7 @@ test("proxy streams passthrough requests that already contain tool results", asy
     expect(streamText).toContain("Already handled");
 
     const traceId = res.headers.get("x-bella-trace-id");
-    const inspect = await app.request(`/inspect/${traceId}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, traceId);
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed_passthrough", resultCount: 0, injectedCount: 0 });
     expect(trace.metadata).toMatchObject({ hasToolResults: true, streaming: true, upstreamStatus: 200 });
   } finally {
@@ -314,9 +296,7 @@ test("proxy errors a stalled stream after BELLA_STREAM_IDLE_TIMEOUT_MS", async (
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -334,8 +314,7 @@ test("proxy errors a stalled stream after BELLA_STREAM_IDLE_TIMEOUT_MS", async (
     expect(streamFailed).toBe(true);
 
     const traceId = res.headers.get("x-bella-trace-id");
-    const inspect = await app.request(`/inspect/${traceId}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, traceId);
     expect(trace).toMatchObject({ kind: "proxy", status: "stream_error" });
     expect(String(trace.metadata.error)).toContain("stalled");
   } finally {
@@ -347,9 +326,7 @@ test("proxy errors a stalled stream after BELLA_STREAM_IDLE_TIMEOUT_MS", async (
 test("streaming proxy returns 502 when a non-local upstream has no API key", async () => {
   const ctx = await makeCtx({ upstreamBaseUrl: "https://upstream.example/v1" }); // no key, no allow flag
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -361,8 +338,7 @@ test("streaming proxy returns 502 when a non-local upstream has no API key", asy
     const body = await res.json();
     expect(body.error).toContain("Missing upstream API key");
 
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_config_error" });
     expect(trace.metadata).toMatchObject({ streaming: true });
   } finally {
@@ -376,9 +352,7 @@ test("streaming proxy returns 502 when the upstream fetch itself fails", async (
   };
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -387,8 +361,7 @@ test("streaming proxy returns 502 when the upstream fetch itself fails", async (
     });
 
     expect(res.status).toBe(502);
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
     expect(trace.metadata).toMatchObject({ streaming: true });
     expect(String(trace.metadata.error)).toContain("connection refused");
@@ -405,9 +378,7 @@ test("streaming proxy forwards a non-OK upstream status and error body", async (
     });
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -417,8 +388,7 @@ test("streaming proxy forwards a non-OK upstream status and error body", async (
 
     expect(res.status).toBe(404);
     expect(await res.text()).toContain("model not found");
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
     expect(trace.metadata).toMatchObject({ streaming: true, upstreamStatus: 404 });
   } finally {
@@ -435,9 +405,7 @@ test("streaming proxy returns 502 stream_error when upstream stalls before any e
     });
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -448,8 +416,7 @@ test("streaming proxy returns 502 stream_error when upstream stalls before any e
     // The stall happens while classifying the stream, BEFORE anything went to the client,
     // so the proxy can still answer with a proper error status instead of a broken stream.
     expect(res.status).toBe(502);
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "stream_error" });
     expect(String(trace.metadata.error)).toContain("stalled");
   } finally {
@@ -472,9 +439,7 @@ test("streamed memory round returns 502 when the second upstream call fails", as
   };
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -485,8 +450,7 @@ test("streamed memory round returns 502 when the second upstream call fails", as
     expect(res.status).toBe(502);
     expect(upstreamCalls).toHaveLength(2);
     expect(res.headers.get("x-bella-memory-round")).toBe("true");
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error", resultCount: 1 });
     expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: true, firstUpstreamStatus: 200 });
     expect(String(trace.metadata.error)).toContain("second call exploded");
@@ -512,9 +476,7 @@ test("streamed memory round forwards a non-OK second upstream response", async (
   };
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -524,8 +486,7 @@ test("streamed memory round forwards a non-OK second upstream response", async (
 
     expect(res.status).toBe(503);
     expect(await res.text()).toContain("overloaded");
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_error" });
     expect(trace.metadata).toMatchObject({ streaming: true, memoryRound: true, upstreamStatus: 503, firstUpstreamStatus: 200 });
   } finally {
@@ -537,9 +498,7 @@ test("streamed response with only [DONE] is replayed to the client as-is", async
   const fetcher: typeof fetch = async () => sseResponse(["data: [DONE]\n\n"]);
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -549,8 +508,7 @@ test("streamed response with only [DONE] is replayed to the client as-is", async
 
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("data: [DONE]\n\n");
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed" });
     expect(trace.metadata).toMatchObject({ memoryRound: false, chunkCount: 1 });
   } finally {
@@ -580,9 +538,7 @@ test("streamed memory round runs even when the model emits preamble content befo
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -598,8 +554,7 @@ test("streamed memory round runs even when the model emits preamble content befo
     expect(streamText).not.toContain("Let me check"); // the preamble + tool call never reach the client
     expect(streamText).not.toContain("call_mem_pre");
 
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed", resultCount: 1 });
     expect(trace.metadata).toMatchObject({ memoryRound: true });
   } finally {
@@ -623,9 +578,7 @@ test("streamed tool-call deltas without index but with distinct ids do not colli
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -647,8 +600,7 @@ test("streamed tool-call deltas without index but with distinct ids do not colli
     expect(streamText).toContain("call_a");
     expect(streamText).toContain("call_b");
 
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "upstream_tool_calls" });
   } finally {
     await ctx.close();
@@ -666,9 +618,7 @@ test("SSE keepalive comment lines are tolerated during stream classification", a
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -681,8 +631,7 @@ test("SSE keepalive comment lines are tolerated during stream classification", a
     expect(streamText).toContain("Answer after keepalives.");
     expect(streamText).toContain(": ping"); // replayed verbatim - the proxy does not rewrite bytes
 
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed" });
   } finally {
     await ctx.close();
@@ -700,9 +649,7 @@ test("BELLA_STREAM_DECISION_HOLD_CHARS=0 restores commit-on-first-content", asyn
 
   const ctx = await makeCtx({ fetch: fetcher, upstreamBaseUrl: "https://upstream.example/v1", allowUnauthenticatedUpstream: true });
   try {
-    const app = new Hono();
-    app.route("/v1", proxyRoutes(ctx as any));
-    app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+    const app = proxyInspectApp(ctx);
 
     const res = await app.request("/v1/chat/completions", {
       method: "POST",
@@ -712,8 +659,7 @@ test("BELLA_STREAM_DECISION_HOLD_CHARS=0 restores commit-on-first-content", asyn
 
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Hi");
-    const inspect = await app.request(`/inspect/${res.headers.get("x-bella-trace-id")}`);
-    const { trace } = await inspect.json();
+    const trace = await readTrace(app, res.headers.get("x-bella-trace-id"));
     expect(trace).toMatchObject({ kind: "proxy", status: "streamed" });
     expect(trace.metadata.chunkCount).toBe(3);
   } finally {

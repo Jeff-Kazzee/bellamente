@@ -4,7 +4,10 @@ import type { Embed } from "./embed";
 import { brandEnv } from "./env";
 import { captureFromTurn } from "./capture";
 import { recordTraceSafe, traceItemsFromSearchResults, type TraceItem } from "./inspect";
-import type { MemoryResult } from "./search";
+import { proxyResponse, streamTraceHeaders } from "./proxy-response";
+import { requestSummary } from "./proxy-request";
+import { isNamedToolCall, parseToolArgs } from "./proxy-tool";
+import { runMemoryToolRound, topMemoryResults } from "./proxy-tool-round";
 import {
   forwardUpstream,
   readUpstreamBody,
@@ -29,27 +32,6 @@ export type ByteStreamReader = {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
   cancel(reason?: unknown): Promise<unknown> | void;
 };
-
-export function parseToolArgs(value: unknown): string[] {
-  let parsed: any = value;
-  if (typeof value === "string") {
-    try {
-      parsed = JSON.parse(value || "{}");
-    } catch {
-      return [];
-    }
-  }
-  return Array.isArray(parsed?.queries)
-    ? parsed.queries
-        .filter((q: unknown): q is string => typeof q === "string")
-        .map((q: string) => q.trim())
-        .filter(Boolean)
-    : [];
-}
-
-export function isNamedToolCall(call: any, name: string): boolean {
-  return (!call?.type || call.type === "function") && call?.function?.name === name;
-}
 
 // Local models often emit PREAMBLE content ("Let me check...") before their searchMemory call in the
 // same choice. Committing to "answer" on the first content token would leak that tool call to a
@@ -179,33 +161,6 @@ export async function readStreamDecision(reader: ByteStreamReader, idleMs: numbe
   };
 }
 
-export function streamTraceHeaders(
-  contentType: string | null,
-  trace: {
-    traceId: string;
-    contextModified: boolean;
-    searchResults: number;
-    latencyMs: number;
-    memoryRound?: boolean;
-    toolIntercept?: string;
-    passthrough?: boolean;
-  },
-) {
-  const headers = new Headers();
-  headers.set("content-type", contentType || "text/event-stream");
-  headers.set("cache-control", "no-cache");
-  headers.set("x-bella-trace-id", trace.traceId);
-  headers.set("x-bella-conversation-id", trace.traceId);
-  headers.set("x-bella-context-modified", String(trace.contextModified));
-  headers.set("x-bella-search-results", String(trace.searchResults));
-  headers.set("x-bella-search-latency-ms", String(Math.max(0, Math.round(trace.latencyMs))));
-  headers.set("x-bella-memory-round", String(!!trace.memoryRound));
-  headers.set("x-bella-streaming", "true");
-  if (trace.toolIntercept) headers.set("x-bella-tool-intercept", trace.toolIntercept);
-  if (trace.passthrough) headers.set("x-bella-tool-passthrough", "true");
-  return headers;
-}
-
 // Low-level SSE piping: enqueue `prefix` chunks first (bytes readStreamDecision already consumed from
 // upstream), then pump `reader` until it drains. A null reader means "replay prefix only".
 export function pipeStream(
@@ -308,24 +263,6 @@ export function proxyStreamResponse(
 }
 type StreamingCtx = { sql: DB; embed: Embed } & UpstreamCtx;
 
-type MemoryToolRound = {
-  toolMessages: any[];
-  allBatches: MemoryResult[][];
-  usedQueries: string[];
-  toolSearchTimedOut: boolean;
-  toolSearchFailed: boolean;
-  toolSearchError?: string;
-};
-
-type ProxyResponseTrace = {
-  traceId: string;
-  contextModified: boolean;
-  searchResults: number;
-  latencyMs: number;
-  toolIntercept?: string;
-  memoryRound?: boolean;
-  passthrough?: boolean;
-};
 
 type StreamingProxyOptions = {
   ctx: StreamingCtx;
@@ -339,14 +276,6 @@ type StreamingProxyOptions = {
   query?: string;
   contextInjected: TraceItem[];
   toolAlreadyPresent: boolean;
-  requestSummary: (body: any) => unknown;
-  proxyResponse: (body: string, status: number, contentType: string | null, trace: ProxyResponseTrace) => Response;
-  runMemoryToolRound: (
-    ctx: StreamingCtx,
-    calls: { id: string; queries: string[] }[],
-    opts: { userId?: string; containerTag?: string },
-  ) => Promise<MemoryToolRound>;
-  topMemoryResults: (batches: MemoryResult[][]) => MemoryResult[];
   memoryToolName: string;
 };
 
@@ -362,10 +291,6 @@ export async function handleStreamingProxy({
   query,
   contextInjected,
   toolAlreadyPresent,
-  requestSummary,
-  proxyResponse,
-  runMemoryToolRound,
-  topMemoryResults,
   memoryToolName,
 }: StreamingProxyOptions): Promise<Response> {
   if (!upstream.ok) {

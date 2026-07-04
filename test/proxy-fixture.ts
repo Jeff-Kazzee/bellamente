@@ -1,7 +1,10 @@
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
+import { Hono } from "hono";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
+import { inspectRoutes } from "../src/inspect";
+import { proxyRoutes } from "../src/proxy";
 import { ORG_ID, DEFAULT_CONTAINER_TAG } from "../src/util";
 import type { Embed } from "../src/embed";
 
@@ -49,4 +52,29 @@ async function seedMemory(sql: Sql) {
       (id, org_id, space_id, memory, is_latest, version, root_memory_id, memory_embedding, memory_embedding_model)
     VALUES
       (${memId}, ${ORG_ID}, ${spaceId}, ${"John prefers dark mode"}, true, 1, ${memId}, ${userVector}::vector, ${"test-embed"})`;
+}
+export function proxyInspectApp(ctx: { sql: Sql } & Record<string, unknown>) {
+  const app = new Hono();
+  app.route("/v1", proxyRoutes(ctx as any));
+  app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+  return app;
+}
+
+export function chatCompletion(
+  app: ReturnType<typeof proxyInspectApp>,
+  body: any,
+  headers: Record<string, string> = {},
+) {
+  return app.request("/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function readTrace(app: ReturnType<typeof proxyInspectApp>, traceId: string | null) {
+  if (!traceId) throw new Error("missing x-bella-trace-id");
+  const inspect = await app.request(`/inspect/${traceId}`);
+  const { trace } = await inspect.json();
+  return trace;
 }
