@@ -8,7 +8,8 @@ preload = ["./scripts/ort-alias-preload.ts"]
 [test]
 coverage = true
 coverageSkipTestFiles = true
-coverageThreshold = { functions = 0.89, lines = 0.91 }
+coverageThreshold = { functions = 0.90, lines = 0.91 }
+# Function ratchet raised 2026-07-04 (issue #87 follow-up, measured functions 90.64 / lines 91.91).
 # Ratchet raised 2026-07-03 (issue #91 follow-up, measured functions 89.10 / lines 91.11).
 # Ratchet raised 2026-07-02 (P1.4 PR, measured functions 86.38 / lines 90.04).
 # Initial calibration (2026-07-02, src-only after coverageSkipTestFiles): functions 84.48 / lines 89.17.
