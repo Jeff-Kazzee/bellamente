@@ -10,6 +10,7 @@
     "build": "bun run build.ts",
     "bench": "bun run scripts/eval-e2e.ts",
     "bench:models": "bun run scripts/eval.ts",
+    "probe:ann": "bun run scripts/probe-filtered-ann.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
