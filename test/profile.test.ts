@@ -139,3 +139,28 @@ test("PUT /profile with an unparseable body stores an empty profile object (the 
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("formatProfile tolerates a non-array static/dynamic without throwing (#124 defense-in-depth)", () => {
+  // formatProfile runs on EVERY proxied completion; a profile persisted with a non-array section (e.g.
+  // from a pre-fix bad PUT) must degrade to empty text, never throw a TypeError that 500s the completion.
+  expect(formatProfile({ static: {} as any, dynamic: 5 as any } as any)).toBe("");
+  expect(formatProfile({ static: ["keep"], dynamic: {} as any } as any)).toBe("  - keep");
+});
+
+test("PUT /profile rejects a non-array static/dynamic with 400 instead of persisting a completion-poisoning profile (#124)", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const bad = await put(app, "/profile", JSON.stringify({ static: {} }));
+    expect(bad.status).toBe(400);
+    expect(await (await app.request("/profile")).json()).toEqual({ static: [], dynamic: [] }); // nothing persisted
+    expect(Number((await sql`SELECT count(*)::int AS n FROM space`)[0]!.n)).toBe(0);
+
+    expect((await put(app, "/profile", JSON.stringify({ dynamic: [1, 2] }))).status).toBe(400); // non-string elements too
+
+    const good = await put(app, "/profile", JSON.stringify({ static: ["a"], dynamic: ["b"] }));
+    expect(good.status).toBe(200);
+    expect(await (await app.request("/profile")).json()).toEqual({ static: ["a"], dynamic: ["b"] });
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
