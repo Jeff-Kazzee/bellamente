@@ -4,7 +4,7 @@
 // per error object so a site-captured error re-entering app.onError is logged exactly once.
 import { createHash } from "node:crypto";
 import { newId } from "./util";
-import { toBellaError, type Category, type Severity } from "./errors";
+import { messageForCode, toBellaError, type Category, type Severity } from "./errors";
 import { logEvent } from "./log";
 
 export interface CaptureContext {
@@ -23,8 +23,8 @@ export interface CaptureResult {
 
 // The redacted-by-construction event handed to a persistence sink (PR #2). Defined here so the funnel owns
 // the contract and stays decoupled from the store (src/error-store.ts consumes this shape). `requestShape`
-// is the raw capture context; the sink redacts it at the store boundary. `messageRedacted` must already be
-// safe (BellaError.userFacing) — the raw error message never travels.
+// is the raw capture context; the sink redacts it at the store boundary. `messageRedacted` is a STATIC
+// per-code label (messageForCode) — content-free by construction; the raw error message never travels.
 export interface ErrorEventInput {
   severity: string;
   category: string;
@@ -92,9 +92,9 @@ export function capture(e: unknown, ctx: CaptureContext = {}): CaptureResult {
 
     // Persist (redacted) when a store sink is registered — fire-and-forget and guarded, because the funnel
     // must never become the failure. The sink's async write is itself never-throw; this try/catch only
-    // guards a sink that throws synchronously. messageRedacted is be.userFacing (never the raw message) —
-    // which is a static, content-free label by CONTRACT (the same contract app.onError already relies on to
-    // put it in the 500 body). Do not interpolate user data into userFacing; the store persists it.
+    // guards a sink that throws synchronously. messageRedacted is a STATIC label looked up from the error
+    // code (messageForCode) — content-free BY CONSTRUCTION: never the free-form userFacing or the raw
+    // message, so no interpolated user text can ever reach the durable store.
     if (errorSink) {
       try {
         errorSink({
@@ -103,7 +103,7 @@ export function capture(e: unknown, ctx: CaptureContext = {}): CaptureResult {
           code,
           fingerprint: fp,
           traceId,
-          messageRedacted: be.userFacing,
+          messageRedacted: messageForCode(code),
           requestShape: { ...be.context, ...restCtx },
         });
       } catch {
