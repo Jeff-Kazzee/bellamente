@@ -60,8 +60,8 @@ bun run ci
 ```
 
 That single command verifies the lockfile install, dependency audit, typecheck, full test suite with
-aggregate coverage floors, real release smoke, binary build, and whitespace diff check. GitHub Actions
-is not the source of truth for this repo.
+aggregate coverage floors, real release smoke, binary build, website build, and whitespace diff check.
+GitHub Actions runs the same gate on PRs and deploys GitHub Pages from `prod`.
 
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every

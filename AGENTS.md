@@ -75,7 +75,7 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    structure; ```prompt fences are agent-paste blocks (labeled + copy-buttoned by DocsLayout).
 4. Before EVERY commit, `bun run ci` must pass locally:
    - frozen dependency install and moderate-or-higher dependency audit
-   - typecheck, full test suite with aggregate coverage gate, release smoke, binary build
+   - typecheck, full test suite with aggregate coverage gate, release smoke, binary build, website build
    - `git diff --check` for whitespace damage
 5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
    NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the

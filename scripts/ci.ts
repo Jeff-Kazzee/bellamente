@@ -4,6 +4,7 @@
 type Gate = {
   name: string;
   command: string[];
+  cwd?: string;
 };
 
 const gates: Gate[] = [
@@ -13,6 +14,8 @@ const gates: Gate[] = [
   { name: "tests with aggregate coverage gate", command: ["bun", "run", "test"] },
   { name: "full functionality release smoke", command: ["bun", "run", "smoke"] },
   { name: "binary build", command: ["bun", "run", "build"] },
+  { name: "website install from lockfile", command: ["bun", "install", "--frozen-lockfile"], cwd: "website" },
+  { name: "website build", command: ["bun", "run", "build"], cwd: "website" },
   { name: "whitespace diff check", command: ["git", "diff", "--check"] },
 ];
 
@@ -20,11 +23,12 @@ const results: string[] = [];
 
 for (const gate of gates) {
   console.log(`\n=== ${gate.name} ===`);
-  console.log(`$ ${gate.command.join(" ")}`);
+  console.log(`$ ${gate.cwd ? `(cd ${gate.cwd} && ${gate.command.join(" ")})` : gate.command.join(" ")}`);
   const proc = Bun.spawn(gate.command, {
     stdout: "inherit",
     stderr: "inherit",
     env: process.env,
+    cwd: gate.cwd,
   });
   const code = await proc.exited;
   if (code !== 0) {
