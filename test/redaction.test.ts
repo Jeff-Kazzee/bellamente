@@ -87,6 +87,14 @@ test("redact() is safe on hostile inputs: cycles, bigint, functions, null", () =
   expect(out.s).toEqual({ type: "string", len: 4 });
 });
 
+test("redact() fail-closes array elements under a safe key (no verbatim passthrough)", () => {
+  const out = redact({ mode: ["ARRAYSECRET_hhh888"], scores: [1, 2] }) as Record<string, any>;
+  // A safe-scalar key does not license raw strings inside an array value.
+  expect(JSON.stringify(out)).not.toContain("ARRAYSECRET_hhh888");
+  expect(out.mode).toEqual([{ type: "string", len: "ARRAYSECRET_hhh888".length }]);
+  expect(out.scores).toEqual([1, 2]); // numbers are inherently safe
+});
+
 test("hashId is stable, non-reversible, and prefixed", () => {
   const h = hashId(EMAIL);
   expect(h).toBe(hashId(EMAIL)); // stable

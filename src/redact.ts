@@ -58,7 +58,11 @@ function redactValue(key: string | undefined, value: unknown, seen: WeakSet<obje
     if (key && CONTENT_KEYS.has(key)) return shape(value); // e.g. queries/messages -> drop wholesale
     if (seen.has(value)) return { type: "circular" };
     seen.add(value);
-    return value.map((el) => redactValue(key, el, seen));
+    // Elements have no key of their own, so they inherit the parent key. Under a SAFE key that would pass
+    // raw string elements through verbatim - a hole in fail-closed - so drop the key for safe-key elements
+    // (=> shape). ID/PATH keys still hash/basename each element; CONTENT arrays were already dropped above.
+    const elemKey = key && SAFE_KEYS.has(key) ? undefined : key;
+    return value.map((el) => redactValue(elemKey, el, seen));
   }
 
   const obj = value as Record<string, unknown>;
