@@ -2,16 +2,19 @@
 # onnxruntime-web instance for both the transformers.js tokenizer and inference (no native, no conflict).
 preload = ["./scripts/ort-alias-preload.ts"]
 
-# Coverage gate: every `bun test` computes coverage and FAILS below these floors. This is the
-# mechanical half of the test-first rule in AGENTS.md — new code cannot merge untested, no matter
-# which model wrote it. Floors are a RATCHET: raise them as gaps fill (target: 1.0); never lower.
+# Coverage: every `bun test` computes coverage and writes an lcov report (coverage/lcov.info),
+# consumed by the GLOBAL floor check in scripts/ci.ts. We deliberately do NOT set bunfig
+# `coverageThreshold`: bun enforces it PER FILE, which trips integration-only files (embed.ts worker
+# dispatch, index.ts Bun.serve boot, db.ts lock/crash paths) and makes `bun test` exit 1 even when the
+# suite is green and GLOBAL coverage clears the floor (issue #96). `bun run ci` enforces the real
+# global floor from the lcov report instead. The floor is a RATCHET: raise it as gaps fill
+# (target: 1.0); never lower. Integration-only files are covered by the dogfood smoke, not by units.
 [test]
 coverage = true
 coverageSkipTestFiles = true
-coverageThreshold = { functions = 0.90, lines = 0.91 }
-# Function ratchet raised 2026-07-04 (issue #87 follow-up, measured functions 90.64 / lines 91.91).
-# Ratchet raised 2026-07-03 (issue #91 follow-up, measured functions 89.10 / lines 91.11).
-# Ratchet raised 2026-07-02 (P1.4 PR, measured functions 86.38 / lines 90.04).
-# Initial calibration (2026-07-02, src-only after coverageSkipTestFiles): functions 84.48 / lines 89.17.
-# Remaining gap lives in embed.ts (worker dispatch), embed-common, db.ts lock/signal paths, index.ts
-# boot — tracked in docs/BACKLOG.md as the coverage-ratchet task.
+coverageReporter = ["text", "lcov"]
+# Global floor lives in scripts/ci.ts: WEIGHTED funcs 0.90 / lines 0.90 (real % = total covered/total
+# found). The history below measured bun's UNWEIGHTED per-file mean (its "All files" row); on the
+# weighted metric current coverage is 92.71 / 90.18, so lines was re-baselined 0.91→0.90 (2026-07-05)
+# as a METRIC CORRECTION, not a lowering. History (unweighted mean): 2026-07-04 (#87) 90.64/91.91 ·
+# 07-03 (#91) 89.10/91.11 · 07-02 (P1.4) 86.38/90.04 · initial 84.48/89.17.

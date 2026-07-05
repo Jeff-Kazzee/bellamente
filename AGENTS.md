@@ -32,8 +32,10 @@ implementation:
    including error/degradation paths, not just the happy path.
 2. Write them as failing tests (the test names ARE the spec). Commit message may land them together
    with the implementation, but the tests must be written first and must fail before the fix.
-3. A feature without behavior tests does not merge. Ever. The coverage gate in bunfig.toml
-   ([test] coverageThreshold) enforces the floor mechanically — `bun test` FAILS below it.
+3. A feature without behavior tests does not merge. Ever. The coverage gate is enforced
+   mechanically by `bun run ci`, which reads bun's lcov report and FAILS below the GLOBAL floor
+   (weighted funcs 0.90 / lines 0.90). bunfig `coverageThreshold` is deliberately NOT set: bun enforces it
+   per-file, tripping integration-only files even when global coverage clears the floor (issue #96).
 4. The floors are a RATCHET: when coverage rises, raise the floor in the same PR. Never lower them.
    Long-term target is 1.0; code that genuinely cannot be unit-tested (WASM embed worker, real
    model downloads, `Bun.serve` listen) must instead be covered by the release smoke checklist and
@@ -73,7 +75,8 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    (website/src/pages/docs/*.md) in the SAME PR. The repo Markdown IS the website — Vercel rebuilds
    it on every `prod` push, so repo and site cannot drift. test/website.test.ts pins the site
    structure; ```prompt fences are agent-paste blocks (labeled + copy-buttoned by DocsLayout).
-4. Before EVERY commit, all four gates must pass:
+4. Before EVERY commit, all four gates must pass — `bun run ci` runs all of them plus the global
+   coverage floor in one command:
    - `git diff --check`   (no whitespace damage)
    - `bunx tsc --noEmit`  (typecheck clean)
    - `bun test`           (every test green — no skips, no "unrelated failure" excuses)

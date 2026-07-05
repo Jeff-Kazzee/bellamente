@@ -12,6 +12,7 @@
     "bench:models": "bun run scripts/eval.ts",
     "probe:ann": "bun run scripts/probe-filtered-ann.ts",
     "test": "bun test",
+    "ci": "bun run scripts/ci.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
