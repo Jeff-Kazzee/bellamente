@@ -1,12 +1,12 @@
 # Bellamente Roadmap
 
-**v0.0.2 is an early release.** It is usable and it is honest — and it is not at all complete.
+**v0.0.3 is an early release.** It is usable and it is honest — and it is not at all complete.
 This page is the actual backlog, in priority order. If a feature you need is listed below, it does
 not exist yet.
 
 Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 
-## Now — shipped in v0.0.2
+## Now — current in v0.0.3
 
 - Memory lifecycle: write with dedup/supersede, versioned corrections, reversible forgetting,
   hard delete, full version-chain reads.
@@ -20,6 +20,7 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
   latency p50/p95, and route-vector-vs-brute-force recall and exact-vs-route delta.
 - One binary; embedded Postgres + pgvector; local device-scaled embeddings; loopback by default;
   append-only migrations.
+- Public direct downloads currently publish tested Windows x64 and Linux x64 binaries only.
 - Coverage-gated behavior test suite.
 
 ## Next — the trust loop, finished

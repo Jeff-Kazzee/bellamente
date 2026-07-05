@@ -18,9 +18,7 @@ const BASE_URL = process.env.BELLA_DOWNLOAD_BASE || `https://github.com/${REPO}/
 function platformAsset(platform = process.platform, arch = process.arch) {
   if (platform === "win32" && arch === "x64") return "bella-windows-x64.exe";
   if (platform === "linux" && arch === "x64") return "bella-linux-x64";
-  if (platform === "darwin" && arch === "arm64") return "bella-darwin-arm64";
-  if (platform === "darwin" && arch === "x64") return "bella-darwin-x64";
-  throw new Error(`Bellamente does not publish a binary for ${platform}/${arch} yet.`);
+  throw new Error(`Bellamente currently publishes binaries for Windows x64 and Linux x64 only; detected ${platform}/${arch}.`);
 }
 
 function cacheRoot() {
@@ -28,7 +26,6 @@ function cacheRoot() {
   if (process.platform === "win32" && process.env.LOCALAPPDATA) {
     return path.join(process.env.LOCALAPPDATA, "Bellamente", "Launcher");
   }
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Caches", "Bellamente", "Launcher");
   return path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "bellamente", "launcher");
 }
 

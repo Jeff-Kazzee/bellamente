@@ -14,8 +14,6 @@ if (!outDir.startsWith(`${releaseRoot}\\`) && !outDir.startsWith(`${releaseRoot}
 
 const targets = [
   { target: "bun-windows-x64", asset: "bella-windows-x64.exe" },
-  { target: "bun-darwin-arm64", asset: "bella-darwin-arm64" },
-  { target: "bun-darwin-x64", asset: "bella-darwin-x64" },
   { target: "bun-linux-x64", asset: "bella-linux-x64" },
 ];
 

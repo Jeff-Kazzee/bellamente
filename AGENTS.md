@@ -110,8 +110,10 @@ report — do not improvise around a contract.
 
 ## Current release truth
 
-- Current public release: `v0.0.2`.
+- Current public release: `v0.0.3`.
 - Source repo: `https://github.com/The-Little-AI-Company/bellamente`.
 - Public site/docs: `https://the-little-ai-company.github.io/bellamente/`.
 - Package installs: `npm install -g bellamente`, `pipx install bellamente`, or one-shot `uvx bellamente doctor`.
 - GitHub release assets must exist before a `prod` deploy points public copy at that version.
+- Current public direct binaries are Windows x64 and Linux x64 only until more OS builds have a real
+  test pass.
