@@ -11,21 +11,44 @@ recalls them semantically, and sits in front of your local LLM as a drop-in
 `/v1/chat/completions` proxy that injects relevant memory — with a durable trace of exactly what
 it did. One binary. No Docker, no account, no cloud, no telemetry.
 
-> **Early release.** v0.0.1 is usable and tested — and not complete. The
-> [roadmap](/roadmap) is the honest backlog.
+> **Early release.** v0.0.2 is usable and tested — and not complete. The
+> [roadmap](/bellamente/roadmap) is the honest backlog.
 
 ## Install
 
-Download the binary for your platform from the
-[latest release](https://github.com/Jeff-Kazzee/bellamente/releases/latest), then:
+Use npm:
+
+```sh
+npm install -g bellamente
+bella doctor
+bella
+```
+
+Or Python tooling:
+
+```sh
+pipx install bellamente
+bella doctor
+bella
+```
+
+For a one-shot Python run without installing a persistent `bella` command:
+
+```sh
+uvx bellamente doctor
+```
+
+The npm and PyPI packages install a tiny launcher. When no verified cache exists, it downloads the
+matching GitHub release binary for your platform, verifies it against `SHA256SUMS.txt`, and runs it.
+
+You can also download the binary for your platform from the
+[latest release](https://github.com/The-Little-AI-Company/bellamente/releases/latest):
 
 ```sh
 chmod +x bella-linux-x64        # macOS/Linux only; skip on Windows
 ./bella-linux-x64 doctor        # verifies DB, embedding model, ports, disk
 ./bella-linux-x64               # serves on 127.0.0.1:8080
 ```
-
-Verify the download with `SHA256SUMS.txt` from the same release page.
 
 ## Zero config, really
 
@@ -50,6 +73,6 @@ Every response carries an `x-bella-trace-id` header — open the dashboard at
 
 ## Where to next
 
-- [Using it](/docs/using) — connect your chat client or agent, auto-capture, the dashboard.
-- [API](/docs/api) — every route, request and response shapes.
-- [Config](/docs/config) — every `BELLA_*` knob (all optional).
+- [Using it](/bellamente/docs/using) — connect your chat client or agent, auto-capture, the dashboard.
+- [API](/bellamente/docs/api) — every route, request and response shapes.
+- [Config](/bellamente/docs/config) — every `BELLA_*` knob (all optional).

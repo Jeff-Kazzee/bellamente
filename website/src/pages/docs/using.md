@@ -36,7 +36,7 @@ This machine runs Bellamente, a local memory service, at http://127.0.0.1:8080 (
 - Every response returns an x-bella-trace-id header; the human can audit any recall at http://127.0.0.1:8080/.
 ```
 
-(A native MCP server — `bella mcp` — is on the [roadmap](/roadmap).)
+(A native MCP server — `bella mcp` — is on the [roadmap](/bellamente/roadmap).)
 
 ## Measure retrieval quality
 

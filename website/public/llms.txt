@@ -4,21 +4,21 @@
 
 Bellamente's product identity is memory you can inspect and trust. It is built for developers and agent operators who want persistent agent memory without a hosted memory vendor, telemetry, or an opaque retrieval service. The public brand is Bellamente; the CLI is `bella`.
 
-Canonical site: https://bellamente.vercel.app/
-Source repository: https://github.com/Jeff-Kazzee/bellamente
-Latest release: https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1
+Canonical site: https://the-little-ai-company.github.io/bellamente/
+Source repository: https://github.com/The-Little-AI-Company/bellamente
+Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2
 
 ## Markdown Documents
 
 Agents can ingest Bellamente documentation in one file or per page (the docs are Markdown in the
 repository at website/src/pages/docs/ and rendered on the site):
 
-- [Full agent context pack](https://bellamente.vercel.app/llms-full.md): all public site context, downloads, roadmap, changelog, and agent guidance in one file.
-- [Docs overview & install](https://bellamente.vercel.app/docs/): what Bellamente is, install, zero-config first run.
-- [Using it](https://bellamente.vercel.app/docs/using/): connecting clients/agents, memory grounding, auto-capture, dashboard. Includes a copy-paste agent integration prompt.
-- [API reference](https://bellamente.vercel.app/docs/api/): every route and diagnostic header.
-- [Config](https://bellamente.vercel.app/docs/config/): every BELLA_* environment variable (all optional).
-- [Roadmap](https://bellamente.vercel.app/roadmap/) and [Changelog](https://bellamente.vercel.app/changelog/).
+- [Full agent context pack](https://the-little-ai-company.github.io/bellamente/llms-full.md): all public site context, downloads, roadmap, changelog, and agent guidance in one file.
+- [Docs overview & install](https://the-little-ai-company.github.io/bellamente/docs/): what Bellamente is, install, zero-config first run.
+- [Using it](https://the-little-ai-company.github.io/bellamente/docs/using/): connecting clients/agents, memory grounding, auto-capture, dashboard. Includes a copy-paste agent integration prompt.
+- [API reference](https://the-little-ai-company.github.io/bellamente/docs/api/): every route and diagnostic header.
+- [Config](https://the-little-ai-company.github.io/bellamente/docs/config/): every BELLA_* environment variable (all optional).
+- [Roadmap](https://the-little-ai-company.github.io/bellamente/roadmap/) and [Changelog](https://the-little-ai-company.github.io/bellamente/changelog/).
 
 ## Full Site Documents
 
@@ -30,19 +30,36 @@ Bellamente is local-first memory for AI agents. The promise is simple: every rec
 
 Tagline: Memoria Viva for your AI agents.
 
-Direct downloads for Bellamente v0.0.1:
+Install Bellamente v0.0.2:
 
-- [Windows x64](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe): `bella-windows-x64.exe`
-- [macOS Apple silicon](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-arm64): `bella-darwin-arm64`
-- [macOS Intel](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-x64): `bella-darwin-x64`
-- [Linux x64](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-linux-x64): `bella-linux-x64`
-- [SHA256 checksums](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt): `SHA256SUMS.txt`
+```sh
+npm install -g bellamente
+pipx install bellamente
+```
+
+One-shot Python run:
+
+```sh
+uvx bellamente doctor
+```
+
+The npm and PyPI packages are tiny launchers: when no verified cache exists, they download the
+matching GitHub release binary, verify it against `SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent
+`bella` command; use `pipx install bellamente` for that.
+
+Direct downloads for Bellamente v0.0.2:
+
+- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe): `bella-windows-x64.exe`
+- [macOS Apple silicon](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64): `bella-darwin-arm64`
+- [macOS Intel](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64): `bella-darwin-x64`
+- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64): `bella-linux-x64`
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt): `SHA256SUMS.txt`
 
 Core claims:
 
 - Inspect: every recall is durably logged with the query, matched memories, scores, latency, and below-threshold misses.
 - Correct: edits create new versions; previous versions remain in the chain. Forgetting is reversible and audited. Hard delete is explicit.
-- Local: Bellamente runs with embedded Postgres plus pgvector, local embedding models, and loopback binding by default. There is no hosted Bellamente memory service in v0.0.1.
+- Local: Bellamente runs with embedded Postgres plus pgvector, local embedding models, and loopback binding by default. There is no hosted Bellamente memory service in v0.0.2.
 - Drop-in proxy: any OpenAI-compatible client can point at `http://127.0.0.1:8080/v1`. Bellamente retrieves relevant memories, injects them into the request, and returns the upstream model answer with `x-bella-trace-id` for inspection.
 
 Example CLI flow:
@@ -55,11 +72,11 @@ curl -s :8080/search -d '{"q":"what theme does Jeff like?"}'
 
 ### Roadmap
 
-Bellamente v0.0.1 is an early release. It is usable and honest, but it is not complete. The roadmap is the public backlog and should be treated as direction, not as a rigid queue.
+Bellamente v0.0.2 is an early release. It is usable and honest, but it is not complete. The roadmap is the public backlog and should be treated as direction, not as a rigid queue.
 
 Important roadmap rule: items can ship out of order, and multiple items may land together when one implementation clears several gaps. When shipped, work moves from the roadmap to the changelog.
 
-Now in v0.0.1:
+Now in v0.0.2:
 
 - Memory lifecycle with versioned corrections and reversible forgetting.
 - Semantic and hybrid document search.
@@ -73,13 +90,16 @@ Next focus: full-text memory search, MCP via `bella mcp`, recency-aware ranking,
 
 ### Changelog
 
-Bellamente v0.0.1 shipped on 2026-07-02.
+Bellamente v0.0.2 shipped on 2026-07-05.
 
-Release identity: Bellamente v0.0.1, Memoria Viva for your AI agents.
+Release identity: Bellamente v0.0.2, Memoria Viva for your AI agents.
 Release target: `prod`.
-Release URL: https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1
+Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2
 
-What shipped: local-first memory lifecycle, document recall, OpenAI-compatible proxy, auto-capture, recall traces, dashboard inspection, embedded Postgres plus pgvector, local embeddings, and direct release binaries.
+What shipped: npm and PyPI launchers, the GitHub Actions release gate, GitHub Pages deploy wiring,
+updated org/site URLs, and full-functionality release smoke proof on top of the existing local-first
+memory lifecycle, document recall, OpenAI-compatible proxy, auto-capture, recall traces, dashboard
+inspection, embedded Postgres plus pgvector, local embeddings, and direct release binaries.
 
 ## Agent Use Guidance
 
@@ -108,17 +128,17 @@ Do not invent compatibility aliases or use the old pre-release working title. Th
 
 ## Canonical URLs
 
-- [Home](https://bellamente.vercel.app/): product overview, positioning, direct downloads, and core trust claims.
-- [Roadmap](https://bellamente.vercel.app/roadmap/): current backlog and sequencing caveats.
-- [Changelog](https://bellamente.vercel.app/changelog/): shipped releases and direct binaries.
-- [Sitemap](https://bellamente.vercel.app/sitemap.xml): indexable URL list.
-- [Robots policy](https://bellamente.vercel.app/robots.txt): crawl policy.
+- [Home](https://the-little-ai-company.github.io/bellamente/): product overview, positioning, direct downloads, and core trust claims.
+- [Roadmap](https://the-little-ai-company.github.io/bellamente/roadmap/): current backlog and sequencing caveats.
+- [Changelog](https://the-little-ai-company.github.io/bellamente/changelog/): shipped releases and direct binaries.
+- [Sitemap](https://the-little-ai-company.github.io/bellamente/sitemap.xml): indexable URL list.
+- [Robots policy](https://the-little-ai-company.github.io/bellamente/robots.txt): crawl policy.
 
 ## External Authority
 
-- [GitHub repository](https://github.com/Jeff-Kazzee/bellamente): source code and issues.
-- [Latest release](https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1): release notes and assets.
-- [SHA256 checksums](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt): integrity file for release binaries.
+- [GitHub repository](https://github.com/The-Little-AI-Company/bellamente): source code and issues.
+- [Latest release](https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2): release notes and assets.
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt): integrity file for release binaries.
 
 ## Optional
 

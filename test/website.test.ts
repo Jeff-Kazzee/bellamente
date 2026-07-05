@@ -6,14 +6,14 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PAGES = join(ROOT, "website", "src", "pages");
 const PUBLIC = join(ROOT, "website", "public");
-const SITE = "https://bellamente.vercel.app";
+const SITE = "https://the-little-ai-company.github.io/bellamente";
 
 const RELEASE_DOWNLOADS = [
-  "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe",
-  "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-arm64",
-  "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-x64",
-  "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-linux-x64",
-  "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt",
+  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe",
+  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64",
+  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64",
+  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64",
+  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt",
 ];
 
 const INDEXABLE_URLS = [
@@ -36,25 +36,25 @@ function readPublic(path: string) {
   return readFileSync(join(PUBLIC, path), "utf8");
 }
 
-test("homepage gives users one-click downloads for every v0.0.1 binary", () => {
+test("homepage gives users one-click downloads for every v0.0.2 binary", () => {
   const home = readPage("index.astro");
   for (const download of RELEASE_DOWNLOADS) {
     expect(home).toContain(download);
   }
-  expect(home).not.toContain('class="db-btn primary" href="https://github.com/Jeff-Kazzee/bellamente/releases/latest"');
+  expect(home).not.toContain('class="db-btn primary" href="https://github.com/The-Little-AI-Company/bellamente/releases/latest"');
 });
 
 test("roadmap says items can ship out of order and points to the changelog", () => {
   const roadmap = readPage("roadmap.astro");
   expect(roadmap).toContain("ship out of order");
   expect(roadmap).toContain("multiple items may land together");
-  expect(roadmap).toContain('href="/changelog"');
+  expect(roadmap).toContain('href="/bellamente/changelog"');
 });
 
 test("changelog page records shipped releases with direct downloads", () => {
   expect(existsSync(join(PAGES, "changelog.astro"))).toBe(true);
   const changelog = readPage("changelog.astro");
-  expect(changelog).toContain("Bellamente v0.0.1");
+  expect(changelog).toContain("Bellamente v0.0.2");
   for (const download of RELEASE_DOWNLOADS) {
     expect(changelog).toContain(download);
   }
@@ -95,14 +95,25 @@ test("agent Markdown docs are available as one full ingest file and section-leve
 
   const llms = readPublic("llms.txt");
   expect(llms).toContain("## Markdown Documents");
-  expect(llms).toContain("https://bellamente.vercel.app/llms-full.md");
-  expect(llms).toContain("https://bellamente.vercel.app/docs/using/");
-  expect(llms).toContain("https://bellamente.vercel.app/docs/api/");
+  expect(llms).toContain("https://the-little-ai-company.github.io/bellamente/llms-full.md");
+  expect(llms).toContain("https://the-little-ai-company.github.io/bellamente/docs/using/");
+  expect(llms).toContain("https://the-little-ai-company.github.io/bellamente/docs/api/");
 
   const full = readPublic("llms-full.md");
   expect(full).toContain("## Full Site Documents");
   expect(full).toContain("## Section Documents");
   expect(full).toContain("service: \"bellamente\"");
+  expect(full).toContain(`${SITE}/llms.txt`);
+  expect(full).toContain(`${SITE}/llms-full.md`);
+  expect(full).toContain(`${SITE}/docs/`);
+  expect(full).toContain(`${SITE}/docs/using/`);
+  expect(full).toContain(`${SITE}/docs/api/`);
+  expect(full).toContain(`${SITE}/docs/config/`);
+  expect(full).toContain(`${SITE}/sitemap.xml`);
+  expect(full).not.toContain("/docs/*.md");
+  expect(full).not.toContain("docs/home.md");
+  expect(full).not.toContain("docs/downloads.md");
+  expect(full).not.toContain("docs/agent-guide.md");
   for (const download of RELEASE_DOWNLOADS) {
     expect(full).toContain(download);
   }
@@ -138,6 +149,6 @@ test("docs pages exist in the repo, render on the site, and carry the agent prom
 });
 
 test("home and roadmap link to the docs", () => {
-  expect(readPage("index.astro")).toContain('href="/docs"');
-  expect(readPage("roadmap.astro")).toContain('href="/docs"');
+  expect(readPage("index.astro")).toContain('href="/bellamente/docs"');
+  expect(readPage("roadmap.astro")).toContain('href="/bellamente/docs"');
 });
