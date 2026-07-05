@@ -1,12 +1,12 @@
 # Bellamente Roadmap
 
-**v0.0.1 is an early release.** It is usable and it is honest — and it is not at all complete.
+**v0.0.2 is an early release.** It is usable and it is honest — and it is not at all complete.
 This page is the actual backlog, in priority order. If a feature you need is listed below, it does
 not exist yet.
 
-Also on the website: https://bellamente.vercel.app/roadmap
+Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 
-## Now — shipped in v0.0.1
+## Now — shipped in v0.0.2
 
 - Memory lifecycle: write with dedup/supersede, versioned corrections, reversible forgetting,
   hard delete, full version-chain reads.

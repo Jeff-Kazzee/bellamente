@@ -7,7 +7,7 @@ description: Every route — memories, documents, search, profile, inspect, the 
 # API reference
 
 Base URL: `http://127.0.0.1:8080`. JSON in, JSON out. On localhost no auth is needed;
-when a key is active, send `Authorization: Bearer <key>` (see [config](/docs/config)).
+when a key is active, send `Authorization: Bearer <key>` (see [config](/bellamente/docs/config)).
 
 ## Memories
 

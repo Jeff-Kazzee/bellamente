@@ -14,6 +14,7 @@ const gates: Gate[] = [
   { name: "tests with aggregate coverage gate", command: ["bun", "run", "test"] },
   { name: "full functionality release smoke", command: ["bun", "run", "smoke"] },
   { name: "binary build", command: ["bun", "run", "build"] },
+  { name: "package and release artifact gate", command: ["bun", "run", "package:gate"] },
   { name: "website install from lockfile", command: ["bun", "install", "--frozen-lockfile"], cwd: "website" },
   { name: "website build", command: ["bun", "run", "build"], cwd: "website" },
   { name: "whitespace diff check", command: ["git", "diff", "--check"] },

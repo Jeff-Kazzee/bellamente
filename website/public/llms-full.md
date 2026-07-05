@@ -1,10 +1,10 @@
 # Bellamente Agent Context Pack
 
-This is the full Markdown context pack for Bellamente. Agents can ingest this single file when context allows, or fetch section documents from `/docs/*.md` when they only need part of the public documentation.
+This is the full Markdown context pack for Bellamente. Agents can ingest this single file when context allows, or fetch the rendered section pages under `https://the-little-ai-company.github.io/bellamente/docs/` when they only need part of the public documentation.
 
-Canonical site: https://bellamente.vercel.app/
-Source repository: https://github.com/Jeff-Kazzee/bellamente
-Latest release: https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1
+Canonical site: https://the-little-ai-company.github.io/bellamente/
+Source repository: https://github.com/The-Little-AI-Company/bellamente
+Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2
 
 ## Full Site Documents
 
@@ -33,23 +33,40 @@ curl -s :8080/search -d '{"q":"what theme does Jeff like?"}'
 
 ### Downloads
 
-Current release: Bellamente v0.0.1.
+Current release: Bellamente v0.0.2.
 
-- [Windows x64](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe): `bella-windows-x64.exe`
-- [macOS Apple silicon](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-arm64): `bella-darwin-arm64`
-- [macOS Intel](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-x64): `bella-darwin-x64`
-- [Linux x64](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-linux-x64): `bella-linux-x64`
-- [SHA256 checksums](https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt): `SHA256SUMS.txt`
+Package-manager installs:
 
-Bellamente ships as one binary named `bella` or `bella.exe`. No Docker, cloud account, or hosted Bellamente service is required for v0.0.1.
+```sh
+npm install -g bellamente
+pipx install bellamente
+```
+
+One-shot Python run:
+
+```sh
+uvx bellamente doctor
+```
+
+The npm and PyPI packages are tiny launchers: when no verified cache exists, they download the
+matching GitHub release binary, verify it against `SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent
+`bella` command; use `pipx install bellamente` for that.
+
+- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe): `bella-windows-x64.exe`
+- [macOS Apple silicon](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64): `bella-darwin-arm64`
+- [macOS Intel](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64): `bella-darwin-x64`
+- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64): `bella-linux-x64`
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt): `SHA256SUMS.txt`
+
+Bellamente ships as one binary named `bella` or `bella.exe`. No Docker, cloud account, or hosted Bellamente service is required for v0.0.2.
 
 ### Roadmap
 
-Bellamente v0.0.1 is an early release. It is usable and honest, but it is not complete. The roadmap is a public backlog and should be treated as direction, not as a rigid queue.
+Bellamente v0.0.2 is an early release. It is usable and honest, but it is not complete. The roadmap is a public backlog and should be treated as direction, not as a rigid queue.
 
 Items can ship out of order, and multiple items may land together when one implementation clears several gaps. When shipped, work moves from the roadmap to the changelog.
 
-Now in v0.0.1:
+Now in v0.0.2:
 
 - Memory lifecycle with versioned corrections and reversible forgetting.
 - Semantic and hybrid document search.
@@ -72,13 +89,17 @@ Later and bigger bets include time-aware facts, inferred-memory review, context-
 
 ### Changelog
 
-Bellamente v0.0.1 shipped on 2026-07-02.
+Bellamente v0.0.2 shipped on 2026-07-05.
 
-Release URL: https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1
+Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2
 Release target: `prod`.
 
 Shipped:
 
+- npm and PyPI launchers that verify and run the matching GitHub release binary.
+- GitHub Actions release gate and GitHub Pages deploy wiring under The Little AI Company org.
+- Full-functionality release smoke proof for real embedder, database boot, proxy memory loops,
+  export/import, temporal recall, and hard-delete scope.
 - Local-first memory lifecycle.
 - Document recall.
 - OpenAI-compatible proxy.
@@ -116,12 +137,13 @@ Do not invent compatibility aliases or use the old pre-release working title. Th
 
 ## Section Documents
 
-- [Home](https://bellamente.vercel.app/docs/home.md)
-- [Downloads](https://bellamente.vercel.app/docs/downloads.md)
-- [Roadmap](https://bellamente.vercel.app/docs/roadmap.md)
-- [Changelog](https://bellamente.vercel.app/docs/changelog.md)
-- [Agent guide](https://bellamente.vercel.app/docs/agent-guide.md)
+- [Docs overview and install](https://the-little-ai-company.github.io/bellamente/docs/)
+- [Using Bellamente](https://the-little-ai-company.github.io/bellamente/docs/using/)
+- [API reference](https://the-little-ai-company.github.io/bellamente/docs/api/)
+- [Config reference](https://the-little-ai-company.github.io/bellamente/docs/config/)
+- [Roadmap](https://the-little-ai-company.github.io/bellamente/roadmap/)
+- [Changelog](https://the-little-ai-company.github.io/bellamente/changelog/)
 
 ## Agent Loading Pattern
 
-Start at `/llms.txt`. Fetch `/llms-full.md` for full context. Fetch `/docs/*.md` for partial context. Use `/sitemap.xml` to discover all indexable files.
+Start at `https://the-little-ai-company.github.io/bellamente/llms.txt`. Fetch `https://the-little-ai-company.github.io/bellamente/llms-full.md` for full context. Fetch the rendered `/bellamente/docs/` pages for partial context. Use `https://the-little-ai-company.github.io/bellamente/sitemap.xml` to discover all indexable files.
