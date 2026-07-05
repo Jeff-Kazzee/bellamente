@@ -8,12 +8,13 @@ import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
 import { inspectRoutes } from "./inspect";
+import { errorsRoutes, persistErrorEventSafe } from "./error-store";
 import { exportRoutes, importRoutes } from "./export";
 import { dashboardRoutes } from "./dashboard";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
 import { brandEnv } from "./env";
 import { resolveAuth, bearerOk, type AuthConfig } from "./auth";
-import { capture, captureFatal } from "./observe";
+import { capture, captureFatal, setErrorSink } from "./observe";
 import { toBellaError } from "./errors";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -66,6 +67,7 @@ export function buildApp(ctx: { sql: DB; embed: Embed }, auth: AuthConfig = reso
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
   app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+  app.route("/errors", errorsRoutes({ sql: ctx.sql }));
   app.route("/export", exportRoutes(ctx)); // portability: your memory is a file you can take anywhere (SPEC-P1.9)
   app.route("/import", importRoutes(ctx));
   app.route("/v1", proxyRoutes(ctx));
@@ -96,6 +98,9 @@ async function main() {
   // Boot sequence (Spec 00): paths/budget -> db -> migrations -> embed prewarm -> listen.
   warnIfOverDiskBudget();
   const sql = await makeDb();
+  // Persist captured failures now that the DB is open — covers captureFatal (process handler) and every
+  // request-path capture via the module-global sink in observe.ts. Pre-DB crashes stay log-only.
+  setErrorSink((ev) => void persistErrorEventSafe(sql, ev));
   const embed = makeEmbed();
   await prewarmEmbed(embed);
   const auth = resolveAuth(HOST);

@@ -21,6 +21,31 @@ export interface CaptureResult {
   fingerprint: string;
 }
 
+// The redacted-by-construction event handed to a persistence sink (PR #2). Defined here so the funnel owns
+// the contract and stays decoupled from the store (src/error-store.ts consumes this shape). `requestShape`
+// is the raw capture context; the sink redacts it at the store boundary. `messageRedacted` must already be
+// safe (BellaError.userFacing) — the raw error message never travels.
+export interface ErrorEventInput {
+  severity: string;
+  category: string;
+  code: string;
+  fingerprint: string;
+  traceId?: string;
+  messageRedacted?: string;
+  stackFingerprint?: string;
+  requestShape?: unknown;
+  id?: string;
+}
+
+// Optional persistence sink. main() registers a db-backed writer at boot, AFTER makeDb() (src/index.ts); when
+// null the funnel is log-only — today's behavior, and the fallback for any pre-DB crash. The sink must be
+// non-throwing and fire-and-forget.
+type ErrorSink = (ev: ErrorEventInput) => void;
+let errorSink: ErrorSink | null = null;
+export function setErrorSink(sink: ErrorSink | null): void {
+  errorSink = sink;
+}
+
 // Dedupe by the ORIGINAL thrown object. Non-object throws (string/null) aren't keyable, so they simply
 // aren't deduped - acceptable, they rarely double-flow.
 const seen = new WeakMap<object, CaptureResult>();
@@ -64,6 +89,27 @@ export function capture(e: unknown, ctx: CaptureContext = {}): CaptureResult {
       { code, category, severity, retryable: be.retryable, traceId, errorId, fingerprint: fp, ...be.context, ...restCtx },
       { message: rawMessage, stack: rawStack },
     );
+
+    // Persist (redacted) when a store sink is registered — fire-and-forget and guarded, because the funnel
+    // must never become the failure. The sink's async write is itself never-throw; this try/catch only
+    // guards a sink that throws synchronously. messageRedacted is be.userFacing (never the raw message) —
+    // which is a static, content-free label by CONTRACT (the same contract app.onError already relies on to
+    // put it in the 500 body). Do not interpolate user data into userFacing; the store persists it.
+    if (errorSink) {
+      try {
+        errorSink({
+          severity,
+          category,
+          code,
+          fingerprint: fp,
+          traceId,
+          messageRedacted: be.userFacing,
+          requestShape: { ...be.context, ...restCtx },
+        });
+      } catch {
+        /* a broken sink must not break capture() */
+      }
+    }
     return result;
   } catch (inner) {
     // The funnel must never become the failure. Warn plainly and still return correlation ids.
