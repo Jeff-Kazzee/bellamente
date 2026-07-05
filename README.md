@@ -52,6 +52,17 @@ change to `prod`.
   `bun run bench:models` for the old model-selection A/B script. Hybrid recall is an any-gold hit metric across the memory and document golds, so the deterministic document/hybrid rows are ceiling checks rather than broad retrieval claims.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
 
+## Testing
+Bellamente's release gate runs locally:
+
+```sh
+bun run ci
+```
+
+That single command verifies the lockfile install, dependency audit, typecheck, full test suite with
+aggregate coverage floors, real release smoke, binary build, and whitespace diff check. GitHub Actions
+is not the source of truth for this repo.
+
 ## Architecture (one process)
 One Hono app + two singletons: `sql` (pgvector) and `embed` (384-d, local). Every
 feature is a route module sharing `ctx = { sql, embed }`. The proxy calls

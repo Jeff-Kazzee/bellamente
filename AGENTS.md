@@ -73,11 +73,10 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    (website/src/pages/docs/*.md) in the SAME PR. The repo Markdown IS the website — Vercel rebuilds
    it on every `prod` push, so repo and site cannot drift. test/website.test.ts pins the site
    structure; ```prompt fences are agent-paste blocks (labeled + copy-buttoned by DocsLayout).
-4. Before EVERY commit, all four gates must pass:
-   - `git diff --check`   (no whitespace damage)
-   - `bunx tsc --noEmit`  (typecheck clean)
-   - `bun run test`       (every test green + aggregate coverage gate; no skips, no "unrelated failure" excuses)
-   - `bun run build`      (binary compiles; emits ./bella)
+4. Before EVERY commit, `bun run ci` must pass locally:
+   - frozen dependency install and moderate-or-higher dependency audit
+   - typecheck, full test suite with aggregate coverage gate, release smoke, binary build
+   - `git diff --check` for whitespace damage
 5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
    NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the
    designated reviewer (Fable) or Jeff merges, and NEVER while review follow-ups are still open

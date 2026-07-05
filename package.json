@@ -11,6 +11,7 @@
     "bench": "bun run scripts/eval-e2e.ts",
     "bench:models": "bun run scripts/eval.ts",
     "probe:ann": "bun run scripts/probe-filtered-ann.ts",
+    "ci": "bun run scripts/ci.ts",
     "smoke": "bun run scripts/functional-e2e.ts",
     "test": "bun run scripts/test-with-coverage-gate.ts",
     "typecheck": "tsc --noEmit"
