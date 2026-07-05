@@ -4,7 +4,7 @@ This is the full Markdown context pack for Bellamente. Agents can ingest this si
 
 Canonical site: https://the-little-ai-company.github.io/bellamente/
 Source repository: https://github.com/The-Little-AI-Company/bellamente
-Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2
+Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
 
 ## Full Site Documents
 
@@ -33,7 +33,7 @@ curl -s :8080/search -d '{"q":"what theme does Jeff like?"}'
 
 ### Downloads
 
-Current release: Bellamente v0.0.2.
+Current release: Bellamente v0.0.3.
 
 Package-manager installs:
 
@@ -48,25 +48,24 @@ One-shot Python run:
 uvx bellamente doctor
 ```
 
-The npm and PyPI packages are tiny launchers: when no verified cache exists, they download the
-matching GitHub release binary, verify it against `SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent
-`bella` command; use `pipx install bellamente` for that.
+The npm and PyPI packages are tiny launchers: when no verified cache exists on supported Windows x64
+and Linux x64 machines, they download the matching GitHub release binary, verify it against
+`SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent `bella` command; use
+`pipx install bellamente` for that.
 
-- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe): `bella-windows-x64.exe`
-- [macOS Apple silicon](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64): `bella-darwin-arm64`
-- [macOS Intel](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64): `bella-darwin-x64`
-- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64): `bella-linux-x64`
-- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt): `SHA256SUMS.txt`
+- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe): `bella-windows-x64.exe`
+- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-linux-x64): `bella-linux-x64`
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/SHA256SUMS.txt): `SHA256SUMS.txt`
 
-Bellamente ships as one binary named `bella` or `bella.exe`. No Docker, cloud account, or hosted Bellamente service is required for v0.0.2.
+Bellamente ships as one binary named `bella` or `bella.exe`. No Docker, cloud account, or hosted Bellamente service is required for v0.0.3.
 
 ### Roadmap
 
-Bellamente v0.0.2 is an early release. It is usable and honest, but it is not complete. The roadmap is a public backlog and should be treated as direction, not as a rigid queue.
+Bellamente v0.0.3 is an early release. It is usable and honest, but it is not complete. The roadmap is a public backlog and should be treated as direction, not as a rigid queue.
 
 Items can ship out of order, and multiple items may land together when one implementation clears several gaps. When shipped, work moves from the roadmap to the changelog.
 
-Now in v0.0.2:
+Now in v0.0.3:
 
 - Memory lifecycle with versioned corrections and reversible forgetting.
 - Semantic and hybrid document search.
@@ -108,7 +107,18 @@ Shipped:
 - Dashboard inspection.
 - Embedded Postgres plus pgvector.
 - Local embeddings.
-- Direct release binaries for Windows, macOS, and Linux.
+- Direct release binaries for Windows and Linux.
+
+Bellamente v0.0.3 shipped on 2026-07-05.
+
+Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
+Release target: `prod`.
+
+Shipped:
+
+- Release-truth patch that keeps public direct downloads and package launchers limited to tested
+  Windows x64 and Linux x64 binaries.
+- Additional OS binaries stay out of public distribution until they have a real test pass.
 
 ### Agent Use Guidance
 

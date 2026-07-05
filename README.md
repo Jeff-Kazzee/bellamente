@@ -11,7 +11,7 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
-**v0.0.2 — early release.** Usable, tested, honest — and not at all complete. The
+**v0.0.3 — early release.** Usable, tested, honest — and not at all complete. The
 [ROADMAP](ROADMAP.md) is the real backlog; if a feature you need is on it, it does not exist yet.
 
 **Docs:** [the-little-ai-company.github.io/bellamente/docs](https://the-little-ai-company.github.io/bellamente/docs/) — the same Markdown
@@ -20,8 +20,9 @@ change to `prod`.
 
 ## Install
 
-Package-manager installs use a tiny launcher that downloads the matching GitHub release binary,
-verifies it against `SHA256SUMS.txt`, and then runs `bella`.
+Package-manager installs use a tiny launcher that downloads the matching GitHub release binary on
+supported Windows x64 and Linux x64 machines, verifies it against `SHA256SUMS.txt`, and then runs
+`bella`.
 
 ```sh
 npm install -g bellamente
@@ -41,7 +42,7 @@ For a one-shot Python run without installing a persistent `bella` command:
 uvx bellamente doctor
 ```
 
-You can also download the platform binary directly from the
+You can also download supported Windows x64 and Linux x64 binaries directly from the
 [latest GitHub release](https://github.com/The-Little-AI-Company/bellamente/releases/latest).
 
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.

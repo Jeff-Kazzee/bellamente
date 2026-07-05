@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const VERSION = "0.0.2";
+const VERSION = "0.0.3";
 const REPO = "The-Little-AI-Company/bellamente";
 
 function read(path: string) {
@@ -23,9 +23,11 @@ test("npm launcher package exposes bella without publishing the dev tree", () =>
   expect(launcher).toContain("BELLA_BIN_CACHE");
   expect(launcher).not.toContain("BELLAMENTE_");
   expect(launcher).toContain(".sha256");
-  for (const asset of ["bella-windows-x64.exe", "bella-linux-x64", "bella-darwin-arm64", "bella-darwin-x64"]) {
+  for (const asset of ["bella-windows-x64.exe", "bella-linux-x64"]) {
     expect(launcher).toContain(asset);
   }
+  expect(launcher).not.toContain("bella-darwin");
+  expect(launcher).toContain("Windows x64 and Linux x64 only");
   expect(launcher).toContain("SHA256SUMS.txt");
 });
 
@@ -42,6 +44,8 @@ test("PyPI launcher package mirrors the npm release identity", () => {
   expect(cli).toContain("BELLA_DOWNLOAD_BASE");
   expect(cli).toContain("BELLA_BIN_CACHE");
   expect(cli).not.toContain("BELLAMENTE_");
+  expect(cli).not.toContain("bella-darwin");
+  expect(cli).toContain("Windows x64 and Linux x64 only");
   expect(cli).toContain(".sha256");
   expect(cli).toContain("SHA256SUMS.txt");
 });

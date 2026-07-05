@@ -6,27 +6,17 @@ const downloads = [
   {
     label: "Windows x64",
     detail: "bella-windows-x64.exe",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe",
-  },
-  {
-    label: "macOS Apple silicon",
-    detail: "bella-darwin-arm64",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64",
-  },
-  {
-    label: "macOS Intel",
-    detail: "bella-darwin-x64",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe",
   },
   {
     label: "Linux x64",
     detail: "bella-linux-x64",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-linux-x64",
   },
   {
     label: "SHA256 checksums",
     detail: "SHA256SUMS.txt",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/SHA256SUMS.txt",
   },
 ];
 ---
@@ -76,7 +66,7 @@ const downloads = [
             <a href="/bellamente/">Home</a>
             <a href="/bellamente/roadmap">Roadmap</a>
             <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe">Download</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe">Download</a>
           </nav>
         </header>
 
@@ -94,6 +84,16 @@ const downloads = [
 
         <!-- section: releases -->
         <section class="db-pillars">
+          <div class="db-row">
+            <span class="k">2026-07-05</span>
+            <div>
+              <h3>Bellamente v0.0.3</h3>
+              <p>Patch release truth fix: public downloads and package launchers now publish only
+                 tested Windows x64 and Linux x64 binaries. Additional OS binaries stay out of public
+                 distribution until they have a real test pass.</p>
+            </div>
+            <div><span class="proof">tag v0.0.3 · target prod</span></div>
+          </div>
           <div class="db-row">
             <span class="k">2026-07-05</span>
             <div>
@@ -118,10 +118,10 @@ const downloads = [
         <!-- section: direct downloads -->
         <section class="db-proxy">
           <div>
-            <h2>Download v0.0.2</h2>
-            <p>Install with npm or pipx, or choose the binary for your machine. The checksum file is published with the same release.</p>
+            <h2>Download v0.0.3</h2>
+            <p>Install with npm or pipx, or choose a supported Windows x64 or Linux x64 binary. The checksum file is published with the same release.</p>
           </div>
-          <div class="db-downloads stacked" aria-label="Direct downloads for Bellamente v0.0.2">
+          <div class="db-downloads stacked" aria-label="Direct downloads for Bellamente v0.0.3">
             {downloads.map((download) => (
               <a class="db-download" href={download.href}>
                 <strong>{download.label}</strong>
@@ -136,7 +136,7 @@ const downloads = [
           <span>© 2026 The Little AI Co · BELLAMENTE</span>
           <span class="fine">
             full release notes ·
-            <a href="https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2">github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3">github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3</a>
           </span>
         </footer>
       </div>

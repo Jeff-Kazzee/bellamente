@@ -11,7 +11,7 @@ recalls them semantically, and sits in front of your local LLM as a drop-in
 `/v1/chat/completions` proxy that injects relevant memory — with a durable trace of exactly what
 it did. One binary. No Docker, no account, no cloud, no telemetry.
 
-> **Early release.** v0.0.2 is usable and tested — and not complete. The
+> **Early release.** v0.0.3 is usable and tested — and not complete. The
 > [roadmap](/bellamente/roadmap) is the honest backlog.
 
 ## Install
@@ -38,14 +38,15 @@ For a one-shot Python run without installing a persistent `bella` command:
 uvx bellamente doctor
 ```
 
-The npm and PyPI packages install a tiny launcher. When no verified cache exists, it downloads the
-matching GitHub release binary for your platform, verifies it against `SHA256SUMS.txt`, and runs it.
+The npm and PyPI packages install a tiny launcher. When no verified cache exists on supported
+Windows x64 and Linux x64 machines, it downloads the matching GitHub release binary, verifies it
+against `SHA256SUMS.txt`, and runs it.
 
-You can also download the binary for your platform from the
+You can also download a supported Windows x64 or Linux x64 binary from the
 [latest release](https://github.com/The-Little-AI-Company/bellamente/releases/latest):
 
 ```sh
-chmod +x bella-linux-x64        # macOS/Linux only; skip on Windows
+chmod +x bella-linux-x64        # Linux only; skip on Windows
 ./bella-linux-x64 doctor        # verifies DB, embedding model, ports, disk
 ./bella-linux-x64               # serves on 127.0.0.1:8080
 ```
