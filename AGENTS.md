@@ -32,8 +32,8 @@ implementation:
    including error/degradation paths, not just the happy path.
 2. Write them as failing tests (the test names ARE the spec). Commit message may land them together
    with the implementation, but the tests must be written first and must fail before the fix.
-3. A feature without behavior tests does not merge. Ever. The coverage gate in bunfig.toml
-   ([test] coverageThreshold) enforces the floor mechanically — `bun test` FAILS below it.
+3. A feature without behavior tests does not merge. Ever. `bun run test` runs the full suite and
+   enforces the aggregate coverage floor mechanically — it FAILS below the ratchet.
 4. The floors are a RATCHET: when coverage rises, raise the floor in the same PR. Never lower them.
    Long-term target is 1.0; code that genuinely cannot be unit-tested (WASM embed worker, real
    model downloads, `Bun.serve` listen) must instead be covered by the release smoke checklist and
@@ -73,11 +73,10 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    (website/src/pages/docs/*.md) in the SAME PR. The repo Markdown IS the website — Vercel rebuilds
    it on every `prod` push, so repo and site cannot drift. test/website.test.ts pins the site
    structure; ```prompt fences are agent-paste blocks (labeled + copy-buttoned by DocsLayout).
-4. Before EVERY commit, all four gates must pass:
-   - `git diff --check`   (no whitespace damage)
-   - `bunx tsc --noEmit`  (typecheck clean)
-   - `bun test`           (every test green — no skips, no "unrelated failure" excuses)
-   - `bun run build`      (binary compiles; emits ./bella)
+4. Before EVERY commit, `bun run ci` must pass locally:
+   - frozen dependency install and moderate-or-higher dependency audit
+   - typecheck, full test suite with aggregate coverage gate, release smoke, binary build, website build
+   - `git diff --check` for whitespace damage
 5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
    NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the
    designated reviewer (Fable) or Jeff merges, and NEVER while review follow-ups are still open

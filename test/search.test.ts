@@ -813,6 +813,7 @@ test("a FAILED search's trace still records the request, including asOf (review 
   try {
     const failingEmbed: Embed = async () => { throw new Error("embedder offline"); };
     const app = new Hono();
+    app.onError((err, c) => c.json({ error: err.message }, 500));
     app.route("/search", searchRoutes({ sql: ctx.sql, embed: failingEmbed }));
     const res = await app.request("/search", {
       method: "POST", headers: { "content-type": "application/json" },
