@@ -13,6 +13,8 @@ import { dashboardRoutes } from "./dashboard";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
 import { brandEnv } from "./env";
 import { resolveAuth, bearerOk, type AuthConfig } from "./auth";
+import { capture, captureFatal } from "./observe";
+import { toBellaError } from "./errors";
 
 const PORT = Number(process.env.PORT ?? 8080);
 // Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
@@ -68,10 +70,29 @@ export function buildApp(ctx: { sql: DB; embed: Embed }, auth: AuthConfig = reso
   app.route("/import", importRoutes(ctx));
   app.route("/v1", proxyRoutes(ctx));
 
+  // Total-capture seam: any unhandled throw (was Hono's bare-text 500) is captured content-free and
+  // returned as a structured JSON error carrying a correlation traceId. capture() is idempotent, so a
+  // route that already captured before rethrowing (e.g. /search) is not double-logged here.
+  app.onError((err, c) => {
+    const { traceId } = capture(err, { category: "http", traceId: c.req.header("x-bella-trace-id") || undefined });
+    const be = toBellaError(err);
+    c.header("x-bella-trace-id", traceId);
+    return c.json({ error: be.userFacing, code: be.code, traceId }, 500);
+  });
+
   return app;
 }
 
 async function main() {
+  // Fail-fast, never silent: capture a fatal (redacted) then exit so a crash is still a crash. This only
+  // wraps Node's existing crash-on-uncaughtException (adds a captured record, same exit 1) - it does NOT
+  // change any currently-surviving path. Lives in main() so tests importing buildApp never attach a
+  // process-global handler (same reason as the sweep). (unhandledRejection is deferred to PR #2: exiting
+  // on it would be NEW crash behavior for today's benign rejections - needs a safe integration test first.)
+  process.on("uncaughtException", (e) => {
+    captureFatal(e);
+    process.exit(1);
+  });
   // Boot sequence (Spec 00): paths/budget -> db -> migrations -> embed prewarm -> listen.
   warnIfOverDiskBudget();
   const sql = await makeDb();
