@@ -1,0 +1,5 @@
+# Bellamente is developed on Windows but CI (GitHub Actions) and the canonical test/build run on
+# Linux. Normalize ALL text files to LF in the repository so a Windows checkout can never dirty a
+# branch with CRLF line endings, and so the committed bytes match what Linux CI sees. `text=auto`
+# auto-detects binaries and leaves them untouched.
+* text=auto eol=lf
