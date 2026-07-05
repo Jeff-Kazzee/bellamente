@@ -74,6 +74,24 @@ test("junk chunkOptions fall back to defaults instead of disabling splitting", (
   expect(junk.length).toBeGreaterThan(1);
 });
 
+test("sub-1 maxChars that rounds to 0 falls back to defaults instead of hanging (#122)", () => {
+  const para = ("A sentence that repeats to build a long paragraph. ").repeat(120); // ~6k chars
+  const sane = chunkMarkdown(para);
+  // posInt must round BEFORE the >0 gate: 0.4/0/0.49/-0.4 all resolve to <=0 and must fall back to the
+  // default, NOT become maxChars=0 (which made forceSplit's hard-cut loop never advance -> infinite hang).
+  for (const bad of [0.4, 0, 0.49, -0.4]) {
+    const out = chunkMarkdown(para, { maxChars: bad });
+    expect(out.length).toBe(sane.length);
+  }
+});
+
+test("degenerate maxChars=1 on astral content terminates via the hard-cut progress guard (#122)", () => {
+  // maxChars=1 at a surrogate-pair boundary: the keep-pairs-whole `end -= 1` would pin end===k, so the
+  // hard-cut loop would never advance without an explicit forward-progress guard. This must return, not hang.
+  const chunks = chunkMarkdown("𠀀".repeat(400), { maxChars: 1 });
+  expect(chunks.length).toBeGreaterThan(0);
+});
+
 test("structural behavior preserved: code fences stay atomic, breadcrumbs prepended to embedded text", () => {
   const md = "# API\n\n## Auth\n\nUse the bearer token.\n\n```ts\nconst x = 1;\nconst y = 2;\n```\n";
   const chunks = chunkMarkdown(md);
