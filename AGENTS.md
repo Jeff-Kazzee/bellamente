@@ -70,12 +70,13 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
 2. One logical change per commit. The commit message explains WHY, not just what.
 3. Tests ship in the same commit as the change they cover (written first — see above).
 3b. DOCS LAW (Jeff, 2026-07-02): any user-facing behavior change updates the matching docs page
-   (website/src/pages/docs/*.md) in the SAME PR. The repo Markdown IS the website — Vercel rebuilds
-   it on every `prod` push, so repo and site cannot drift. test/website.test.ts pins the site
+   (website/src/pages/docs/*.md) in the SAME PR. The repo Markdown IS the website — GitHub Pages
+   rebuilds it on every `prod` push, so repo and site cannot drift. test/website.test.ts pins the site
    structure; ```prompt fences are agent-paste blocks (labeled + copy-buttoned by DocsLayout).
 4. Before EVERY commit, `bun run ci` must pass locally:
    - frozen dependency install and moderate-or-higher dependency audit
-   - typecheck, full test suite with aggregate coverage gate, release smoke, binary build, website build
+   - typecheck, full test suite with aggregate coverage gate, release smoke, binary build
+   - package/release artifact gate, website build
    - `git diff --check` for whitespace damage
 5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
    NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the
@@ -106,3 +107,11 @@ The acceptance criteria in the BACKLOG item are met, all four gates pass, the be
 by a test (not by "it should work"), and anything you could not finish is written down in
 BACKLOG with file:line pointers. If you are blocked or the code contradicts this file: STOP and
 report — do not improvise around a contract.
+
+## Current release truth
+
+- Current public release: `v0.0.2`.
+- Source repo: `https://github.com/The-Little-AI-Company/bellamente`.
+- Public site/docs: `https://the-little-ai-company.github.io/bellamente/`.
+- Package installs: `npm install -g bellamente`, `pipx install bellamente`, or one-shot `uvx bellamente doctor`.
+- GitHub release assets must exist before a `prod` deploy points public copy at that version.
