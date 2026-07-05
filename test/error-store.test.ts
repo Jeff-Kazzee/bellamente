@@ -11,6 +11,7 @@ import { persistErrorEvent, persistErrorEventSafe, errorsRoutes } from "../src/e
 import { capture, setErrorSink, type ErrorEventInput } from "../src/observe";
 import { hashId } from "../src/redact";
 import { newId } from "../src/util";
+import { BellaError } from "../src/errors";
 
 // A fresh in-memory PGlite + full schema per test is ~1-2s of setup; the DB-touching tests need headroom
 // over bun's 5s default under full-suite load (same reason test/capture.test.ts uses an explicit timeout).
@@ -184,8 +185,32 @@ test(
       expect(row.trace_id).toBe(result!.traceId);
       expect(row.code).toBe("SEARCH_FAILED");
       expect(row.category).toBe("search");
-      expect(row.message_redacted).toBe("Internal error"); // BellaError.userFacing, not ERRMSG
+      expect(row.message_redacted).toBe("Search failed to complete"); // static per-code label, never ERRMSG/userFacing
       expect(row.request_shape.userId).toBe(hashId(EMAIL));
+    } finally {
+      setErrorSink(null);
+      await close();
+    }
+  },
+  TEST_TIMEOUT_MS,
+);
+
+test(
+  "message_redacted is a static per-code label — a secret in userFacing never reaches the store",
+  async () => {
+    const { sql, close } = await makeDb();
+    try {
+      setErrorSink((e) => void persistErrorEventSafe(sql, e));
+      const SECRET = "USERFACINGSECRET_kkk999";
+      // A BellaError whose userFacing INTERPOLATES a secret. By construction the store must ignore it and
+      // persist the static per-code label instead — no dependence on userFacing being kept static.
+      await captureConsole(() =>
+        capture(new BellaError({ code: "SEARCH_FAILED", category: "search", userFacing: `No match for ${SECRET}` })),
+      );
+      const row = await waitFor(async () => (await sql`SELECT message_redacted FROM error_event`)[0]);
+      expect(row).toBeDefined();
+      expect(row.message_redacted).toBe("Search failed to complete"); // the code catalog, NOT the userFacing
+      expect(JSON.stringify(row)).not.toContain(SECRET);
     } finally {
       setErrorSink(null);
       await close();
