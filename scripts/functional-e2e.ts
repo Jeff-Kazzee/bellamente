@@ -80,12 +80,14 @@ function check(name: string, cond: boolean, detail = "") {
 }
 
 async function main() {
-  const [{ makeDb, schemaForDim }, { EMBED_DIM }, { buildApp }, { makeEmbed, prewarmEmbed }, { DEFAULT_CONTAINER_TAG }] = await Promise.all([
+  const [{ makeDb, schemaForDim }, { EMBED_DIM }, { buildApp }, { makeEmbed, prewarmEmbed }, { DEFAULT_CONTAINER_TAG }, { setErrorSink, capture }, { persistErrorEventSafe }] = await Promise.all([
     import("../src/db"),
     import("../src/embed-common"),
     import("../src/index"),
     import("../src/embed"),
     import("../src/util"),
+    import("../src/observe"),
+    import("../src/error-store"),
   ]);
 
   console.log(`\n=== Bellamente full-functionality smoke (REAL embedder, on-disk DB, real HTTP) ===`);
@@ -95,6 +97,7 @@ async function main() {
   await prewarmEmbed(embed);
 
   const sql = await makeDb();
+  setErrorSink((ev) => void persistErrorEventSafe(sql, ev)); // mirror main(): persist captured failures once the DB is open
   const migrationRows = await sql`SELECT id FROM schema_migrations ORDER BY id`;
   check("makeDb boot path applies migrations", migrationRows.length >= 1, `migrations=${migrationRows.length}`);
 
@@ -252,6 +255,18 @@ async function main() {
     check("deleted memory is gone (404)", gone.status === 404, `status=${gone.status}`);
     const listAfterDelete = await req("GET", "/memories?limit=50");
     check("delete does not remove unrelated memories", (listAfterDelete.json?.memories || []).some((m: any) => m.memory?.includes("Cyra")));
+
+    // N. Error observability: capture -> redacted store -> /errors, on the REAL server + real on-disk DB.
+    console.log("\nN. Error observability");
+    const errEmpty = await req("GET", "/errors");
+    check("GET /errors is live and empty on a clean boot", Array.isArray(errEmpty.json?.errors) && errEmpty.json.errors.length === 0, `errors=${errEmpty.json?.errors?.length}`);
+    const SMK = "SMOKESECRET_error_zzz"; // if this ever appears in /errors, redaction failed
+    for (let i = 0; i < 2; i++) capture(new Error(SMK), { category: "embed", code: "SMOKE_FAIL", userId: "smoke@secret.example", query: SMK });
+    await new Promise((r) => setTimeout(r, 400)); // fire-and-forget writes land
+    const errList = await req("GET", "/errors");
+    const grp = (errList.json?.errors || []).find((e: any) => e.code === "SMOKE_FAIL");
+    check("captured failures land grouped in /errors (count reflects repeats)", grp?.count === 2, `count=${grp?.count}`);
+    check("/errors is served content-free (no secret in the payload)", !errList.text.includes(SMK) && !errList.text.includes("smoke@secret.example"), `bodyLen=${errList.text.length}`);
 
     // Report
     console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
