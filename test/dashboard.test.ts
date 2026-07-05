@@ -28,6 +28,15 @@ test("GET / serves the dashboard shell publicly (no key needed) and leaks no sec
   expect(html).not.toContain("test-key-123"); // the shell must never embed the API key
 });
 
+test("dashboard boot does not gate a no-auth (loopback) instance behind a key", async () => {
+  // Regression: on loopback the server reports auth:"none" and the app legitimately has no key. route()
+  // must NOT renderGate() just because apiKey is empty — the boot sets a noAuth flag from /health and
+  // route() honours it. (Browser-only boot JS; a string-match is the pragmatic guard absent a DOM harness.)
+  const html = await (await req("/")).text();
+  expect(html).toContain("noAuth"); // the no-auth flag exists
+  expect(html).toContain("!apiKey && !noAuth"); // route() only gates when a key is actually required
+});
+
 test("GET / ships a restrictive Content-Security-Policy", async () => {
   const r = await req("/");
   const csp = r.headers.get("content-security-policy") || "";

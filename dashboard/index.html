@@ -272,6 +272,7 @@
   const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const KEY_STORE = "bellamente.apikey";
   let apiKey = localStorage.getItem(KEY_STORE) || "";
+  let noAuth = false; // set true when /health reports auth:"none" (loopback zero-config); then no key is needed
   const base = location.origin;
 
   // ---- api ----
@@ -620,7 +621,7 @@
 
   // ---- router ----
   function route(){
-    if(!apiKey){ renderGate(); return; }
+    if(!apiKey && !noAuth){ renderGate(); return; } // loopback no-auth needs no key — only gate when one is actually required
     $("#gate").hidden=true; $("#app").hidden=false;
     const h=location.hash.replace(/^#\/?/,"");
     if(h.startsWith("trace/")) return renderTrace(decodeURIComponent(h.slice(6)));
@@ -639,7 +640,7 @@
     let authMode = "required";
     try { authMode = (await (await fetch(base + "/health")).json()).auth ?? "required"; } catch {}
     if(authMode === "none"){
-      apiKey = ""; // never send a stale bearer in no-auth mode
+      apiKey = ""; noAuth = true; // no-auth (loopback): never send a stale bearer, and never show the key gate
       $("#dot").className="dot ok"; $("#connlabel").textContent=base.replace(/^https?:\/\//,"") + " · local";
       $("#app").hidden=false; route(); return;
     }
