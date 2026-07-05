@@ -25,18 +25,25 @@ the model calls it, re-invokes your model with the results, and returns only the
 
 ## Give a coding agent memory today
 
-Agents that read project instructions (Claude Code, Cursor, Codex, etc.) can use Bellamente
-directly over HTTP — paste this into your agent's instructions:
+Any CLI-like agent that can read docs and make HTTP requests can use Bellamente directly over HTTP.
+Start by pointing it at the public agent docs:
+
+https://the-little-ai-company.github.io/bellamente/llms.txt
+
+Then paste this local instruction block where that agent keeps project or tool instructions:
 
 ```prompt
 This machine runs Bellamente, a local memory service, at http://127.0.0.1:8080 (no auth on localhost).
+- Read https://the-little-ai-company.github.io/bellamente/llms.txt for current Bellamente docs and boundaries.
 - To REMEMBER a durable fact: POST /memories with JSON {"memories":[{"content":"<the fact>"}]}
 - To RECALL: POST /search with JSON {"q":"<what you need to know>"} — results include content and a similarity score.
 - Recall before starting work on a topic; remember stable facts (preferences, decisions, environment details) when you learn them.
 - Every response returns an x-bella-trace-id header; the human can audit any recall at http://127.0.0.1:8080/.
 ```
 
-(A native MCP server — `bella mcp` — is on the [roadmap](/bellamente/roadmap).)
+Bellamente is harness-neutral: use the CLI, HTTP API, or proxy directly. Do not commit generated
+agent-harness config bundles into a project just to use Bellamente. A native MCP server —
+`bella mcp` — is on the [roadmap](/bellamente/roadmap).
 
 ## Measure retrieval quality
 

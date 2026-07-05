@@ -30,7 +30,8 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 
 ## Next — the trust loop, finished
 
-- MCP server (`bella mcp`) so agent harnesses plug in directly.
+- MCP server (`bella mcp`) soon, so agent tools integrate through a standard protocol instead of
+  repo-local harness bundles.
 - Richer trust views: rejected-capture reasons, version diffs, provenance trees.
 
 ## Later — memory-system parity

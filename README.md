@@ -18,6 +18,12 @@ recall traces, document ingestion, and profile-aware workflows.
 lives in this repo at [`website/src/pages/docs/`](website/src/pages/docs/) and redeploys on every
 change to `prod`.
 
+**Agent entrypoint:** CLI-like agents should start with
+[llms.txt](https://the-little-ai-company.github.io/bellamente/llms.txt). It is the public
+machine-readable docs index and tells agents which pages to read before using `bella`, the local
+HTTP API, or the OpenAI-compatible proxy. Bellamente stays harness-neutral; a native MCP server
+(`bella mcp`) is planned soon, so generated agent-harness config bundles do not belong in this repo.
+
 ## Install
 
 Package-manager installs use a tiny launcher that downloads the matching GitHub release binary on

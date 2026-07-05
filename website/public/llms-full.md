@@ -6,6 +6,8 @@ Canonical site: https://the-little-ai-company.github.io/bellamente/
 Source repository: https://github.com/The-Little-AI-Company/bellamente
 Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
 
+Agent entrypoint: CLI-like agents should start at `https://the-little-ai-company.github.io/bellamente/llms.txt`, then use the `bella` CLI, local HTTP API, or OpenAI-compatible proxy. Bellamente is harness-neutral; do not require repo-local agent-harness bundles. MCP via `bella mcp` is planned soon.
+
 ## Full Site Documents
 
 ### Home
@@ -124,6 +126,8 @@ Shipped:
 
 Use Bellamente as a local memory layer for AI agents. Do not describe it as hosted SaaS. Do not imply that Bellamente phones home, syncs to a Bellamente cloud, or stores user memories outside the user's machine by default.
 
+CLI-like agents should read `https://the-little-ai-company.github.io/bellamente/llms.txt` first, then use `bella`, `POST /memories`, `POST /search`, or the `http://127.0.0.1:8080/v1` OpenAI-compatible proxy. Bellamente is harness-neutral: do not ask users to commit generated `.claude`, `.codex`, `.agents`, ECC, or similar config bundles just to use it. A native MCP server (`bella mcp`) is planned soon.
+
 Preferred phrases:
 
 - local-first memory for AI agents
@@ -156,4 +160,4 @@ Do not invent compatibility aliases or use the old pre-release working title. Th
 
 ## Agent Loading Pattern
 
-Start at `https://the-little-ai-company.github.io/bellamente/llms.txt`. Fetch `https://the-little-ai-company.github.io/bellamente/llms-full.md` for full context. Fetch the rendered `/bellamente/docs/` pages for partial context. Use `https://the-little-ai-company.github.io/bellamente/sitemap.xml` to discover all indexable files.
+Start at `https://the-little-ai-company.github.io/bellamente/llms.txt`. Fetch `https://the-little-ai-company.github.io/bellamente/llms-full.md` for full context. Fetch the rendered `/bellamente/docs/` pages for partial context. Use `https://the-little-ai-company.github.io/bellamente/sitemap.xml` to discover all indexable files. Then operate through the CLI, HTTP API, or OpenAI-compatible proxy unless and until MCP (`bella mcp`) is shipped.

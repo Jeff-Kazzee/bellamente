@@ -37,6 +37,10 @@ function readPublic(path: string) {
   return readFileSync(join(PUBLIC, path), "utf8");
 }
 
+function readRepo(path: string) {
+  return readFileSync(join(ROOT, path), "utf8");
+}
+
 test("homepage gives users one-click downloads for supported v0.0.3 binaries only", () => {
   const home = readPage("index.astro");
   for (const download of RELEASE_DOWNLOADS) {
@@ -53,6 +57,12 @@ test("roadmap says items can ship out of order and points to the changelog", () 
   expect(roadmap).toContain("ship out of order");
   expect(roadmap).toContain("multiple items may land together");
   expect(roadmap).toContain('href="/bellamente/changelog"');
+  expect(roadmap).toContain("bella mcp");
+  expect(roadmap).toContain("standard protocol instead of repo-local harness bundles");
+
+  const repoRoadmap = readRepo("ROADMAP.md");
+  expect(repoRoadmap).toContain("MCP server (`bella mcp`) soon");
+  expect(repoRoadmap).toContain("repo-local harness bundles");
 });
 
 test("changelog page records shipped releases with direct downloads", () => {
@@ -90,6 +100,8 @@ test("static crawler files expose sitemap, robots policy, and complete llms cont
   expect(llms).toContain("> Bellamente is a local-first memory service for AI agents");
   expect(llms).toContain("## Full Site Documents");
   expect(llms).toContain("## Agent Use Guidance");
+  expect(llms).toContain("CLI-like agents should read this file first");
+  expect(llms).toContain("do not require repo-local agent-harness bundles");
   expect(llms).toContain("service: \"bellamente\"");
   for (const download of RELEASE_DOWNLOADS) {
     expect(llms).toContain(download);
@@ -113,6 +125,9 @@ test("agent Markdown docs are available as one full ingest file and section-leve
   const full = readPublic("llms-full.md");
   expect(full).toContain("## Full Site Documents");
   expect(full).toContain("## Section Documents");
+  expect(full).toContain("CLI-like agents should start at");
+  expect(full).toContain("harness-neutral");
+  expect(full).toContain("unless and until MCP (`bella mcp`) is shipped");
   expect(full).toContain("service: \"bellamente\"");
   expect(full).toContain(`${SITE}/llms.txt`);
   expect(full).toContain(`${SITE}/llms-full.md`);
@@ -157,9 +172,20 @@ test("docs pages exist in the repo, render on the site, and carry the agent prom
   }
   // the copy-paste agent integration prompt is fenced as ```prompt so the site labels + copy-buttons it
   expect(readPage(join("docs", "using.md"))).toContain("```prompt");
+  expect(readPage(join("docs", "index.md"))).toContain("https://the-little-ai-company.github.io/bellamente/llms.txt");
+  expect(readPage(join("docs", "using.md"))).toContain("Do not commit generated");
   const layout = readFileSync(join(ROOT, "website", "src", "layouts", "DocsLayout.astro"), "utf8");
   expect(layout).toContain("copy-btn");
   expect(layout).toContain("FOR YOUR AGENT");
+});
+
+test("repo and package readmes point agents at the public llms entrypoint", () => {
+  for (const path of ["README.md", "packages/npm/README.md", "packages/pypi/README.md"]) {
+    const source = readRepo(path);
+    expect(source).toContain("https://the-little-ai-company.github.io/bellamente/llms.txt");
+    expect(source).toContain("bella mcp");
+  }
+  expect(readRepo("README.md")).toContain("generated agent-harness config bundles do not belong in this repo");
 });
 
 test("home and roadmap link to the docs", () => {

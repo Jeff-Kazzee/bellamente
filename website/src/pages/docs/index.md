@@ -14,6 +14,14 @@ it did. One binary. No Docker, no account, no cloud, no telemetry.
 > **Early release.** v0.0.3 is usable and tested — and not complete. The
 > [roadmap](/bellamente/roadmap) is the honest backlog.
 
+## Agent entrypoint
+
+If you are a CLI-like agent, start with
+[llms.txt](https://the-little-ai-company.github.io/bellamente/llms.txt). It is the public
+machine-readable docs index for Bellamente, including what to read, which claims are current, and
+which surfaces to use. Today those surfaces are the `bella` CLI, the local HTTP API, and the
+OpenAI-compatible proxy; a native MCP server (`bella mcp`) is on the roadmap.
+
 ## Install
 
 Use npm:
