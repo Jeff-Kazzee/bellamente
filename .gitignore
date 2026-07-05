@@ -1,5 +1,6 @@
 node_modules/
 dist/
+coverage/
 bella
 bella.exe
 bella-probe-*

@@ -11,14 +11,14 @@ process.env.BELLA_CAPTURE_DISTILL = "0"; // no extra upstream distill calls
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql } from "../src/pg-shim";
-import { schemaForDim } from "../src/db";
-import { EMBED_DIM } from "../src/embed-common";
-import { buildApp } from "../src/index";
-import { makeEmbed, prewarmEmbed } from "../src/embed";
-import { DEFAULT_CONTAINER_TAG } from "../src/util";
 import { tmpdir } from "os";
 import { join } from "path";
-import { rmSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
+
+const runDir = mkdtempSync(join(tmpdir(), "bella-fe2e-"));
+process.env.BELLA_DATA_DIR = join(runDir, "data");
+process.env.BELLA_LOG_DIR = join(runDir, "logs");
+process.env.BELLA_CACHE_DIR ??= join(runDir, "cache");
 
 // ---- mock LLM upstream (real HTTP server the proxy really fetches) --------------------
 const enc = new TextEncoder();
@@ -47,6 +47,13 @@ function toolCallChunksFragmented(q: string) {
           sseData({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }), "data: [DONE]\n\n"];
 }
 async function mockUpstream(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
+    return new Response(JSON.stringify({ error: `unexpected upstream route: ${req.method} ${url.pathname}` }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  }
   let body: any = {}; try { body = await req.json(); } catch {}
   const streaming = body.stream === true;
   const msgs: any[] = body.messages || [];
@@ -71,18 +78,25 @@ function check(name: string, cond: boolean, detail = "") {
   if (cond) { pass++; console.log(`  ✓ ${name}${detail ? ` — ${detail}` : ""}`); }
   else { fail++; failed.push(name); console.log(`  ✗ FAIL: ${name}${detail ? ` — ${detail}` : ""}`); }
 }
-const dbDir = join(tmpdir(), `bella-fe2e-${process.pid}`);
 
 async function main() {
+  const [{ makeDb, schemaForDim }, { EMBED_DIM }, { buildApp }, { makeEmbed, prewarmEmbed }, { DEFAULT_CONTAINER_TAG }] = await Promise.all([
+    import("../src/db"),
+    import("../src/embed-common"),
+    import("../src/index"),
+    import("../src/embed"),
+    import("../src/util"),
+  ]);
+
   console.log(`\n=== Bellamente full-functionality smoke (REAL embedder, on-disk DB, real HTTP) ===`);
-  console.log(`embedder dim=${EMBED_DIM}  db=${dbDir}\n`);
+  console.log(`embedder dim=${EMBED_DIM}  runDir=${runDir}\n`);
   console.log("[boot] prewarming real embedder...");
   const embed = makeEmbed();
   await prewarmEmbed(embed);
 
-  const pg = await PGlite.create({ dataDir: dbDir, extensions: { vector } });
-  const sql = makePgliteSql(pg);
-  await sql.unsafe(schemaForDim(EMBED_DIM));
+  const sql = await makeDb();
+  const migrationRows = await sql`SELECT id FROM schema_migrations ORDER BY id`;
+  check("makeDb boot path applies migrations", migrationRows.length >= 1, `migrations=${migrationRows.length}`);
 
   const mock = Bun.serve({ port: 0, fetch: mockUpstream });
   const upstreamBaseUrl = `http://127.0.0.1:${mock.port}/v1`;
@@ -161,6 +175,8 @@ async function main() {
     check("PATCH content succeeds", patch.status === 200, `status=${patch.status}`);
     const detail2 = await req("GET", `/memories/${atlasId}`);
     check("correction appended a new version (chain length 2)", detail2.json?.versions?.length === 2, `versions=${detail2.json?.versions?.length}`);
+    const latestAtlas = (detail2.json?.versions || []).find((v: any) => v.isLatest);
+    check("correction persisted the supplied rotated content", latestAtlas?.memory?.includes("rotated 2026-07"), `latest="${latestAtlas?.memory}"`);
 
     // H. Documents: ingest -> chunk -> embed, then documents + hybrid search
     console.log("\nH. Documents & hybrid search");
@@ -190,13 +206,14 @@ async function main() {
     console.log("\nK. Forgetting lifecycle");
     const benId = ids[1];
     const forget = await req("POST", `/memories/${benId}/forget`, { reason: "smoke forget" });
-    check("POST /forget soft-forgets the chain", forget.json?.forgotten === true && forget.json?.affected >= 1, `affected=${forget.json?.affected}`);
+    check("POST /forget soft-forgets exactly Ben's chain", forget.json?.forgotten === true && forget.json?.affected === 1, `affected=${forget.json?.affected}`);
     const listAfterForget = await req("GET", "/memories?limit=50");
     check("forgotten memory excluded from list", !(listAfterForget.json?.memories || []).some((m: any) => m.id === benId));
+    check("forget does not hide unrelated memories", (listAfterForget.json?.memories || []).some((m: any) => m.memory?.includes("Atlas")));
     const searchForgotten = await req("POST", "/search", { q: "which editor does Ben use?", searchMode: "memories", containerTag: DEFAULT_CONTAINER_TAG, limit: 5 });
     check("forgotten memory excluded from search", !(searchForgotten.json?.results || []).some((r: any) => r.memory?.includes("Neovim")));
     const undo = await req("POST", `/memories/${benId}/forget`, { undo: true });
-    check("forget undo restores the memory", undo.json?.forgotten === false && undo.json?.affected >= 1);
+    check("forget undo restores exactly Ben's chain", undo.json?.forgotten === false && undo.json?.affected === 1, `affected=${undo.json?.affected}`);
 
     // L. Export / import portability + temporal validity (asOf)
     console.log("\nL. Export / import portability + temporal asOf recall");
@@ -207,7 +224,8 @@ async function main() {
     const app2 = buildApp({ sql: sql2, embed } as any, { required: false, key: null, source: "none" } as any);
     const app2req = async (p: string, b: unknown) => { const r = await app2.request(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }); return r.json() as any; };
     const imp = await app2req("/import", exp.json);
-    check("POST /import restores chains into a FRESH instance", (imp?.imported?.versions || 0) >= 5, `imported=${JSON.stringify(imp?.imported)}`);
+    check("POST /import restores all 5 chains into a FRESH instance", imp?.imported?.chains === 5, `imported=${JSON.stringify(imp?.imported)}`);
+    check("POST /import preserves all 6 memory versions", imp?.imported?.versions === 6, `imported=${JSON.stringify(imp?.imported)}`);
     const search2 = await app2req("/search", { q: "deploy token for Atlas", searchMode: "memories", containerTag: DEFAULT_CONTAINER_TAG, limit: 5 });
     check("imported instance retrieves the Atlas fact (portability proven)", !!search2?.results?.[0]?.memory?.includes("ZEBRA-9"), `top="${search2?.results?.[0]?.memory?.slice(0, 38)}"`);
     const v = (o: any) => ({ isStatic: false, isInference: false, isForgotten: false, forgetAfter: null, forgetReason: null, metadata: null, sourceCount: 1, memoryRelations: {}, ...o });
@@ -218,7 +236,7 @@ async function main() {
       ] }] }] };
     await app2req("/import", windowed);
     const asOfIn = await app2req("/search", { q: "who was the on-call engineer?", searchMode: "memories", containerTag: "temporal", limit: 5, asOf: "2020-06-01T00:00:00Z" });
-    check("asOf INSIDE the 2020 window recalls the version valid then (Dale)", (asOfIn?.results || []).some((r: any) => r.memory?.includes("Dale")), `results=${JSON.stringify((asOfIn?.results || []).map((r: any) => r.memory?.slice(0, 20)))}`);
+    check("asOf INSIDE the 2020 window recalls Dale and excludes future Eli", (asOfIn?.results || []).some((r: any) => r.memory?.includes("Dale")) && !(asOfIn?.results || []).some((r: any) => r.memory?.includes("Eli")), `results=${JSON.stringify((asOfIn?.results || []).map((r: any) => r.memory?.slice(0, 20)))}`);
     const asOfNow = await app2req("/search", { q: "who was the on-call engineer?", searchMode: "memories", containerTag: "temporal", limit: 5, asOf: "2023-01-01T00:00:00Z" });
     check("asOf AFTER the window recalls the current version (Eli), not Dale", (asOfNow?.results || []).some((r: any) => r.memory?.includes("Eli")) && !(asOfNow?.results || []).some((r: any) => r.memory?.includes("Dale")), `results=${JSON.stringify((asOfNow?.results || []).map((r: any) => r.memory?.slice(0, 20)))}`);
     await sql2.end().catch(() => {});
@@ -229,9 +247,11 @@ async function main() {
     const kinds = new Set((traces.json?.traces || []).map((t: any) => t.kind));
     check("GET /inspect lists recorded traces incl. proxy", (traces.json?.traces || []).length >= 3 && kinds.has("proxy"), `count=${traces.json?.traces?.length}, kinds=${[...kinds].join(",")}`);
     const del = await req("DELETE", `/memories/${ids[4]}`);
-    check("DELETE hard-removes the chain", del.json?.deleted >= 1, `deleted=${del.json?.deleted}`);
+    check("DELETE hard-removes exactly the staging chain", del.json?.deleted === 1, `deleted=${del.json?.deleted}`);
     const gone = await req("GET", `/memories/${ids[4]}`);
     check("deleted memory is gone (404)", gone.status === 404, `status=${gone.status}`);
+    const listAfterDelete = await req("GET", "/memories?limit=50");
+    check("delete does not remove unrelated memories", (listAfterDelete.json?.memories || []).some((m: any) => m.memory?.includes("Cyra")));
 
     // Report
     console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
@@ -239,7 +259,7 @@ async function main() {
   } finally {
     server.stop(true); mock.stop(true);
     await sql.end().catch(() => {});
-    try { rmSync(dbDir, { recursive: true, force: true }); } catch {}
+    try { rmSync(runDir, { recursive: true, force: true }); } catch {}
   }
   process.exit(fail ? 1 : 0);
 }
