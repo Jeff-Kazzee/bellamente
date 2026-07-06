@@ -7,6 +7,8 @@ and machine identifiers. The pre-release working title was fully purged before v
 directive, 2026-07-01): do NOT reintroduce it in any identifier, comment, doc, or test. Read this
 whole file before changing anything.
 
+> **▶ Live handoff / current focus (read FIRST):** the current goal, active phase, and locked decisions live in **`CONTINUE-HERE.md`** in the **private `bellamente-docs` repo** (clone at `~/dev/bellamente-docs`; internal-only, gitignored from this public repo — never copy internal planning docs into this public repo). Current goal: the **0.1.0** release — P3 MCP → P4 error-reporting → P5 cut.
+
 ## The one rule that outranks everything
 **Never break a machine contract.** These are frozen until a migration plan says otherwise:
 - Env vars: `BELLA_*`, read via `brandEnv()` (src/env.ts). Never read `process.env.BELLA_X`
