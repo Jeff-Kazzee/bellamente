@@ -128,10 +128,23 @@ report — do not improvise around a contract.
 
 ## Current release truth
 
-- Current public release: `v0.0.3`.
+- Current PUBLISHED release: `v0.0.2` (GitHub + npm + PyPI, all consistent). A `v0.0.3` train is
+  staged on `dev`; this line changes only when the GitHub release actually exists.
 - Source repo: `https://github.com/The-Little-AI-Company/bellamente`.
 - Public site/docs: `https://the-little-ai-company.github.io/bellamente/`.
 - Package installs: `npm install -g bellamente`, `pipx install bellamente`, or one-shot `uvx bellamente doctor`.
 - GitHub release assets must exist before a `prod` deploy points public copy at that version.
 - Current public direct binaries are Windows x64 and Linux x64 only until more OS builds have a real
-  test pass.
+  test pass. Release ASSETS must match this copy: never upload binaries for an OS the copy doesn't
+  claim (the untested v0.0.2 darwin binaries were withdrawn 2026-07-05 for exactly this).
+
+## Copy-alignment law (2026-07-05, after the drift audit)
+
+Copy drifts in BOTH directions; underselling is also a truth bug. These checks are part of "done":
+- This file's "Current release truth" states the PUBLISHED version, never the staged train version.
+  README/ROADMAP on `dev` may run one version ahead during a release train; this section may not.
+- ROADMAP.md and its mirrors (website/src/pages/roadmap.astro, website/public/llms-full.md) move a
+  feature to "Now" in the SAME PR that ships it — a roadmap listing shipped features as upcoming
+  breaks the "if it's on the roadmap, it doesn't exist" promise. All three surfaces change together.
+- README's API list and architecture map include every shipped route; check them in any PR that adds
+  or renames a route module.

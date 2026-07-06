@@ -74,7 +74,7 @@ You can also download supported Windows x64 and Linux x64 binaries directly from
 - Retrieval benchmark: `bun run bench` runs a deterministic E2E harness through the real HTTP app routes
   (`POST /memories`, `POST /documents`, `POST /search`) against PGlite. Latest checked run
   (`seed=20260702`, `embedder=deterministic-hash`, 110 queries): memories R@1/R@10/MRR `84.1%/100.0%/0.920`,
-  documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, exact-vs-route delta@10 `0.0%` (the fixture corpus is too small to engage HNSW, so real ANN-loss quantification belongs to P1.5/#39's 50k-row probe).
+  documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, exact-vs-route delta@10 `0.0%` (the fixture corpus is too small to engage HNSW; the P1.5/#39 50k-row probe — `bun run probe:ann`, evidence in `scripts/probe-filtered-ann-50k.md` — covers plan and row-fill behavior at scale, and ANN recall-loss quantification is tracked in #105).
   Set `BELLA_EVAL_REAL_EMBED=1` to run the same route harness with the active local embedder; use
   `bun run bench:models` for the old model-selection A/B script. Hybrid recall is an any-gold hit metric across the memory and document golds, so the deterministic document/hybrid rows are ceiling checks rather than broad retrieval claims.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
@@ -106,7 +106,7 @@ src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write)
 src/documents.ts document ingestion: POST/GET/DELETE /documents (chunk -> embed -> store)
 src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget guarded)
-src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, per-model threshold, cap 25)
+src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, recency decay, MMR diversity, per-model threshold, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
 src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: memory tool loop for buffered + streamed requests, upstream timeouts)
 schema.sql       full pgvector DDL (applied at boot; changes to shipped tables go through src/migrations.ts)
@@ -160,7 +160,9 @@ bun run build      # -> ./bella / bella.exe
 - POST   /documents           - ingest a markdown/text document (chunk -> embed -> searchable)
 - GET    /documents[/:id]     - list documents / one document + chunks with quality flags
 - DELETE /documents/:id       - delete a document + its chunks
-- POST   /search              - recall (memories: cosine; documents: cosine + full-text RRF; hybrid: rank-fused; emits trace headers)
+- GET    /export              - everything as one versioned JSON document (memory chains, documents, profile)
+- POST   /import              - restore an export (ids remapped, chains preserved, embeddings regenerated locally)
+- POST   /search              - recall (memories: cosine + full-text, recency-weighted; documents: cosine + full-text RRF; hybrid: rank-fused; emits trace headers)
 - GET    /inspect             - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
 - POST /v1/chat/completions - local Chat Completions proxy with the memory tool loop on buffered and streamed requests
