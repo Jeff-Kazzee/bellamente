@@ -85,12 +85,17 @@ const downloads = [
         <!-- section: releases -->
         <section class="db-pillars">
           <div class="db-row">
-            <span class="k">2026-07-05</span>
+            <span class="k">2026-07-06</span>
             <div>
               <h3>Bellamente v0.0.3</h3>
-              <p>Patch release truth fix: public downloads and package launchers now publish only
-                 tested Windows x64 and Linux x64 binaries. Additional OS binaries stay out of public
-                 distribution until they have a real test pass.</p>
+              <p>Hardening and honesty: content-free error capture with redaction, a durable error store,
+                 and an Errors view in the dashboard · audit fixes — silently skipped document chunks now
+                 surface, a corrupted embedder pin fails loud instead of re-guessing, and concurrent memory
+                 edits can no longer leave two "latest" versions (repair migration + a database-level
+                 one-latest-per-chain backstop) · dashboard auth gating, chunker-hang, profile-validation,
+                 and fail-closed coverage-gate fixes · public downloads stay tested Windows x64 and
+                 Linux x64 only (binaries for untested platforms were withdrawn from v0.0.2) · the roadmap
+                 now reflects everything already shipped.</p>
             </div>
             <div><span class="proof">tag v0.0.3 · target prod</span></div>
           </div>
