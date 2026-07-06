@@ -100,15 +100,19 @@ updated org/site URLs, and full-functionality release smoke proof on top of the 
 memory lifecycle, document recall, OpenAI-compatible proxy, auto-capture, recall traces, dashboard
 inspection, embedded Postgres plus pgvector, local embeddings, and direct release binaries.
 
-Bellamente v0.0.3 shipped on 2026-07-05.
+Bellamente v0.0.3 shipped on 2026-07-06.
 
 Release identity: Bellamente v0.0.3, Memoria Viva for your AI agents.
 Release target: `prod`.
 Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
 
-What shipped: release-truth patch that keeps public direct downloads and package launchers limited
-to tested Windows x64 and Linux x64 binaries. Additional OS binaries stay out of public distribution
-until they have a real test pass.
+What shipped: error observability (content-free error capture with redaction, a durable error
+store, and an Errors view in the dashboard); audit fixes for silently skipped document chunks,
+corrupted embedder pins, and a concurrent-edit race that could leave two latest memory versions
+(repair migration plus a database-level one-latest-per-chain backstop); dashboard auth gating,
+chunker-hang, profile-validation, and fail-closed coverage-gate fixes; and release truth kept to
+tested Windows x64 and Linux x64 binaries only, with binaries for untested platforms withdrawn from
+the v0.0.2 release. The public roadmap now reflects shipped work.
 
 ## Agent Use Guidance
 

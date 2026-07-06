@@ -109,16 +109,25 @@ Shipped:
 - Local embeddings.
 - Direct release binaries for Windows and Linux.
 
-Bellamente v0.0.3 shipped on 2026-07-05.
+Bellamente v0.0.3 shipped on 2026-07-06.
 
 Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
 Release target: `prod`.
 
 Shipped:
 
-- Release-truth patch that keeps public direct downloads and package launchers limited to tested
-  Windows x64 and Linux x64 binaries.
-- Additional OS binaries stay out of public distribution until they have a real test pass.
+- Error observability: content-free error capture with redaction at the store boundary, a durable
+  error store, and an Errors view in the dashboard.
+- Audit fixes: silently skipped document chunks are now counted and surfaced; a corrupted embedder
+  pin fails loud with an atomic rewrite instead of re-guessing the model; concurrent memory edits
+  can no longer leave two latest versions in one chain (flip-first writes, a boot-time repair
+  migration, and a unique one-latest-per-chain index).
+- Dashboard auth gating fix, markdown-chunker hang fix, profile write validation, and a coverage
+  gate that fails closed on partial reports.
+- Release truth: public direct downloads and package launchers stay limited to tested Windows x64
+  and Linux x64 binaries; binaries for untested platforms were withdrawn from the v0.0.2 release.
+- The public roadmap moved already-shipped work (memory full-text search, recency-weighted ranking,
+  temporal validity, export/import, the retrieval eval harness) into "Now".
 
 ### Agent Use Guidance
 
