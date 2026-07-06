@@ -109,6 +109,10 @@ test("readEmbedderMetaFrom: absent -> null; valid -> {model,dim}; corrupt/malfor
     expect(() => readEmbedderMetaFrom(p)).toThrow();
     writeFileSync(p, "null"); // valid JSON, not a pin
     expect(() => readEmbedderMetaFrom(p)).toThrow();
+    writeFileSync(p, JSON.stringify({ model: "", dim: 384 })); // empty model name
+    expect(() => readEmbedderMetaFrom(p)).toThrow();
+    writeFileSync(p, JSON.stringify({ model: "e5", dim: 0 })); // non-positive dim
+    expect(() => readEmbedderMetaFrom(p)).toThrow();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
