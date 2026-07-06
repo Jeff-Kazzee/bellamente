@@ -348,7 +348,11 @@ test("concurrent content PATCHes cannot leave two latest versions in one chain (
     // Exactly one edit wins; the loser is told to re-read (409 + pointer at the new latest).
     expect([a.status, b.status].sort()).toEqual([200, 409]);
     const loser = a.status === 409 ? a : b;
-    expect((await loser.json()).latestId).toBeTruthy();
+    const loserBody = await loser.json();
+    expect(loserBody.latestId).toBeTruthy();
+    // Pin the GUARD path (the flip returned 0 rows), not just "some 409": the lost-race message proves the
+    // new flip-first guard is what fired, so a refactor that stopped exercising it would fail here (#128).
+    expect(loserBody.error).toMatch(/modified concurrently/);
 
     // The invariant #128 broke: one latest row per chain, no matter how the race lands.
     const latest = await sql`
