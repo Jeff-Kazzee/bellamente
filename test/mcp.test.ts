@@ -12,6 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { makeMcpServer } from "../src/mcp"; // <-- built to satisfy these tests
+import { MAX_CONTENT_CHARS } from "../src/documents"; // the shared ingest cap the MCP tool must also enforce
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -176,4 +177,23 @@ test("B11 clean shutdown — client.close() + server.close() resolve without han
   const { close } = await connect(await makeCtx());
   await close();
   expect(true).toBe(true);
+}, T);
+
+test("B12 document_ingest enforces the same content cap as the HTTP route (no unbounded ingest)", async () => {
+  const { client, close } = await connect(await makeCtx());
+  // Exactly at the cap must be accepted; one over must be rejected (isError) — the tool is a thin wrapper
+  // over ingestDocument, which has no length guard of its own, so the cap MUST live on the tool schema.
+  const over = await call(client, "document_ingest", { content: "x".repeat(MAX_CONTENT_CHARS + 1) });
+  expect(over.isError).toBe(true);
+  await close();
+}, T);
+
+test("B13 empty-string scope/id args are rejected, not silently treated as 'all' or 'list'", async () => {
+  const { client, close } = await connect(await makeCtx());
+  // "" is falsy and would otherwise fall through the containerTag/traceId guards → search/list ALL
+  // containers, or trace_inspect would LIST instead of fetching one. .min(1) makes that an explicit error.
+  expect((await call(client, "memory_search", { query: "x", containerTag: "" })).isError).toBe(true);
+  expect((await call(client, "memory_list", { containerTag: "" })).isError).toBe(true);
+  expect((await call(client, "trace_inspect", { traceId: "" })).isError).toBe(true);
+  await close();
 }, T);

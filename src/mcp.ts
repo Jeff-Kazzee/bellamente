@@ -15,7 +15,7 @@ import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { search, type SearchResult } from "./search";
 import { writeMemories, memoriesRoutes } from "./memories";
-import { ingestDocument } from "./documents";
+import { ingestDocument, MAX_CONTENT_CHARS } from "./documents";
 import { inspectRoutes, recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
 import { newId, DEFAULT_CONTAINER_TAG } from "./util";
 
@@ -55,7 +55,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       inputSchema: {
         query: z.string().min(1).describe("what to recall"),
         searchMode: z.enum(["memories", "documents", "hybrid"]).default("memories"),
-        containerTag: z.string().default(DEFAULT_CONTAINER_TAG),
+        containerTag: z.string().min(1).default(DEFAULT_CONTAINER_TAG),
         limit: z.number().int().positive().max(100).default(10),
       },
     },
@@ -106,7 +106,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       inputSchema: {
         content: z.string().min(1).max(10000),
         isStatic: z.boolean().default(false),
-        containerTag: z.string().default(DEFAULT_CONTAINER_TAG),
+        containerTag: z.string().min(1).default(DEFAULT_CONTAINER_TAG),
       },
     },
     async ({ content, isStatic, containerTag }) => {
@@ -118,6 +118,14 @@ export function makeMcpServer(ctx: Ctx): McpServer {
         });
         const r = results[0];
         if (!r) return fail("write produced no result (content may have failed to embed)");
+        // A lost version race (external pooled Postgres only — PGlite serializes whole transactions)
+        // writes NO row. Mirror the HTTP route (memories.ts POST /): emit a shape that does NOT imply an
+        // id->stored-memory mapping. `attemptedContent` was NOT stored; `conflictWith` is the contested
+        // chain to re-read before retrying just this write. Returning `{id, action}` here would mislabel
+        // an unrelated chain id as the new memory and drop the retry signal.
+        if (r.action === "conflict") {
+          return ok({ action: "conflict", retryable: true, attemptedContent: r.content, conflictWith: r.id });
+        }
         return ok({ id: r.id, action: r.action });
       } catch (e) {
         return fail(msg(e));
@@ -165,7 +173,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
         "Pass containerTag to scope the list to a single container (space).",
       inputSchema: {
         limit: z.number().int().positive().max(100).default(50),
-        containerTag: z.string().optional(),
+        containerTag: z.string().min(1).optional(),
       },
     },
     async ({ limit, containerTag }) => {
@@ -191,15 +199,16 @@ export function makeMcpServer(ctx: Ctx): McpServer {
         "Chunk + embed a markdown/text document so it becomes searchable via memory_search " +
         "(searchMode: documents|hybrid).",
       inputSchema: {
-        content: z.string().min(1),
+        content: z.string().min(1).max(MAX_CONTENT_CHARS),
         title: z.string().default("Untitled"),
         filepath: z.string().optional(),
-        containerTag: z.string().default(DEFAULT_CONTAINER_TAG),
+        containerTag: z.string().min(1).default(DEFAULT_CONTAINER_TAG),
       },
     },
     async ({ content, title, filepath, containerTag }) => {
       try {
-        const { documentId, chunkCount } = await ingestDocument(ctx, { content, title, filepath, containerTag });
+        // Mirror the HTTP route: a blank/whitespace title normalizes to "Untitled" (documents.ts POST /).
+        const { documentId, chunkCount } = await ingestDocument(ctx, { content, title: title.trim() || "Untitled", filepath, containerTag });
         return ok({ documentId, chunkCount });
       } catch (e) {
         return fail(msg(e));
@@ -214,7 +223,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       description:
         "Read the recall-trace log: pass traceId for one trace, or omit it for the most recent traces.",
       inputSchema: {
-        traceId: z.string().optional(),
+        traceId: z.string().min(1).optional(),
         limit: z.number().int().positive().max(200).default(20),
       },
     },

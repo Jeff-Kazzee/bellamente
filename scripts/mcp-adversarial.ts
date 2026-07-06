@@ -75,7 +75,8 @@ async function main() {
 
   console.log("document_ingest:");
   await probe("empty content", { content: "" }, "document_ingest", "reject");
-  await probe("2MB content (unbounded? watch for hang/OOM)", { content: HUGE }, "document_ingest", "ok");
+  await probe("2M chars (exactly at the cap — should STORE)", { content: HUGE }, "document_ingest", "ok");
+  await probe("over the 2M-char cap (must REJECT — parity with HTTP)", { content: "x".repeat(2_000_001) }, "document_ingest", "reject");
 
   console.log("trace_inspect:");
   await probe("bogus traceId", { traceId: "not-a-real-trace-id" }, "trace_inspect", "reject");
