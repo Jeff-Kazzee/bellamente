@@ -139,3 +139,43 @@ test("PUT /profile with an unparseable body stores an empty profile object (the 
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("formatProfile tolerates a non-array static/dynamic without throwing (#124 defense-in-depth)", () => {
+  // formatProfile runs on EVERY proxied completion; a profile persisted with a non-array section (e.g.
+  // from a pre-fix bad PUT) must degrade to empty text, never throw a TypeError that 500s the completion.
+  expect(formatProfile({ static: {} as any, dynamic: 5 as any } as any)).toBe("");
+  expect(formatProfile({ static: ["keep"], dynamic: {} as any } as any)).toBe("  - keep");
+});
+
+test("PUT /profile rejects a non-array static/dynamic with 400 instead of persisting a completion-poisoning profile (#124)", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const bad = await put(app, "/profile", JSON.stringify({ static: {} }));
+    expect(bad.status).toBe(400);
+    expect(await (await app.request("/profile")).json()).toEqual({ static: [], dynamic: [] }); // nothing persisted
+    expect(Number((await sql`SELECT count(*)::int AS n FROM space`)[0]!.n)).toBe(0);
+
+    expect((await put(app, "/profile", JSON.stringify({ dynamic: [1, 2] }))).status).toBe(400); // non-string elements too
+
+    const good = await put(app, "/profile", JSON.stringify({ static: ["a"], dynamic: ["b"] }));
+    expect(good.status).toBe(200);
+    expect(await (await app.request("/profile")).json()).toEqual({ static: ["a"], dynamic: ["b"] });
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("PUT /profile with a top-level null/non-object body degrades to 200 (not a 500 crash) (#124 hardening)", async () => {
+  const { app, close } = await makeApp();
+  try {
+    // Literal JSON `null` used to reach `body.static` on null -> TypeError -> 500. Non-object bodies
+    // must degrade like an unparseable body (200 + empty), never crash.
+    for (const raw of ["null", "42", '"hello"', "[1,2]"]) {
+      const res = await app.request("/profile", { method: "PUT", headers: { "content-type": "application/json" }, body: raw });
+      expect(res.status).toBe(200);
+    }
+    expect(await (await app.request("/profile")).json()).toEqual({}); // nothing meaningful persisted, no crash
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
