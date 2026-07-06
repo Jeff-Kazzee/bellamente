@@ -111,10 +111,13 @@ function makeStaticEmbed(): Embed {
   };
 }
 
-export async function prewarmEmbed(embed: Embed): Promise<void> {
+export async function prewarmEmbed(embed: Embed, opts?: { force?: boolean }): Promise<void> {
   if (PROVIDER === "openai") return;
   const skip = brandEnv("SKIP_EMBEDDING_PREWARM");
-  if (skip === "1" || skip === "true") {
+  // `force` overrides the skip flag. `bella mcp` sets it because skipping prewarm there is unsafe: the
+  // embed worker must be created BEFORE the stdio transport connects (see index.ts) — lazily creating it
+  // on the first tool-call embed, while stdin is being served, deadlocks the worker in the compiled binary.
+  if (!opts?.force && (skip === "1" || skip === "true")) {
     console.log("[embeddings] skipping local embedding model prewarm");
     return;
   }

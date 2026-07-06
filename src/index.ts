@@ -42,7 +42,11 @@ if (isMcp) {
   console.debug = console.error;
   const sql = await makeDb();
   const embed = makeEmbed();
-  await prewarmEmbed(embed);
+  // MUST create + warm the embed worker BEFORE runMcpStdio connects the stdio transport. Creating the
+  // worker lazily on the first tool-call embed (while stdin is being served) deadlocks it in the compiled
+  // binary — every embed then times out. `force:true` warms even if BELLA_SKIP_EMBEDDING_PREWARM is set
+  // (that flag is unsafe under mcp). Verified: skip => embeds hang; prewarm => sub-second writes.
+  await prewarmEmbed(embed, { force: true });
   const { runMcpStdio } = await import("./mcp");
   await runMcpStdio({ sql, embed }); // resolves once connected; the process stays alive on stdin
 }
