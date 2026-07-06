@@ -23,8 +23,8 @@ const DEFAULTS = { maxChars: 1075, overlapChars: 150, minChars: 64, tokenBudget:
 // place every caller funnels through, so junk like maxChars:"oops" can't turn the size comparisons
 // into always-false NaN checks and silently disable splitting altogether.
 const posInt = (v: unknown, fallback: number): number => {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+  const n = Math.round(Number(v)); // round FIRST: 0.4 passed `>0` then rounded to 0 -> maxChars=0 hang (#122)
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 
 // The embedders truncate at 512 TOKENS (embed-wasm/embed-model2vec max_length), but sizing here is
@@ -141,6 +141,7 @@ function forceSplit(block: Block, maxChars: number): { text: string; flag: strin
       while (k < u.length) {
         let end = Math.min(k + maxChars, u.length);
         if (end < u.length && isHighSurrogate(u.charCodeAt(end - 1))) end -= 1; // keep pairs whole
+        if (end <= k) end = Math.min(k + 1, u.length); // guarantee forward progress; never re-emit "" (#122)
         out.push({ text: u.slice(k, end), flag: flag + "+hard-cut" });
         k = end;
       }

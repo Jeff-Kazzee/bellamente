@@ -85,6 +85,18 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    repaired it). Release surfaces (tags, releases, dev->prod, deploys) are reviewer/Jeff-only.
 6. Update `docs/BACKLOG.md` (check the box, one-line outcome + date) in the same PR.
 
+## Platform: Windows dev machine, Linux CI (line endings + WSL)
+This repo is developed on a **Windows** machine, but CI (GitHub Actions) and the canonical test/build
+run on **Linux**. Two consequences that bite if ignored:
+- **Line endings are LF, enforced by `.gitattributes` (`* text=auto eol=lf`).** Do NOT let an editor
+  or tool rewrite files as CRLF — it makes a branch look dirty for no real change and can fail the
+  `git diff --check` gate. Tracked text files are LF; keep them that way. If a branch shows spurious
+  whole-file diffs, that's a CRLF flip — re-save as LF or `git add --renormalize .`, don't commit it.
+- **Verify Linux behavior on WSL before trusting a green Windows run.** Windows-local coverage reads
+  ~1% lower than Linux and some path/process/permission behaviors differ; **GitHub Actions (Linux) is
+  the canonical gate.** For anything platform-sensitive (paths, spawned processes, file perms,
+  coverage), reproduce under WSL (Ubuntu) so you're testing what CI tests, not just Windows.
+
 ## Code conventions (copy the existing patterns, do not invent)
 - SQL: tagged templates via the pg-shim ONLY (`sql\`...\``); nested `sql\`\`` fragments for
   conditional clauses. Never string-concatenate SQL. Inside `sql.begin(cb)` use ONLY the provided
