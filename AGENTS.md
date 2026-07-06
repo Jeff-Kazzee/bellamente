@@ -49,9 +49,11 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
   acceptance tests exactly; if the spec is ambiguous or the code contradicts it, STOP and flag —
   do not improvise around it.
 - **Claude Fable: SPEC AUTHOR + FIXER + FINAL JUDGE.** Writes specs for complex tasks, runs
-  adversarial review on substantial PRs, fixes the problems and fills the gaps other models leave,
-  owns architecture/tradeoff calls. Do NOT burn Fable on mechanical feature grinding — that is
-  Codex's lane (usage economics: Fable is scarce, Codex is the workhorse).
+  adversarial review on substantial PRs WHEN AVAILABLE, fixes the problems and fills the gaps other
+  models leave, owns architecture/tradeoff calls. Do NOT burn Fable on mechanical feature grinding —
+  that is Codex's lane (usage economics: Fable is scarce, Codex is the workhorse). **Fable is not
+  always available, so the review + merge gate must NOT depend on Fable specifically — it is a
+  PROCESS an independent reviewer sub-agent can run (see Workflow §5).**
 - **Claude Opus: UI + mid-complexity implementation.** Dashboard, website, design-system work
   (the La Macchina system — see dashboard/index.html tokens + website/), and feature work when it
   carries a spec.
@@ -78,11 +80,15 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    - typecheck, full test suite with aggregate coverage gate, release smoke, binary build
    - package/release artifact gate, website build
    - `git diff --check` for whitespace damage
-5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
-   NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the
-   designated reviewer (Fable) or Jeff merges, and NEVER while review follow-ups are still open
-   on the PR branch (PR #79 was merged mid-review and dev briefly shipped without a fix — PR #84
-   repaired it). Release surfaces (tags, releases, dev->prod, deploys) are reviewer/Jeff-only.
+5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02; review decoupled from
+   Fable 2026-07-05): a substantial PR merges only after (a) an ADVERSARIAL REVIEW whose findings are
+   verified against the real code and fixed, (b) CI green on Actions, and (c) the change DOGFOODED —
+   proven by actually using it, not just by tests. The review is a PROCESS, not a person: Fable runs it
+   when available, otherwise an INDEPENDENT REVIEWER SUB-AGENT runs the same adversarial pass — do NOT
+   block work on Fable being around. Implementers do NOT self-merge unreviewed or self-close issues,
+   and NEVER merge while review follow-ups are still open (PR #79 shipped mid-review without a fix —
+   PR #84 repaired it). Jeff directs merges/closes; release surfaces (tags, releases, dev->prod,
+   deploys) are Jeff-only.
 6. Update `docs/BACKLOG.md` (check the box, one-line outcome + date) in the same PR.
 
 ## Platform: Windows dev machine, Linux CI (line endings + WSL)
