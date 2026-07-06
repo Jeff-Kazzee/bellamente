@@ -80,14 +80,18 @@ Important roadmap rule: items can ship out of order, and multiple items may land
 Now in v0.0.3:
 
 - Memory lifecycle with versioned corrections and reversible forgetting.
-- Semantic and hybrid document search.
+- Memory recall: semantic + full-text (exact names, codes, rare tokens), recency-weighted, with a diversity pass.
+- Hybrid document search.
+- Time-aware facts with "as of" recall.
+- Export and import: memory is one portable versioned JSON file.
 - Drop-in proxy with memory grounding on buffered and streamed chats.
 - Auto-capture with local LLM distillation.
 - Full recall traces.
 - Inspect dashboard.
+- Retrieval eval harness with published numbers.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
 
-Next focus: full-text memory search, MCP via `bella mcp`, recency-aware ranking, retrieval evals, richer trust views, and export/import.
+Next focus: MCP via `bella mcp` and richer trust views (rejected-capture reasons, version diffs, provenance trees).
 
 ### Changelog
 
