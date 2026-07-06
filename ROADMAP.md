@@ -10,7 +10,12 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 
 - Memory lifecycle: write with dedup/supersede, versioned corrections, reversible forgetting,
   hard delete, full version-chain reads.
-- Semantic memory recall + hybrid document search (vector + full-text, rank-fused).
+- Memory recall: semantic + full-text (exact names, codes, rare tokens), rank-fused,
+  recency-weighted, with an MMR diversity pass. Hybrid document search (vector + full-text,
+  rank-fused).
+- Time-aware facts: `valid_from` / `valid_to` validity windows with "as of" recall.
+- Export / import: your memory is one versioned JSON file you can take anywhere
+  (embeddings regenerated locally on import).
 - Drop-in `/v1/chat/completions` proxy with memory grounding on **buffered and streamed** chats
   (the model's `searchMemory` call is intercepted even mid-stream).
 - Auto-capture with **local LLM distillation**: durable facts extracted from your chats by your own
@@ -25,15 +30,11 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 
 ## Next — the trust loop, finished
 
-- Full-text search over memories (exact names, codes, rare tokens — not just semantic).
 - MCP server (`bella mcp`) so agent harnesses plug in directly.
-- Recency-aware ranking.
 - Richer trust views: rejected-capture reasons, version diffs, provenance trees.
-- Export / import — your memory is a file you can take anywhere.
 
 ## Later — memory-system parity
 
-- Time-aware facts (`valid_from` / `valid_to`, "as of" queries).
 - Review queue for inferred (auto-captured) memories: approve / decline before they're trusted.
 - Profile rebuild rules, pinned facts, profile+search in one call.
 - Context-window preview: see exactly what your agent will see, before it sees it.
