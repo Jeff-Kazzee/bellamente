@@ -15,7 +15,7 @@ import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { search, type SearchResult } from "./search";
 import { writeMemories, memoriesRoutes } from "./memories";
-import { ingestDocument, MAX_CONTENT_CHARS } from "./documents";
+import { ingestDocument, documentsRoutes, MAX_CONTENT_CHARS } from "./documents";
 import { inspectRoutes, recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
 import { newId, DEFAULT_CONTAINER_TAG } from "./util";
 
@@ -44,6 +44,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
   // there is no second DB connection anywhere in this module (B8).
   const memApp = memoriesRoutes(ctx);
   const inspectApp = inspectRoutes({ sql: ctx.sql });
+  const docApp = documentsRoutes(ctx);
 
   server.registerTool(
     "memory_search",
@@ -105,7 +106,10 @@ export function makeMcpServer(ctx: Ctx): McpServer {
         "version (the old version stays inspectable) — same dedup/supersede path as the HTTP API.",
       inputSchema: {
         content: z.string().min(1).max(10000),
-        isStatic: z.boolean().default(false),
+        // OPTIONAL, not default(false): a default makes isStatic always "provided" to writeMemories, which
+        // routes an exact re-submission into the "updated" branch instead of "unchanged". Omitted => stored
+        // as non-static, same as false, but a bare resubmit is correctly a no-op.
+        isStatic: z.boolean().optional(),
         containerTag: z.string().min(1).default(DEFAULT_CONTAINER_TAG),
       },
     },
@@ -127,6 +131,40 @@ export function makeMcpServer(ctx: Ctx): McpServer {
           return ok({ action: "conflict", retryable: true, attemptedContent: r.content, conflictWith: r.id });
         }
         return ok({ id: r.id, action: r.action });
+      } catch (e) {
+        return fail(msg(e));
+      }
+    },
+  );
+
+  server.registerTool(
+    "memory_correct",
+    {
+      title: "Correct a specific memory",
+      description:
+        "Change ONE existing memory (by id) to new text, recording it as a NEW VERSION in that memory's " +
+        "history — the previous text stays inspectable via memory_history. Use this when you know which " +
+        "memory to fix (get the id from memory_search or memory_list): unlike memory_write, it ALWAYS " +
+        "targets that exact memory and never risks storing the change as a separate near-duplicate. Only " +
+        "the current (latest) version can be corrected.",
+      inputSchema: {
+        id: z.string().min(1),
+        content: z.string().min(1).max(10000),
+      },
+    },
+    async ({ id, content }) => {
+      try {
+        // Reuses the exact PATCH /:id route handler (memories.ts) — a content change writes a new version
+        // (chain preserved), same path the HTTP API / dashboard edit uses. Deterministic: no similarity
+        // threshold involved, so it never mis-files a correction as a separate memory.
+        const res = await memApp.request(`/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ content }),
+        });
+        const json = await jsonOf(res);
+        if (!res.ok) return fail(json?.error ?? `correct failed with HTTP ${res.status}`);
+        return ok(json);
       } catch (e) {
         return fail(msg(e));
       }
@@ -221,21 +259,82 @@ export function makeMcpServer(ctx: Ctx): McpServer {
     {
       title: "Inspect recall traces",
       description:
-        "Read the recall-trace log: pass traceId for one trace, or omit it for the most recent traces.",
+        "Read the recall-trace log (why a given search returned what it did): pass traceId for one full " +
+        "trace, or omit it for the most recent traces. Each trace records the query, the retrieved items " +
+        "with similarity scores, latency, container, and search mode. Pass kind to filter the list " +
+        "(e.g. 'search' for tool/API searches, 'proxy' for chat-proxy memory injections).",
       inputSchema: {
         traceId: z.string().min(1).optional(),
+        kind: z.string().min(1).optional().describe("filter the list by trace kind, e.g. 'search' or 'proxy'"),
         limit: z.number().int().positive().max(200).default(20),
       },
     },
-    async ({ traceId, limit }) => {
+    async ({ traceId, kind, limit }) => {
       try {
         // Reuses the exact GET /:id and GET / route handlers (inspect.ts) — same trace store the
-        // dashboard's Traces view reads.
+        // dashboard's Traces view reads. The list route honors ?kind= for filtering.
+        const listQs = new URLSearchParams({ limit: String(limit) });
+        if (kind) listQs.set("kind", kind);
         const res = traceId
           ? await inspectApp.request(`/${encodeURIComponent(traceId)}`)
-          : await inspectApp.request(`/?limit=${limit}`);
+          : await inspectApp.request(`/?${listQs.toString()}`);
         const json = await jsonOf(res);
         if (!res.ok) return fail(json?.error ?? `trace lookup failed with HTTP ${res.status}`);
+        return ok(json);
+      } catch (e) {
+        return fail(msg(e));
+      }
+    },
+  );
+
+  server.registerTool(
+    "memory_history",
+    {
+      title: "Memory history (version chain)",
+      description:
+        "Show the full version history of ONE memory by id: every correction as its own version " +
+        "(oldest → newest), which one is current (isLatest), whether the chain is forgotten, plus " +
+        "validity windows and timestamps. This is the inspect-and-trust view — nothing is hidden " +
+        "(forgotten versions are included). Answers \"what did this used to say / how did it change?\". " +
+        "Get an id from memory_search or memory_list.",
+      inputSchema: {
+        id: z.string().min(1),
+      },
+    },
+    async ({ id }) => {
+      try {
+        // Reuses the exact GET /:id route handler (memories.ts) — the same full-version-chain read the
+        // dashboard's history view uses. Returns { memory: <current row>, versions: [<whole chain>] }.
+        const res = await memApp.request(`/${encodeURIComponent(id)}`);
+        const json = await jsonOf(res);
+        if (!res.ok) return fail(json?.error ?? `history lookup failed with HTTP ${res.status}`);
+        return ok(json);
+      } catch (e) {
+        return fail(msg(e));
+      }
+    },
+  );
+
+  server.registerTool(
+    "document_list",
+    {
+      title: "List ingested documents",
+      description:
+        "List documents ingested via document_ingest (newest first): id, title, chunk count, container " +
+        "tags, and created time — metadata only, not the text. Answers \"what documents do I have?\". " +
+        "To read a document's content, search it with memory_search (searchMode: documents).",
+      inputSchema: {
+        limit: z.number().int().positive().max(200).default(50),
+      },
+    },
+    async ({ limit }) => {
+      try {
+        // Reuses the exact GET / route handler (documents.ts) — same list the dashboard's Documents view
+        // uses. (The route lists all org documents newest-first; it does not filter by container, so this
+        // tool intentionally exposes no containerTag param rather than a no-op one.)
+        const res = await docApp.request(`/?limit=${limit}`);
+        const json = await jsonOf(res);
+        if (!res.ok) return fail(json?.error ?? `document list failed with HTTP ${res.status}`);
         return ok(json);
       } catch (e) {
         return fail(msg(e));

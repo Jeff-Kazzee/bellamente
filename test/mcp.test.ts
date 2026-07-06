@@ -52,7 +52,7 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
   return { res, text, json, isError: !!res.isError };
 }
 
-const TOOLS = ["document_ingest", "memory_forget", "memory_list", "memory_search", "memory_write", "trace_inspect"];
+const TOOLS = ["document_ingest", "document_list", "memory_correct", "memory_forget", "memory_history", "memory_list", "memory_search", "memory_write", "trace_inspect"];
 
 test("B1 listTools exposes exactly the 6 memory tools, each with description + inputSchema", async () => {
   const { client, close } = await connect(await makeCtx());
@@ -195,5 +195,64 @@ test("B13 empty-string scope/id args are rejected, not silently treated as 'all'
   expect((await call(client, "memory_search", { query: "x", containerTag: "" })).isError).toBe(true);
   expect((await call(client, "memory_list", { containerTag: "" })).isError).toBe(true);
   expect((await call(client, "trace_inspect", { traceId: "" })).isError).toBe(true);
+  await close();
+}, T);
+
+test("B14 exact re-submission is a no-op (unchanged), not 'updated'", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const w1 = await call(client, "memory_write", { content: "Ben's desk is by the window." });
+  expect(w1.json?.action).toBe("created");
+  // isStatic is OPTIONAL (not default(false)) — a bare resubmit must NOT count isStatic as "provided",
+  // which would wrongly route it to the "updated" branch instead of "unchanged".
+  const w2 = await call(client, "memory_write", { content: "Ben's desk is by the window." });
+  expect(w2.json?.action).toBe("unchanged");
+  await close();
+}, T);
+
+test("B15 memory_correct writes a new version; memory_history shows the whole chain", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const w = await call(client, "memory_write", { content: "The wifi password is alpha-1." });
+  const id = w.json.id;
+  const corr = await call(client, "memory_correct", { id, content: "The wifi password is beta-2." });
+  expect(corr.isError).toBe(false);
+  expect(corr.json?.action).toBe("versioned");
+  // search returns the corrected value; the chain retains BOTH versions (the inspect-and-trust story)
+  const s = await call(client, "memory_search", { query: "wifi password" });
+  expect(JSON.stringify(s.json?.results ?? [])).toContain("beta-2");
+  const hist = await call(client, "memory_history", { id });
+  const chain = (hist.json?.versions ?? []).map((v: any) => v.memory).join("|");
+  expect(hist.json?.versions?.length).toBe(2);
+  expect(chain).toContain("alpha-1"); // old version preserved
+  expect(chain).toContain("beta-2");
+  await close();
+}, T);
+
+test("B16 document_list lists ingested documents", async () => {
+  const { client, close } = await connect(await makeCtx());
+  await call(client, "document_ingest", { title: "Runbook", content: "# Runbook\n\nSteps to recover Atlas." });
+  const dl = await call(client, "document_list", {});
+  expect(dl.isError).toBe(false);
+  expect((dl.json?.documents ?? []).some((d: any) => d.title === "Runbook")).toBe(true);
+  await close();
+}, T);
+
+test("B17 trace_inspect filters by kind", async () => {
+  const { client, close } = await connect(await makeCtx());
+  await call(client, "memory_write", { content: "a fact to search" });
+  await call(client, "memory_search", { query: "a fact" });
+  const searches = await call(client, "trace_inspect", { kind: "search" });
+  const traces = searches.json?.traces ?? [];
+  expect(traces.length).toBeGreaterThan(0);
+  expect(traces.every((t: any) => t.kind === "search")).toBe(true);
+  const none = await call(client, "trace_inspect", { kind: "no-such-kind" });
+  expect(none.isError).toBe(false); // an unknown kind is an empty list, not an error
+  expect((none.json?.traces ?? []).length).toBe(0);
+  await close();
+}, T);
+
+test("B18 memory_correct on a missing/empty id errors gracefully", async () => {
+  const { client, close } = await connect(await makeCtx());
+  expect((await call(client, "memory_correct", { id: "AAAAAAAAAAAAAAAAAAAAAA", content: "x" })).isError).toBe(true);
+  expect((await call(client, "memory_correct", { id: "", content: "x" })).isError).toBe(true);
   await close();
 }, T);

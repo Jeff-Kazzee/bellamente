@@ -45,11 +45,13 @@ native tool server — no HTTP glue, no copy-pasted prompt:
 claude mcp add bellamente -- bella mcp
 ```
 
-`bella mcp` speaks JSON-RPC over stdio and exposes six tools on the SAME local memory store `bella
+`bella mcp` speaks JSON-RPC over stdio and exposes nine tools on the SAME local memory store `bella
 serve` uses (no second database, no separate write path): `memory_search`, `memory_write`,
-`memory_forget` (reversible soft-forget only — it never hard-deletes), `memory_list`,
-`document_ingest`, and `trace_inspect`. Every search is recorded as a recall trace you can read back
-with `trace_inspect`, exactly like the dashboard's Traces view.
+`memory_correct` (change a specific memory by id, recording a new version), `memory_forget`
+(reversible soft-forget only — it never hard-deletes), `memory_list`, `memory_history` (a memory's
+full version chain, forgotten versions included — the inspect-and-trust view), `document_ingest`,
+`document_list`, and `trace_inspect`. Every search is recorded as a recall trace you can read back
+with `trace_inspect` (optionally filtered by `kind`), exactly like the dashboard's Traces view.
 
 ## Measure retrieval quality
 

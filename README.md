@@ -154,10 +154,12 @@ bun run build      # -> ./bella / bella.exe
 ```
 claude mcp add bellamente -- bella mcp
 ```
-`bella mcp` speaks JSON-RPC over stdio (no HTTP) and exposes 6 tools on the SAME `ctx.sql`/`ctx.embed`
+`bella mcp` speaks JSON-RPC over stdio (no HTTP) and exposes 9 tools on the SAME `ctx.sql`/`ctx.embed`
 this process already opened — no second DB, no second writer: `memory_search`, `memory_write`,
-`memory_forget` (reversible soft-forget only — never hard-deletes), `memory_list`, `document_ingest`,
-`trace_inspect`. All diagnostics route to stderr in this mode; stdout carries JSON-RPC only.
+`memory_correct` (versioned correction of a specific memory by id), `memory_forget` (reversible
+soft-forget only — never hard-deletes), `memory_list`, `memory_history` (a memory's full version
+chain — the inspect-and-trust view), `document_ingest`, `document_list`, `trace_inspect` (why a
+search returned what it did). All diagnostics route to stderr in this mode; stdout carries JSON-RPC only.
 
 ## API
 - POST   /memories            - write 1..100 memories (exact dups -> "unchanged"; near-dups -> "superseded"
