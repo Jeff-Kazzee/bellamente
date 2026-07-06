@@ -97,3 +97,34 @@ test("validation: content required and bounded; bad ids rejected; unknown ids 40
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("an invalid-embedding chunk is dropped; chunk_count reflects INSERTED rows + skippedChunks is surfaced (#125)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(EMBED_DIM));
+  // Embed returns an invalid (empty) vector for exactly one chunk -> that chunk is unsearchable and must
+  // be dropped, and chunk_count must NOT keep counting it (the pre-fix bug reported the pre-embed total).
+  const skipOne: Embed = async ({ values }) => values.map((_, i) => (i === 1 ? [] : unit));
+  const app = new Hono();
+  app.route("/documents", documentsRoutes({ sql, embed: skipOne }));
+  try {
+    const content =
+      "# A\n\n" + "alpha ".repeat(300) + "\n\n## B\n\n" + "bravo ".repeat(300) + "\n\n## C\n\n" + "charlie ".repeat(300);
+    const created = await app.request("/documents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "T", content, containerTag: "u" }),
+    });
+    expect(created.status).toBe(201);
+    const res = await created.json();
+    const detail = await (await app.request(`/documents/${res.documentId}`)).json();
+
+    expect(res.skippedChunks).toBe(1); // the invalid-embed chunk was dropped AND reported
+    expect(res.chunkCount).toBe(detail.chunks.length); // returned count == rows actually inserted (searchable)
+    expect(detail.chunks.length).toBeGreaterThan(0);
+    const [doc] = await sql`SELECT chunk_count FROM document WHERE id = ${res.documentId}`;
+    expect(Number(doc!.chunk_count)).toBe(detail.chunks.length); // stored chunk_count == real inserted (inspect surface)
+  } finally {
+    await sql.end();
+  }
+}, TEST_TIMEOUT_MS);
