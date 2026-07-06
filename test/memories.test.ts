@@ -330,3 +330,49 @@ test("forget hides the whole chain from the list (reversibly); DELETE removes it
     await close();
   }
 }, TEST_TIMEOUT_MS);
+// #128: PATCH read is_latest on the plain connection, embedded in the async gap, then INSERTed the
+// new version unconditionally — two concurrent edits both passed the check and left TWO permanent
+// is_latest=true rows in one chain (both surfacing as current in list/search). The invariant below
+// is what the fix (flip-first guard inside the tx + the one-latest-per-chain index) makes impossible.
+test("concurrent content PATCHes cannot leave two latest versions in one chain (#128)", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const created = await (await post(app, "/memories", { memories: [{ content: "John lives in Denver" }] })).json();
+    const id = created.memories[0].id;
+
+    const [a, b] = await Promise.all([
+      patch(app, `/memories/${id}`, { content: "John lives in Boulder now" }),
+      patch(app, `/memories/${id}`, { content: "John prefers light mode" }),
+    ]);
+
+    // Exactly one edit wins; the loser is told to re-read (409 + pointer at the new latest).
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const loser = a.status === 409 ? a : b;
+    expect((await loser.json()).latestId).toBeTruthy();
+
+    // The invariant #128 broke: one latest row per chain, no matter how the race lands.
+    const latest = await sql`
+      SELECT id FROM memory_entry
+      WHERE (root_memory_id = ${id} OR id = ${id}) AND is_latest = true`;
+    expect(latest.length).toBe(1);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("the one-latest-per-chain index rejects a duplicate latest row at the DB layer (#128 backstop)", async () => {
+  const { sql, close } = await makeApp();
+  try {
+    const rootId = "a".repeat(22), dupId = "b".repeat(22), spaceId = "s".repeat(22);
+    await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id)
+              VALUES (${rootId}, ${ORG_ID}, ${spaceId}, 'fact v1', true, 1, ${rootId})`;
+    await expect(
+      (async () => {
+        await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, parent_memory_id)
+                  VALUES (${dupId}, ${ORG_ID}, ${spaceId}, 'fact v2', true, 2, ${rootId}, ${rootId})`;
+      })()
+    ).rejects.toThrow(/one_latest|duplicate key/i);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
