@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { memoriesRoutes, sweepExpiredMemories } from "../src/memories";
+import { memoriesRoutes, sweepExpiredMemories, writeMemory } from "../src/memories";
 import { ORG_ID } from "../src/util";
 import { EMBED_DIM } from "../src/embed-common";
 import type { Embed } from "../src/embed";
@@ -380,3 +380,45 @@ test("the one-latest-per-chain index rejects a duplicate latest row at the DB la
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+// #128 Q4.1: a batch write's supersede can lose a version race ONLY on external pooled Postgres (PGlite
+// serializes whole transactions, so the in-tx `nearest` read can't go stale). The merged fix THREW there,
+// which aborts the ENTIRE batch tx — one racy item would 500 every other item in the request. It now
+// returns a per-item `conflict` instead. A fake tagged-template `tx` reaches that otherwise-unreachable
+// path deterministically (route by SQL shape; the flip UPDATE returns [] to force the lost race).
+function fakeTx(flipRows: unknown[], onInsert: () => void) {
+  const tx: any = (strings: TemplateStringsArray) => {
+    const q = strings.join(" ? ");
+    if (/md5\(memory\)/.test(q)) return Promise.resolve([]); // no exact dup
+    if (/ORDER BY memory_embedding/.test(q)) {
+      return Promise.resolve([{ id: "n".repeat(22), version: 3, root_memory_id: null, source_count: 2, similarity: 0.999 }]);
+    }
+    if (/SET is_latest = false/.test(q)) return Promise.resolve(flipRows); // [] = lost race, [{id}] = won
+    if (/INSERT INTO memory_entry/.test(q)) { onInsert(); return Promise.resolve([]); }
+    return Promise.resolve([]);
+  };
+  tx.json = (x: unknown) => x;
+  return tx;
+}
+
+const CONFLICT_ARGS = {
+  spaceId: "s".repeat(22), content: "John lives in Boulder now", isStatic: false, isInference: false,
+  metadata: null, forgetAfter: null, forgetReason: null, embedding: [0.9, 0.312, 0, 0], model: "test",
+  dedupe: true, provided: { isStatic: false, metadata: false, forgetAfter: false, forgetReason: false },
+};
+
+test("writeMemory: a LOST supersede race returns a per-item `conflict` — never throws, never inserts (#128 Q4.1)", async () => {
+  let inserted = false;
+  const r = await writeMemory(fakeTx([], () => { inserted = true; }), { ...CONFLICT_ARGS });
+  expect(r.action).toBe("conflict");
+  expect(r.id).toBe("n".repeat(22)); // points the caller at the contested chain to re-read
+  expect(inserted).toBe(false); // no INSERT on a lost race -> batch tx stays clean, other items commit
+});
+
+test("writeMemory: a WON supersede race still inserts the new version (positive control) (#128 Q4.1)", async () => {
+  let inserted = false;
+  const r = await writeMemory(fakeTx([{ id: "n".repeat(22) }], () => { inserted = true; }), { ...CONFLICT_ARGS });
+  expect(r.action).toBe("superseded");
+  expect(r.supersededId).toBe("n".repeat(22));
+  expect(inserted).toBe(true);
+});

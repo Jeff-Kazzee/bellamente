@@ -86,13 +86,13 @@ async function chainIds(sql: DB, row: any): Promise<string[]> {
   return rows.map((r) => r.id as string);
 }
 
-type WriteAction = "created" | "superseded" | "unchanged" | "updated";
+type WriteAction = "created" | "superseded" | "unchanged" | "updated" | "conflict";
 type WriteResult = { id: string; action: WriteAction; version: number; supersededId?: string };
 type ProvidedFields = { isStatic: boolean; metadata: boolean; forgetAfter: boolean; forgetReason: boolean };
 
 // One memory write inside an open transaction: exact-dup check, near-dup supersede, or plain insert.
 // Runs PER ITEM inside the batch transaction so items in the same request dedupe against each other.
-async function writeMemory(
+export async function writeMemory(
   tx: Tx,
   args: {
     spaceId: string;
@@ -164,7 +164,12 @@ async function writeMemory(
         WHERE id = ${nearest.id} AND is_latest = true
         RETURNING id`;
       if (flipped.length !== 1) {
-        throw new Error(`supersede of memory ${nearest.id} lost a concurrent version race; retry the write`);
+        // Lost a concurrent version race — only reachable on external pooled Postgres (PGlite serializes
+        // whole transactions). Do NOT throw: that aborts the ENTIRE batch tx, failing every other item in
+        // the request over one racy write. Report this item as a per-item `conflict` (no row was inserted,
+        // so the tx stays clean and the other items still commit); the caller re-reads the chain and
+        // retries just this item (#128 review / Q4.1).
+        return { id: nearest.id, action: "conflict", version: Number(nearest.version) };
       }
       await tx`
         INSERT INTO memory_entry
@@ -280,9 +285,11 @@ export async function writeMemories(
         forgetReason: input.forgetReason,
         embedTruncated: input.embedTruncated,
       });
-      if (r.action !== "unchanged") wrote++;
+      if (r.action !== "unchanged" && r.action !== "conflict") wrote++;
     }
-    const written = results.filter((r) => r.action !== "unchanged");
+    // A `conflict` item wrote no row (it lost the race) — exclude it from the grouping document +
+    // provenance links, exactly like `unchanged`.
+    const written = results.filter((r) => r.action !== "unchanged" && r.action !== "conflict");
     if (wrote > 0) {
       const joined = written.map((r) => r.content).join("\n\n");
       await tx`
@@ -339,6 +346,7 @@ export function memoriesRoutes(ctx: Ctx) {
         action: r.action,
         version: r.version,
         ...(r.supersededId ? { supersededId: r.supersededId } : {}),
+        ...(r.action === "conflict" ? { retryable: true } : {}),
         ...(r.embedTruncated ? { embedTruncated: true } : {}),
         createdAt: new Date().toISOString(),
         forgetAfter: r.forgetAfter,
