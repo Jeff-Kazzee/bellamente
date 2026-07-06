@@ -78,10 +78,10 @@ Now in v0.0.3:
 - Inspect dashboard.
 - Retrieval eval harness with published numbers.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
+- Native MCP server (`bella mcp`) for MCP-native agents.
 
 Next focus:
 
-- MCP server via `bella mcp` so agent tools can plug in directly.
 - Richer trust views: rejected captures, version diffs, provenance trees.
 
 Later and bigger bets include inferred-memory review, context-window preview, memory graph, optional reranker, content extractors, filesystem and Obsidian connectors, SDKs, editor integrations, and a desktop shell.

@@ -330,6 +330,34 @@ test("forget hides the whole chain from the list (reversibly); DELETE removes it
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("GET list filters by containerTag (space scope); no filter returns all (memory_list wiring)", async () => {
+  const { app, close } = await makeApp();
+  try {
+    // Two orthogonal facts in two different containers (spaces) — no dedup/supersede interaction.
+    await post(app, "/memories", { containerTag: "space_a", memories: [{ content: "John prefers dark mode" }] });
+    await post(app, "/memories", { containerTag: "space_b", memories: [{ content: "John lives in Denver" }] });
+
+    // No filter: both are listed.
+    expect((await (await app.request("/memories")).json()).memories).toHaveLength(2);
+
+    // Scoped to space_a: only that container's memory.
+    const a = await (await app.request("/memories?containerTag=space_a")).json();
+    expect(a.memories).toHaveLength(1);
+    expect(a.memories[0].memory).toBe("John prefers dark mode");
+
+    // Scoped to space_b: only that container's memory.
+    const b = await (await app.request("/memories?containerTag=space_b")).json();
+    expect(b.memories).toHaveLength(1);
+    expect(b.memories[0].memory).toBe("John lives in Denver");
+
+    // Unknown container: empty, not an error.
+    expect((await (await app.request("/memories?containerTag=does_not_exist")).json()).memories).toHaveLength(0);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
 // #128: PATCH read is_latest on the plain connection, embedded in the async gap, then INSERTed the
 // new version unconditionally — two concurrent edits both passed the check and left TWO permanent
 // is_latest=true rows in one chain (both surfacing as current in list/search). The invariant below

@@ -162,8 +162,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       title: "List memories",
       description:
         "List the latest, non-forgotten memories (newest first). " +
-        "Note: containerTag is accepted for forward compatibility but is currently a no-op — the " +
-        "underlying GET /memories route does not yet filter by container tag.",
+        "Pass containerTag to scope the list to a single container (space).",
       inputSchema: {
         limit: z.number().int().positive().max(100).default(50),
         containerTag: z.string().optional(),
@@ -173,7 +172,7 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       try {
         // Reuses the exact GET / route handler (memories.ts) — same list-latest query the dashboard uses.
         const qs = new URLSearchParams({ limit: String(limit) });
-        if (containerTag) qs.set("containerTag", containerTag); // no-op today; see description
+        if (containerTag) qs.set("containerTag", containerTag);
         const res = await memApp.request(`/?${qs.toString()}`);
         const json = await jsonOf(res);
         if (!res.ok) return fail(json?.error ?? `list failed with HTTP ${res.status}`);

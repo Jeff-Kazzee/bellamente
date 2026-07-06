@@ -369,13 +369,18 @@ export function memoriesRoutes(ctx: Ctx) {
     }, 201);
   });
 
-  // GET /memories - list latest, non-forgotten
+  // GET /memories - list latest, non-forgotten (optionally scoped to one container tag)
   app.get("/", async (c) => {
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50), 1), 100);
+    const containerTag = c.req.query("containerTag");
+    // Mirror the search-path container filter (search.ts): scope by the memory's space, not a column.
+    const tagClause = containerTag
+      ? sql`AND space_id IN (SELECT id FROM space WHERE container_tag = ${containerTag} AND org_id = ${ORG_ID})`
+      : sql``;
     const rows = await sql`
       SELECT id, memory, is_static, version, created_at, forget_after
       FROM memory_entry
-      WHERE org_id = ${ORG_ID} AND is_latest = true AND is_forgotten = false
+      WHERE org_id = ${ORG_ID} AND is_latest = true AND is_forgotten = false ${tagClause}
       ORDER BY created_at DESC
       LIMIT ${limit}`;
     return c.json({ memories: rows });

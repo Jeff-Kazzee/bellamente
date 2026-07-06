@@ -27,10 +27,10 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
   append-only migrations.
 - Public direct downloads currently publish tested Windows x64 and Linux x64 binaries only.
 - Coverage-gated behavior test suite.
+- Native MCP server (`bella mcp`): the 6 memory tools over stdio JSON-RPC on the same local store.
 
 ## Next — the trust loop, finished
 
-- MCP server (`bella mcp`) so agent harnesses plug in directly.
 - Richer trust views: rejected-capture reasons, version diffs, provenance trees.
 
 ## Later — memory-system parity

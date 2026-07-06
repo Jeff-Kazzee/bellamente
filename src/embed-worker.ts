@@ -7,6 +7,16 @@
 import { embedWasm } from "./embed-wasm";
 import type { TaskType } from "./embed-common";
 
+// CRITICAL (SPEC-P1.7): under `bella mcp`, stdout is the JSON-RPC channel and this worker shares the
+// parent's stdout. The main-thread redirect in index.ts does NOT cross the Worker boundary, so the
+// cold-start model-download logs in embed-wasm.ts (console.log, first run only) would corrupt the
+// protocol. Route this worker's console diagnostics to stderr for its lifetime. Safe in every parent
+// context — this worker's only legitimate output is postMessage, so nothing real uses stdout. (Do NOT
+// redirect process.stdout.write here without proving worker/parent stdout isolation first.)
+console.log = console.error;
+console.info = console.error;
+console.debug = console.error;
+
 type InMsg = { id: number; type: "embed"; values: string[]; taskType: TaskType };
 type OutMsg = { id: number; ok: true; vectors: number[][] } | { id: number; ok: false; error: string };
 
