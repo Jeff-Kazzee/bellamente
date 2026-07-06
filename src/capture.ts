@@ -205,7 +205,9 @@ export async function captureFromTurn(
         metadata: { source: "proxy_capture", proxyTraceId: args.proxyTraceId, ...(distilledUsed ? { distilled: true } : {}) },
       })),
     });
-    const items = results.map((r) => traceTextItem("memory", r.content, { id: r.id, action: r.action }));
+    const items = results
+      .filter((r) => r.action !== "conflict") // a conflict wrote no row — don't trace attempted text against a stale id
+      .map((r) => traceTextItem("memory", r.content, { id: r.id, action: r.action }));
     await recordTraceSafe(ctx.sql, {
       kind: "capture",
       status: "ok",

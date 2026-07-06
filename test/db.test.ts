@@ -230,3 +230,26 @@ test("runMigrations: migration 5 repairs duplicate-latest chains, then the backs
   expect(idx.length).toBe(1);
   await sql.end();
 }, 20000);
+
+test("runMigrations: migration 5 breaks a version TIE by created_at (the shape a real race produces) (#128)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  await sql.unsafe("DROP INDEX idx_memory_entry_one_latest");
+  // A real concurrent-PATCH race leaves TWO latest rows at the SAME version, differing only by created_at.
+  // Survivor id "b" has the LOWER id but the LATER created_at -> proves created_at DESC is applied before
+  // id DESC (id alone would have picked "c"). Deterministic: explicit created_at, no now() ambiguity.
+  const root = "a".repeat(22), winner = "b".repeat(22), loser = "c".repeat(22), spaceId = "s".repeat(22);
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id)
+            VALUES (${root}, 'org', ${spaceId}, 'v1', false, 1, ${root})`;
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, parent_memory_id, created_at)
+            VALUES (${winner}, 'org', ${spaceId}, 'race-late', true, 2, ${root}, ${root}, '2026-01-01T00:00:01Z')`;
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, parent_memory_id, created_at)
+            VALUES (${loser}, 'org', ${spaceId}, 'race-early', true, 2, ${root}, ${root}, '2026-01-01T00:00:00Z')`;
+  await runMigrations(sql);
+  const latest = await sql`SELECT id FROM memory_entry WHERE is_latest = true`;
+  expect(latest.map((r) => String(r.id))).toEqual([winner]); // later created_at wins despite lower id
+  const [demoted] = await sql`SELECT valid_to FROM memory_entry WHERE id = ${loser}`;
+  expect(demoted!.valid_to).not.toBeNull(); // demoted row's validity window closed
+  await sql.end();
+}, 20000);
