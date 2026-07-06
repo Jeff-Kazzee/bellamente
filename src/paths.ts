@@ -15,7 +15,7 @@
 //   BELLA_MODEL_DIR  - (used by embed.ts) point the model cache anywhere directly
 //   DATABASE_URL     - use an external Postgres instead of the embedded DB (dev / advanced)
 import envPaths from "env-paths";
-import { mkdirSync, readdirSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, lstatSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { brandEnv } from "./env";
 
@@ -39,15 +39,41 @@ export const dbDir = (): string => ensure(join(dataBase, "db")); // embedded Pos
 // dim is fixed once the DB exists — so we PIN the first-boot {model, dim} here and prefer it over re-deriving
 // from RAM on every boot. That stops a benign RAM/VM change from flipping the dim and bricking the store.
 const EMBEDDER_META = "embedder.json";
-export function readEmbedderMeta(): { model: string; dim: number } | null {
+// Read the pin from a specific path (extracted so it is unit-testable against a temp dir). ENOENT =
+// legitimately absent (fresh install) -> null. Any OTHER failure (corrupt JSON, malformed shape, EACCES)
+// must NOT be treated as absent — that silently re-derives the tier from RAM and can flip the dim/model
+// on an existing store — so it THROWS a loud, actionable error instead of returning null (#127).
+export function readEmbedderMetaFrom(path: string): { model: string; dim: number } | null {
+  let raw: string;
   try {
-    const m = JSON.parse(readFileSync(join(dataBase, EMBEDDER_META), "utf8"));
-    if (typeof m?.model === "string" && Number.isInteger(m?.dim)) return { model: m.model, dim: m.dim };
-  } catch {}
-  return null;
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    if ((e as { code?: string })?.code === "ENOENT") return null;
+    throw new Error(`embedder pin at ${path} is unreadable (${(e as { code?: string })?.code ?? String(e)}); refusing to silently re-derive the embedder — fix or remove the file`);
+  }
+  let m: { model?: unknown; dim?: unknown } | null;
+  try {
+    m = JSON.parse(raw);
+  } catch {
+    throw new Error(`embedder pin at ${path} is corrupt JSON; refusing to silently re-derive the embedder — fix or remove the file`);
+  }
+  if (m && typeof m.model === "string" && Number.isInteger(m.dim)) return { model: m.model, dim: m.dim as number };
+  throw new Error(`embedder pin at ${path} is missing a valid {model, dim}; refusing to silently re-derive the embedder — fix or remove the file`);
+}
+
+// Atomic write (temp + rename) so a crash mid-write can't leave a torn/half pin; a write failure
+// propagates (never swallowed) so a broken pin surfaces instead of silently vanishing (#127).
+export function writeEmbedderMetaFrom(path: string, model: string, dim: number): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify({ model, dim }));
+  renameSync(tmp, path);
+}
+
+export function readEmbedderMeta(): { model: string; dim: number } | null {
+  return readEmbedderMetaFrom(join(dataBase, EMBEDDER_META));
 }
 export function writeEmbedderMeta(model: string, dim: number): void {
-  try { writeFileSync(join(ensure(dataBase), EMBEDDER_META), JSON.stringify({ model, dim })); } catch {}
+  writeEmbedderMetaFrom(join(ensure(dataBase), EMBEDDER_META), model, dim);
 }
 export const modelsDir = (): string => ensure(join(cacheBase, "models")); // embedding weights cache
 export const runtimeDir = (): string => ensure(join(cacheBase, "runtime")); // extracted WASM runtime + glue

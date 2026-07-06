@@ -9,7 +9,7 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readdirSync } from "node:fs";
 import {
   dirSizeBytes,
   diskUsedBytes,
@@ -20,6 +20,8 @@ import {
   modelsDir,
   runtimeDir,
   logsDir,
+  readEmbedderMetaFrom,
+  writeEmbedderMetaFrom,
 } from "../src/paths";
 
 test("dirSizeBytes: sums nested files, returns 0 for a missing dir, and never follows symlinks", () => {
@@ -90,4 +92,36 @@ test("diskUsedBytes: finite, non-negative, and at least the data dir's footprint
   // data is always measured — either as its own root or inside a shared parent root — so the total
   // can never come in below it, whatever the env layout.
   expect(used).toBeGreaterThanOrEqual(dirSizeBytes(storageDirs().data));
+});
+
+test("readEmbedderMetaFrom: absent -> null; valid -> {model,dim}; corrupt/malformed -> THROWS, never a silent null (#127)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bella-embmeta-"));
+  try {
+    const p = join(dir, "embedder.json");
+    expect(readEmbedderMetaFrom(p)).toBeNull(); // ENOENT = fresh install, quiet
+    writeFileSync(p, JSON.stringify({ model: "e5-small", dim: 384 }));
+    expect(readEmbedderMetaFrom(p)).toEqual({ model: "e5-small", dim: 384 });
+    // The pin exists to STOP a silent dim/model flip — a broken pin must fail loudly, not fall back to
+    // "absent" (which re-derives the tier from RAM and can corrupt an existing store).
+    writeFileSync(p, "{not json");
+    expect(() => readEmbedderMetaFrom(p)).toThrow();
+    writeFileSync(p, JSON.stringify({ model: "x" })); // missing dim
+    expect(() => readEmbedderMetaFrom(p)).toThrow();
+    writeFileSync(p, "null"); // valid JSON, not a pin
+    expect(() => readEmbedderMetaFrom(p)).toThrow();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeEmbedderMetaFrom: atomic write round-trips and leaves no temp file behind (#127)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bella-embmeta-w-"));
+  try {
+    const p = join(dir, "embedder.json");
+    writeEmbedderMetaFrom(p, "e5-small", 384);
+    expect(readEmbedderMetaFrom(p)).toEqual({ model: "e5-small", dim: 384 });
+    expect(readdirSync(dir).filter((f) => f.includes(".tmp"))).toHaveLength(0); // temp+rename left nothing torn
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
