@@ -155,6 +155,11 @@ CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
 -- (also shipped to existing installs as migration 003 — keep both in sync)
 CREATE INDEX IF NOT EXISTS idx_memory_entry_fulltext
   ON memory_entry USING gin (to_tsvector('simple', memory));
+-- one latest row per version chain (#128 backstop; also shipped as migration 005 — keep both in
+-- sync). Writers must flip the old latest BEFORE inserting the new one: unique checks are per-statement.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entry_one_latest
+  ON memory_entry ((COALESCE(root_memory_id, id)))
+  WHERE is_latest = true;
 
 -- Append-only error store (PR #2): mirrors recall_trace conventions. Every captured failure lands here
 -- content-free (redacted at the store boundary in src/error-store.ts), grouped by fingerprint on read and

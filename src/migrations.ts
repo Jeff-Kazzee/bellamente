@@ -71,6 +71,29 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE memory_entry ADD COLUMN IF NOT EXISTS valid_to timestamptz;
     `,
   },
+  {
+    id: 5,
+    name: "one-latest-per-chain",
+    // #128: PATCH used to verify is_latest OUTSIDE its tx and insert the new version unconditionally,
+    // so two concurrent edits could leave a chain with two permanent is_latest=true rows. The write
+    // paths now flip-then-insert with a row-count guard; this migration repairs any corruption that
+    // already happened (highest version wins; ties by created_at then id; demoted rows get valid_to
+    // stamped so asOf recall stops treating them as current) and adds the DB backstop: at most one
+    // latest row per version chain. COALESCE(root_memory_id, id) is the chain key (the root row may
+    // predate the always-set-root convention). Writers MUST flip before inserting — unique checks are
+    // per-statement, not per-transaction.
+    up: `
+      UPDATE memory_entry m SET is_latest = false, updated_at = now(), valid_to = COALESCE(m.valid_to, now())
+      WHERE m.is_latest = true AND m.id <> (
+        SELECT k.id FROM memory_entry k
+        WHERE COALESCE(k.root_memory_id, k.id) = COALESCE(m.root_memory_id, m.id) AND k.is_latest = true
+        ORDER BY k.version DESC, k.created_at DESC, k.id DESC
+        LIMIT 1);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entry_one_latest
+        ON memory_entry ((COALESCE(root_memory_id, id)))
+        WHERE is_latest = true;
+    `,
+  },
 ];
 
 /** Apply every migration not yet recorded in schema_migrations, in id order. Returns applied ids.

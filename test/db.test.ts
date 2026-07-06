@@ -208,3 +208,25 @@ test("migration 003 and schema.sql produce the IDENTICAL index definition (B6 st
   expect(String(fresh!.indexdef)).toContain("to_tsvector('simple'");
   await sql.end();
 }, 20000);
+
+test("runMigrations: migration 5 repairs duplicate-latest chains, then the backstop index holds (#128)", async () => {
+  const pg = await PGlite.create({ dataDir: "memory://", extensions: { vector } });
+  const sql = makePgliteSql(pg);
+  await sql.unsafe(schemaForDim(8));
+  // Legacy install: the backstop index predates this DB — drop it so the corruption can be seeded.
+  await sql.unsafe("DROP INDEX idx_memory_entry_one_latest");
+  const rootId = "a".repeat(22), dupId = "b".repeat(22), spaceId = "s".repeat(22);
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id)
+            VALUES (${rootId}, 'org', ${spaceId}, 'v1', true, 1, ${rootId})`;
+  await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, parent_memory_id)
+            VALUES (${dupId}, 'org', ${spaceId}, 'v2', true, 2, ${rootId}, ${rootId})`;
+  await runMigrations(sql);
+  // Repair keeps the highest version as latest and closes the demoted row's validity window
+  // (a demoted row with valid_to NULL would still answer asOf queries as if current).
+  const rows = await sql`SELECT id, is_latest, valid_to FROM memory_entry ORDER BY version`;
+  expect(rows.map((r) => [String(r.id), !!r.is_latest])).toEqual([[rootId, false], [dupId, true]]);
+  expect(rows[0]!.valid_to).not.toBeNull();
+  const idx = await sql`SELECT indexname FROM pg_indexes WHERE indexname = ${"idx_memory_entry_one_latest"}`;
+  expect(idx.length).toBe(1);
+  await sql.end();
+}, 20000);
