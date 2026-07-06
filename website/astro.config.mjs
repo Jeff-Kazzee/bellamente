@@ -1,10 +1,10 @@
 import { defineConfig } from "astro/config";
 
-// Hosted on Vercel at the domain root (no base path — GitHub Pages' /bellamente prefix is gone,
-// which also removes the base-concatenation class of link bugs). Update `site` if a custom
-// domain replaces the vercel.app URL.
+// Hosted on GitHub Pages as a project site. Keep `base` aligned with the repo name so
+// generated asset URLs work under /bellamente/.
 export default defineConfig({
-  site: "https://bellamente.vercel.app",
+  site: "https://the-little-ai-company.github.io",
+  base: "/bellamente",
   markdown: {
     shikiConfig: {
       // ```prompt fences are agent-paste blocks: highlighted as plain text, but the fence name

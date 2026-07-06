@@ -155,3 +155,31 @@ CREATE INDEX IF NOT EXISTS idx_memory_entry_dedup
 -- (also shipped to existing installs as migration 003 — keep both in sync)
 CREATE INDEX IF NOT EXISTS idx_memory_entry_fulltext
   ON memory_entry USING gin (to_tsvector('simple', memory));
+-- one latest row per version chain (#128 backstop; also shipped as migration 005 — keep both in
+-- sync). Writers must flip the old latest BEFORE inserting the new one: unique checks are per-statement.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entry_one_latest
+  ON memory_entry ((COALESCE(root_memory_id, id)))
+  WHERE is_latest = true;
+
+-- Append-only error store (PR #2): mirrors recall_trace conventions. Every captured failure lands here
+-- content-free (redacted at the store boundary in src/error-store.ts), grouped by fingerprint on read and
+-- self-pruned to ERROR_RETENTION. No migration needed: this is a brand-new table, so CREATE TABLE IF NOT
+-- EXISTS reaches existing installs too (schema.sql re-runs at every boot — see db.ts makeDb).
+CREATE TABLE IF NOT EXISTS error_event (
+  id char(22) PRIMARY KEY,
+  org_id varchar(22) NOT NULL,
+  ts timestamp NOT NULL DEFAULT now(),
+  severity text NOT NULL DEFAULT 'error',
+  category text NOT NULL DEFAULT 'unknown',
+  code text NOT NULL,
+  fingerprint text NOT NULL,
+  message_redacted text,
+  stack_fingerprint text,
+  request_shape json NOT NULL DEFAULT '{}'::json,
+  trace_id text,
+  count integer NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_error_event_created
+  ON error_event (org_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_error_event_fingerprint
+  ON error_event (org_id, fingerprint, ts DESC);

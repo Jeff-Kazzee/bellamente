@@ -1,0 +1,36 @@
+{
+  "name": "bellamente",
+  "version": "0.0.3",
+  "description": "Bellamente launcher: local-first memory for AI agents.",
+  "bin": {
+    "bella": "bin/bella.cjs",
+    "bellamente": "bin/bella.cjs"
+  },
+  "files": [
+    "bin/bella.cjs",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/The-Little-AI-Company/bellamente.git"
+  },
+  "bugs": {
+    "url": "https://github.com/The-Little-AI-Company/bellamente/issues"
+  },
+  "homepage": "https://the-little-ai-company.github.io/bellamente/",
+  "keywords": [
+    "ai",
+    "agents",
+    "memory",
+    "local-first",
+    "llm",
+    "proxy"
+  ],
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

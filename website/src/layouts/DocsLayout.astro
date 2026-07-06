@@ -6,10 +6,10 @@ import "../styles/machina.css";
 const { frontmatter } = Astro.props;
 const current = Astro.url.pathname;
 const pages = [
-  { href: "/docs", label: "overview" },
-  { href: "/docs/using", label: "using it" },
-  { href: "/docs/api", label: "api" },
-  { href: "/docs/config", label: "config" },
+  { href: "/bellamente/docs", label: "overview" },
+  { href: "/bellamente/docs/using", label: "using it" },
+  { href: "/bellamente/docs/api", label: "api" },
+  { href: "/bellamente/docs/config", label: "config" },
 ];
 ---
 
@@ -35,11 +35,11 @@ const pages = [
     <main class="db">
       <div class="docs-wrap">
         <header class="db-nav">
-          <a class="db-logo" href="/">Bella<span>mente</span></a>
+          <a class="db-logo" href="/bellamente/">Bella<span>mente</span></a>
           <nav aria-label="primary">
-            <a href="/roadmap">Roadmap</a>
-            <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/latest">Download</a>
+            <a href="/bellamente/roadmap">Roadmap</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/latest">Download</a>
           </nav>
         </header>
         <nav class="docs-nav" aria-label="docs">

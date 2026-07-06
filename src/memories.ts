@@ -86,13 +86,13 @@ async function chainIds(sql: DB, row: any): Promise<string[]> {
   return rows.map((r) => r.id as string);
 }
 
-type WriteAction = "created" | "superseded" | "unchanged" | "updated";
+type WriteAction = "created" | "superseded" | "unchanged" | "updated" | "conflict";
 type WriteResult = { id: string; action: WriteAction; version: number; supersededId?: string };
 type ProvidedFields = { isStatic: boolean; metadata: boolean; forgetAfter: boolean; forgetReason: boolean };
 
 // One memory write inside an open transaction: exact-dup check, near-dup supersede, or plain insert.
 // Runs PER ITEM inside the batch transaction so items in the same request dedupe against each other.
-async function writeMemory(
+export async function writeMemory(
   tx: Tx,
   args: {
     spaceId: string;
@@ -153,6 +153,26 @@ async function writeMemory(
       // Validity window (SPEC-P1.8): Postgres now() is TRANSACTION-frozen, so this INSERT's valid_from
       // and the flip UPDATE's valid_to see the identical timestamp — old.valid_to == new.valid_from
       // exactly: no gap, no overlap, by construction.
+      // Flip FIRST, and demand exactly one row (#128). `nearest` was read inside this tx, so on
+      // PGlite (single writer) the guard cannot trip; on external Postgres (pooled, READ COMMITTED)
+      // a concurrent writer may have closed the row — 0 flipped rows means inserting would create a
+      // second latest, so fail the item instead (the tx rolls back). Flip-before-insert is also what
+      // keeps idx_memory_entry_one_latest happy: unique checks are per-statement, and the guarded
+      // WHERE must not overwrite a concurrent writer's stamped valid_to (window overlap — PR #89 review).
+      const flipped = await tx`
+        UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now()
+        WHERE id = ${nearest.id} AND is_latest = true
+        RETURNING id`;
+      if (flipped.length !== 1) {
+        // Lost a concurrent version race — only reachable on external pooled Postgres (PGlite serializes
+        // whole transactions). Under READ COMMITTED (the assumed isolation throughout this path) the
+        // concurrent flip makes THIS flip match 0 rows cleanly. Do NOT throw: that aborts the ENTIRE batch
+        // tx, failing every other item in the request over one racy write. Report a per-item `conflict`
+        // (no row inserted, so the tx stays clean and the other items still commit); the caller re-reads
+        // the chain and retries just this item. (Under REPEATABLE READ/SERIALIZABLE the flip would instead
+        // raise a 40001 and re-abort the batch — acceptable; RC is the default and what we assume.) (Q4.1)
+        return { id: nearest.id, action: "conflict", version: Number(nearest.version) };
+      }
       await tx`
         INSERT INTO memory_entry
           (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
@@ -162,9 +182,6 @@ async function writeMemory(
            ${nearest.id}, ${root}, ${Number(nearest.source_count ?? 1) + 1}, ${tx.json({ updates: [nearest.id] })},
            ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
            ${v}::vector, ${args.model}, now())`;
-      // AND is_latest = true: if a concurrent writer already closed this row, a lost race must
-      // no-op rather than OVERWRITE its stamped valid_to (window overlap — PR #89 review).
-      await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${nearest.id} AND is_latest = true`;
       return { id, action: "superseded", version: Number(nearest.version) + 1, supersededId: nearest.id };
     }
   }
@@ -270,9 +287,11 @@ export async function writeMemories(
         forgetReason: input.forgetReason,
         embedTruncated: input.embedTruncated,
       });
-      if (r.action !== "unchanged") wrote++;
+      if (r.action !== "unchanged" && r.action !== "conflict") wrote++;
     }
-    const written = results.filter((r) => r.action !== "unchanged");
+    // A `conflict` item wrote no row (it lost the race) — exclude it from the grouping document +
+    // provenance links, exactly like `unchanged`.
+    const written = results.filter((r) => r.action !== "unchanged" && r.action !== "conflict");
     if (wrote > 0) {
       const joined = written.map((r) => r.content).join("\n\n");
       await tx`
@@ -322,18 +341,31 @@ export function memoriesRoutes(ctx: Ctx) {
 
     return c.json({
       documentId,
-      memories: results.map((r) => ({
-        id: r.id,
-        memory: r.content,
-        isStatic: r.isStatic,
-        action: r.action,
-        version: r.version,
-        ...(r.supersededId ? { supersededId: r.supersededId } : {}),
-        ...(r.embedTruncated ? { embedTruncated: true } : {}),
-        createdAt: new Date().toISOString(),
-        forgetAfter: r.forgetAfter,
-        forgetReason: r.forgetReason,
-      })),
+      memories: results.map((r) =>
+        r.action === "conflict"
+          ? {
+              // Nothing was written for this item (lost a concurrent version race). Emit a shape that does
+              // NOT imply an id->stored-memory mapping like every other action does: `attemptedContent` is
+              // the text you tried to write (NOT stored), `conflictWith` is the contested chain to re-read
+              // (GET /memories/:id resolves it to the current latest) before retrying just this item.
+              action: "conflict" as const,
+              retryable: true,
+              attemptedContent: r.content,
+              conflictWith: r.id,
+            }
+          : {
+              id: r.id,
+              memory: r.content,
+              isStatic: r.isStatic,
+              action: r.action,
+              version: r.version,
+              ...(r.supersededId ? { supersededId: r.supersededId } : {}),
+              ...(r.embedTruncated ? { embedTruncated: true } : {}),
+              createdAt: new Date().toISOString(),
+              forgetAfter: r.forgetAfter,
+              forgetReason: r.forgetReason,
+            },
+      ),
     }, 201);
   });
 
@@ -402,7 +434,22 @@ export function memoriesRoutes(ctx: Ctx) {
       if (!vec || !isValidVector(vec)) return c.json({ error: "content could not be embedded" }, 422);
       const newVersionId = newId();
       const root = row.root_memory_id ?? row.id;
+      // The is_latest check above ran on the plain connection with an embed() await in between, so a
+      // concurrent edit/supersede may have closed `row` by now (#128). The flip is therefore the
+      // GUARD, not cleanup: it runs FIRST, and 0 affected rows means this edit lost the race — abort
+      // without inserting (the old code inserted unconditionally and left two latest rows forever).
+      // Flip-before-insert is also mandatory for idx_memory_entry_one_latest: unique checks are
+      // per-statement, so inserting the new latest while the old row still holds the flag would trip it.
+      let lostRace = false;
       await sql.begin(async (tx) => {
+        const flipped = await tx`
+          UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now()
+          WHERE id = ${row.id} AND is_latest = true
+          RETURNING id`;
+        if (flipped.length !== 1) {
+          lostRace = true;
+          return;
+        }
         // is_inference carries forward like every other provenance field — a typo fix on a captured
         // memory must not silently reclassify it as user-asserted (review finding).
         // Validity window stamping mirrors the supersede site (SPEC-P1.8): same tx-frozen now(), so
@@ -416,10 +463,14 @@ export function memoriesRoutes(ctx: Ctx) {
              ${row.id}, ${root}, ${Number(row.source_count ?? 1)}, ${tx.json({ updates: [row.id] })},
              ${metadata ? tx.json(metadata) : null}, ${forgetAfter}, ${forgetReason},
              ${toVector(vec)}::vector, ${embedModelName()}, now())`;
-        // AND is_latest = true: the row was read BEFORE this tx (and an embed call sits between);
-        // if a concurrent supersede closed it first, do not overwrite its valid_to (PR #89 review).
-        await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${row.id} AND is_latest = true`;
       });
+      if (lostRace) {
+        const [latest] = await sql`
+          SELECT id FROM memory_entry
+          WHERE org_id = ${ORG_ID} AND (root_memory_id = ${root} OR id = ${root}) AND is_latest = true
+          LIMIT 1`;
+        return c.json({ error: "memory was modified concurrently; re-read the latest version and retry", latestId: latest?.id ?? null }, 409);
+      }
       const created = await loadMemory(sql, newVersionId);
       return c.json({
         memory: normalizeMemory(created),

@@ -1,6 +1,7 @@
 {
   "name": "bellamente",
-  "version": "0.0.1",
+  "version": "0.0.3",
+  "private": true,
   "description": "Bellamente - Memoria Viva for your AI agents. Local-first memory: facts, documents, recall, and profile context.",
   "type": "module",
   "module": "src/index.ts",
@@ -8,10 +9,14 @@
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
     "build": "bun run build.ts",
+    "build:release": "bun run scripts/build-release-assets.ts",
+    "package:gate": "bun run scripts/package-gate.ts",
     "bench": "bun run scripts/eval-e2e.ts",
     "bench:models": "bun run scripts/eval.ts",
     "probe:ann": "bun run scripts/probe-filtered-ann.ts",
-    "test": "bun test",
+    "ci": "bun run scripts/ci.ts",
+    "smoke": "bun run scripts/functional-e2e.ts",
+    "test": "bun run scripts/test-with-coverage-gate.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

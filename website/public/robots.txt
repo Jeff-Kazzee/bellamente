@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://bellamente.vercel.app/sitemap.xml
+Sitemap: https://the-little-ai-company.github.io/bellamente/sitemap.xml

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bellamente"
+version = "0.0.3"
+description = "Bellamente launcher: local-first memory for AI agents."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "The Little AI Company" }]
+keywords = ["ai", "agents", "memory", "local-first", "llm", "proxy"]
+classifiers = [
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://the-little-ai-company.github.io/bellamente/"
+Repository = "https://github.com/The-Little-AI-Company/bellamente"
+Issues = "https://github.com/The-Little-AI-Company/bellamente/issues"
+
+[project.scripts]
+bella = "bellamente.cli:main"
+bellamente = "bellamente.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["bellamente"]

@@ -6,27 +6,17 @@ const downloads = [
   {
     label: "Windows x64",
     detail: "bella-windows-x64.exe",
-    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe",
-  },
-  {
-    label: "macOS Apple silicon",
-    detail: "bella-darwin-arm64",
-    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-arm64",
-  },
-  {
-    label: "macOS Intel",
-    detail: "bella-darwin-x64",
-    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-darwin-x64",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe",
   },
   {
     label: "Linux x64",
     detail: "bella-linux-x64",
-    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-linux-x64",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-linux-x64",
   },
   {
     label: "SHA256 checksums",
     detail: "SHA256SUMS.txt",
-    href: "https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/SHA256SUMS.txt",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/SHA256SUMS.txt",
   },
 ];
 ---
@@ -38,12 +28,12 @@ const downloads = [
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Changelog — Bellamente</title>
     <meta name="description" content="What shipped in Bellamente, with direct downloads for each public release." />
-    <link rel="canonical" href="https://bellamente.vercel.app/changelog/" />
+    <link rel="canonical" href="https://the-little-ai-company.github.io/bellamente/changelog/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Bellamente" />
     <meta property="og:title" content="Changelog - Bellamente" />
     <meta property="og:description" content="What shipped in Bellamente, with direct downloads for each public release." />
-    <meta property="og:url" content="https://bellamente.vercel.app/changelog/" />
+    <meta property="og:url" content="https://the-little-ai-company.github.io/bellamente/changelog/" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Changelog - Bellamente" />
     <meta name="twitter:description" content="What shipped in Bellamente, with direct downloads for each public release." />
@@ -52,7 +42,7 @@ const downloads = [
       "@type": "WebPage",
       "name": "Changelog - Bellamente",
       "description": "What shipped in Bellamente, with direct downloads for each public release.",
-      "url": "https://bellamente.vercel.app/changelog/",
+      "url": "https://the-little-ai-company.github.io/bellamente/changelog/",
       "publisher": { "@type": "Organization", "name": "The Little AI Co" },
       "about": { "@type": "SoftwareApplication", "name": "Bellamente", "applicationCategory": "DeveloperApplication" }
     })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -71,12 +61,12 @@ const downloads = [
       <div class="wrap">
         <!-- section: nav -->
         <header class="db-nav">
-          <a class="db-logo" href="/">Bella<span>mente</span></a>
+          <a class="db-logo" href="/bellamente/">Bella<span>mente</span></a>
           <nav aria-label="primary">
-            <a href="/">Home</a>
-            <a href="/roadmap">Roadmap</a>
-            <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe">Download</a>
+            <a href="/bellamente/">Home</a>
+            <a href="/bellamente/roadmap">Roadmap</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe">Download</a>
           </nav>
         </header>
 
@@ -92,8 +82,33 @@ const downloads = [
           </div>
         </section>
 
-        <!-- section: v0.0.1 -->
+        <!-- section: releases -->
         <section class="db-pillars">
+          <div class="db-row">
+            <span class="k">2026-07-06</span>
+            <div>
+              <h3>Bellamente v0.0.3</h3>
+              <p>Hardening and honesty: content-free error capture with redaction, a durable error store,
+                 and an Errors view in the dashboard · audit fixes — silently skipped document chunks now
+                 surface, a corrupted embedder pin fails loud instead of re-guessing, and concurrent memory
+                 edits can no longer leave two "latest" versions (repair migration + a database-level
+                 one-latest-per-chain backstop) · dashboard auth gating, chunker-hang, profile-validation,
+                 and fail-closed coverage-gate fixes · public downloads stay tested Windows x64 and
+                 Linux x64 only (binaries for untested platforms were withdrawn from v0.0.2) · the roadmap
+                 now reflects everything already shipped.</p>
+            </div>
+            <div><span class="proof">tag v0.0.3 · target prod</span></div>
+          </div>
+          <div class="db-row">
+            <span class="k">2026-07-05</span>
+            <div>
+              <h3>Bellamente v0.0.2</h3>
+              <p>Release train polish: npm and PyPI launchers, GitHub Actions release gate, GitHub Pages deploy,
+                 updated org URLs, and a full-functionality smoke test that proves the real embedder, real database
+                 boot path, buffered and streamed memory loops, export/import, temporal recall, and hard-delete scope.</p>
+            </div>
+            <div><span class="proof">tag v0.0.2 · target prod</span></div>
+          </div>
           <div class="db-row">
             <span class="k">2026-07-02</span>
             <div>
@@ -108,10 +123,10 @@ const downloads = [
         <!-- section: direct downloads -->
         <section class="db-proxy">
           <div>
-            <h2>Download v0.0.1</h2>
-            <p>Choose the binary for your machine. The checksum file is published with the same release.</p>
+            <h2>Download v0.0.3</h2>
+            <p>Install with npm or pipx, or choose a supported Windows x64 or Linux x64 binary. The checksum file is published with the same release.</p>
           </div>
-          <div class="db-downloads stacked" aria-label="Direct downloads for Bellamente v0.0.1">
+          <div class="db-downloads stacked" aria-label="Direct downloads for Bellamente v0.0.3">
             {downloads.map((download) => (
               <a class="db-download" href={download.href}>
                 <strong>{download.label}</strong>
@@ -126,7 +141,7 @@ const downloads = [
           <span>© 2026 The Little AI Co · BELLAMENTE</span>
           <span class="fine">
             full release notes ·
-            <a href="https://github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1">github.com/Jeff-Kazzee/bellamente/releases/tag/v0.0.1</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3">github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3</a>
           </span>
         </footer>
       </div>

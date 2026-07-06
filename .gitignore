@@ -1,5 +1,6 @@
 node_modules/
 dist/
+coverage/
 bella
 bella.exe
 bella-probe-*
@@ -10,6 +11,7 @@ pgdata/
 *.tmp
 .DS_Store
 .vercel/
+.release/
 
 # Internal/semi-proprietary design docs + reverse-engineering provenance.
 # Kept in the working folder, NOT published to GitHub.

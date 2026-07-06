@@ -1,5 +1,5 @@
 ---
-// Bellamente roadmap — the backlog, public. Loud about being early: v0.0.1 is usable, not complete.
+// Bellamente roadmap — the backlog, public. Loud about being early: v0.0.3 is usable, not complete.
 import "../styles/machina.css";
 ---
 
@@ -9,22 +9,22 @@ import "../styles/machina.css";
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Roadmap — Bellamente</title>
-    <meta name="description" content="Where Bellamente is going. v0.0.1 is an early release — usable, local-first, and not at all complete." />
-    <link rel="canonical" href="https://bellamente.vercel.app/roadmap/" />
+    <meta name="description" content="Where Bellamente is going. v0.0.3 is an early release — usable, local-first, and not at all complete." />
+    <link rel="canonical" href="https://the-little-ai-company.github.io/bellamente/roadmap/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Bellamente" />
     <meta property="og:title" content="Roadmap - Bellamente" />
-    <meta property="og:description" content="Where Bellamente is going. v0.0.1 is usable, local-first, honest, and not complete." />
-    <meta property="og:url" content="https://bellamente.vercel.app/roadmap/" />
+    <meta property="og:description" content="Where Bellamente is going. v0.0.3 is usable, local-first, honest, and not complete." />
+    <meta property="og:url" content="https://the-little-ai-company.github.io/bellamente/roadmap/" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Roadmap - Bellamente" />
-    <meta name="twitter:description" content="Where Bellamente is going. v0.0.1 is usable, local-first, honest, and not complete." />
+    <meta name="twitter:description" content="Where Bellamente is going. v0.0.3 is usable, local-first, honest, and not complete." />
     <script type="application/ld+json" set:html={JSON.stringify({
       "@context": "https://schema.org",
       "@type": "WebPage",
       "name": "Roadmap - Bellamente",
-      "description": "Where Bellamente is going. v0.0.1 is usable, local-first, honest, and not complete.",
-      "url": "https://bellamente.vercel.app/roadmap/",
+      "description": "Where Bellamente is going. v0.0.3 is usable, local-first, honest, and not complete.",
+      "url": "https://the-little-ai-company.github.io/bellamente/roadmap/",
       "publisher": { "@type": "Organization", "name": "The Little AI Co" },
       "about": { "@type": "SoftwareApplication", "name": "Bellamente", "applicationCategory": "DeveloperApplication" }
     })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -43,13 +43,13 @@ import "../styles/machina.css";
       <div class="wrap">
         <!-- section: nav -->
         <header class="db-nav">
-          <a class="db-logo" href="/">Bella<span>mente</span></a>
+          <a class="db-logo" href="/bellamente/">Bella<span>mente</span></a>
           <nav aria-label="primary">
-            <a href="/">Home</a>
-            <a href="/docs">Docs</a>
-            <a href="/changelog">Changelog</a>
-            <a href="https://github.com/Jeff-Kazzee/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/Jeff-Kazzee/bellamente/releases/download/v0.0.1/bella-windows-x64.exe">Download</a>
+            <a href="/bellamente/">Home</a>
+            <a href="/bellamente/docs">Docs</a>
+            <a href="/bellamente/changelog">Changelog</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe">Download</a>
           </nav>
         </header>
 
@@ -57,7 +57,7 @@ import "../styles/machina.css";
         <section class="db-hero">
           <p class="db-kicker">$ cat ROADMAP.md</p>
           <h1>Roadmap.
-            <span class="thin">v0.0.1 is an early release. It is usable and it is honest — and it is not at all complete. This page is the actual backlog.</span>
+            <span class="thin">v0.0.3 is an early release. It is usable and it is honest — and it is not at all complete. This page is the actual backlog.</span>
           </h1>
           <div class="rm-banner" role="note">
             <b>Early software.</b> The memory core, the proxy, the traces, and the dashboard work today and
@@ -67,19 +67,22 @@ import "../styles/machina.css";
           <div class="rm-banner" role="note">
             <b>Roadmaps move.</b> This sequence is a promise of direction, not a rigid queue: items can
             ship out of order, and multiple items may land together when one implementation clears several
-            gaps. When that happens, shipped work moves from this page to the <a href="/changelog">changelog</a>.
+            gaps. When that happens, shipped work moves from this page to the <a href="/bellamente/changelog">changelog</a>.
           </div>
         </section>
 
         <!-- section: shipped -->
         <section class="db-pillars">
           <div class="db-row">
-            <span class="k">NOW · v0.0.1</span>
+            <span class="k">NOW · v0.0.3</span>
             <div>
               <h3>What works today</h3>
-              <p>Memory lifecycle with versioned corrections and reversible forgetting · semantic +
-                 hybrid document search · the drop-in proxy with memory grounding on buffered AND
-                 streamed chats · auto-capture with local LLM distillation · full recall traces ·
+              <p>Memory lifecycle with versioned corrections and reversible forgetting · memory recall
+                 that is semantic + full-text (exact names and rare codes), recency-weighted, with a
+                 diversity pass · hybrid document search · time-aware facts ("as of" recall) ·
+                 export/import so your memory is a file you can take anywhere · the drop-in proxy with
+                 memory grounding on buffered AND streamed chats · auto-capture with local LLM
+                 distillation · full recall traces ·
                  the inspect dashboard · a route-level retrieval benchmark with published numbers · one binary, embedded Postgres+pgvector, local embeddings,
                  loopback by default.</p>
             </div>
@@ -89,11 +92,8 @@ import "../styles/machina.css";
             <span class="k">NEXT</span>
             <div>
               <h3>The trust loop, finished</h3>
-              <p>Full-text search over memories (exact names and rare codes, not just semantic) ·
-                 an MCP server (<span class="mono">bella mcp</span>) so agent tools plug in directly ·
-                 recency-aware ranking ·
-                 richer trust views (why a capture was rejected, version diffs, provenance trees) ·
-                 export/import so your memory is a file you can take anywhere.</p>
+              <p>An MCP server (<span class="mono">bella mcp</span>) so agent tools plug in directly ·
+                 richer trust views (why a capture was rejected, version diffs, provenance trees).</p>
             </div>
             <div><span class="proof">in progress on the dev branch</span></div>
           </div>
@@ -140,7 +140,7 @@ import "../styles/machina.css";
           <span>© 2026 The Little AI Co · BELLAMENTE</span>
           <span class="fine">
             follow progress or file an issue ·
-            <a href="https://github.com/Jeff-Kazzee/bellamente">github.com/Jeff-Kazzee/bellamente</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente">github.com/The-Little-AI-Company/bellamente</a>
           </span>
         </footer>
       </div>

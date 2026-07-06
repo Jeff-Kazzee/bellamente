@@ -5,6 +5,7 @@ import type { Embed } from "./embed";
 import { newId, toVector, ORG_ID } from "./util";
 import { DEFAULT_SIMILARITY_THRESHOLD } from "./embed-common";
 import { recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
+import { capture } from "./observe";
 import { brandEnv } from "./env";
 import { mmrRerank, parseVector, MMR_POOL_MULTIPLIER } from "./rerank";
 
@@ -358,6 +359,9 @@ export function searchRoutes(ctx: Ctx) {
         request: requestShape,
         metadata: { error: e instanceof Error ? e.message : String(e) },
       });
+      // Observability seam: seed category + traceId so app.onError (which catches this rethrow) reuses
+      // them instead of re-capturing. Redacted + content-free; the recall_trace above is unchanged.
+      capture(e, { category: "search", code: "SEARCH_FAILED", traceId });
       c.header("x-bella-trace-id", traceId);
       throw e;
     }
