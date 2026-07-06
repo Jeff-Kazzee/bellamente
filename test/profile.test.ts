@@ -164,3 +164,18 @@ test("PUT /profile rejects a non-array static/dynamic with 400 instead of persis
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("PUT /profile with a top-level null/non-object body degrades to 200 (not a 500 crash) (#124 hardening)", async () => {
+  const { app, close } = await makeApp();
+  try {
+    // Literal JSON `null` used to reach `body.static` on null -> TypeError -> 500. Non-object bodies
+    // must degrade like an unparseable body (200 + empty), never crash.
+    for (const raw of ["null", "42", '"hello"', "[1,2]"]) {
+      const res = await app.request("/profile", { method: "PUT", headers: { "content-type": "application/json" }, body: raw });
+      expect(res.status).toBe(200);
+    }
+    expect(await (await app.request("/profile")).json()).toEqual({}); // nothing meaningful persisted, no crash
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);

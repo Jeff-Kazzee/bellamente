@@ -53,7 +53,10 @@ export function profileRoutes({ sql }: Ctx) {
 
   app.put("/", async (c) => {
     const tag = c.req.query("containerTag") ?? DEFAULT_CONTAINER_TAG;
-    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const raw: unknown = await c.req.json().catch(() => ({}));
+    // A top-level non-object body (esp. literal JSON `null`) would crash `body.static` below; coerce it
+    // to {} so it degrades like an unparseable body (200 + empty), never a 500 (#124 review follow-up).
+    const body = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
     // Validate before persisting: static/dynamic must be string[] (or absent). A non-array value would
     // make formatProfile throw on every later completion for this tag (#124) — reject it at the door.
     const okField = (v: unknown) => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === "string"));
