@@ -33,6 +33,11 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 - Bug reporting (`bella report`): assembles a **content-free** GitHub bug report (redacted
   diagnostics + errors grouped by fingerprint — codes and counts, never messages/stacks/content) and
   prints a prefilled issue link. The binary sends nothing; you review and submit it yourself.
+- Credential gate on every write: known secret formats AND provider-agnostic **labeled** values (`key = …`,
+  `the password is …`) are redacted from memory content + metadata before storage — manual, MCP, batch,
+  corrections, and auto-capture (whose local distiller is also told to drop secrets). Honest limits: not a
+  general scanner (a bare unlabeled secret can slip; no entropy heuristics — they'd shred SHAs/UUIDs);
+  `allowSecrets:true` stores verbatim.
 
 ## Next — the trust loop, finished
 

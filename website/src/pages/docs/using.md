@@ -33,6 +33,7 @@ This machine runs Bellamente, a local memory service, at http://127.0.0.1:8080 (
 - To REMEMBER a durable fact: POST /memories with JSON {"memories":[{"content":"<the fact>"}]}
 - To RECALL: POST /search with JSON {"q":"<what you need to know>"} — results include content and a similarity score.
 - Recall before starting work on a topic; remember stable facts (preferences, decisions, environment details) when you learn them.
+- NEVER store secrets — API keys, passwords, tokens, private keys, or credentials. Use your judgment; if a fact contains a secret, leave the secret out.
 - Every response returns an x-bella-trace-id header; the human can audit any recall at http://127.0.0.1:8080/.
 ```
 
@@ -88,6 +89,34 @@ After each answered chat turn, Bellamente conservatively captures durable first-
 - Every capture is traced and reversible; captured memories are marked `is_inference` so they are
   forever distinguishable from things you stored deliberately.
 - Kill switches: `BELLA_PROXY_CAPTURE=0` (capture off), `BELLA_CAPTURE_DISTILL=0` (heuristics only).
+
+## Secrets are never stored
+
+Bellamente is used by intelligent agents, so the **first line of defense is the agent itself**: the MCP tool
+descriptions and the HTTP agent-instructions above tell the calling agent to use its judgment and never store
+secrets. That's where the real intelligence lives — the agent understands what's sensitive.
+
+As a **deterministic backstop** for when an agent slips, every memory write — manual `POST /memories`, MCP
+`memory_write`, batch, corrections, and auto-capture — also passes through a credential gate before it is
+embedded or stored. Detected credentials are stripped from the memory **content and its structured metadata**
+and replaced with a `[redacted: <kind>]` marker; the raw value never reaches the store. The gate works two ways:
+
+- **Known formats** (zero false positives): private keys (PEM blocks), AWS access keys, GitHub / GitLab tokens,
+  Slack tokens, Stripe live keys, npm / HuggingFace tokens, and OpenAI / Anthropic / Google API keys.
+- **Labeled values (provider-agnostic)**: any value explicitly labeled as a secret — `api key = …`, `token: …`,
+  `AUTH_TOKEN=…`, `the password is …` — is redacted **whatever the provider**, because it keys on the label, not
+  the format. (The value must look like a token, so English like "the password is required" is left alone.)
+
+The surrounding context survives (`"prod key is [redacted: OpenAI API key], in vault X"`), and the API/MCP
+response reports what was redacted. On the auto-capture path, the local distillation model is additionally asked
+to drop credentials outright.
+
+**Honest limits — this is deliberate.** A secret is defined by intent, not shape, so no deterministic gate
+catches *everything*: a bare, unlabeled random token, or a password that is an ordinary word, can slip through.
+We deliberately do **not** use high-entropy heuristics — they would shred the git SHAs, UUIDs, and base64 blobs
+you legitimately store, and worst of all on auto-capture, which writes silently. The gate is tuned to **not**
+eat real developer memories: documented placeholders like AWS `AKIAIOSFODNN7EXAMPLE`, `sk_test_` keys, JWTs, and
+git SHAs are left alone. Storing a real credential deliberately? Send `allowSecrets: true` on that write.
 
 ## The dashboard
 
