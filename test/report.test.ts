@@ -136,6 +136,47 @@ test("buildIssue: content-free — a stored sampleMessage/sampleTrace is NEVER w
   expect(decodeURIComponent(url)).not.toContain(SECRET);
 });
 
+test("buildIssue: a FULLY-poisoned group (secret in every field) surfaces only format-guarded values — nothing leaks", () => {
+  // The report layer's OWN guarantee, independent of the store: even if a tampered/foreign row carried a secret
+  // in every column, buildIssue renders only whitelisted, shape-checked fields. Secret is content-shaped (has a
+  // space) so the code/category/severity format-guard collapses it; fingerprint/sampleMessage/sampleTrace are
+  // never emitted at all; count (non-number) -> 0; timestamps (non-date) -> "unknown".
+  const S = "leaked api key sk-live-abc123XYZ";
+  const poisoned = {
+    fingerprint: `fp ${S}`,
+    code: `SEARCH_FAILED ${S}`,
+    severity: `error ${S}`,
+    category: `search ${S}`,
+    count: `9 ${S}`,
+    firstSeen: `NOPE_${S}`,
+    lastSeen: `NOPE2_${S}`,
+    sampleMessage: `raw error: ${S}`,
+    sampleTrace: S,
+  } as unknown as ErrorGroup;
+
+  const { title, body, url } = buildIssue(report({ errorGroups: [poisoned] }));
+  const hay = `${title}\n${body}\n${decodeURIComponent(url)}`;
+  expect(hay).not.toContain(S); // the secret appears in NO rendered field
+  expect(hay).not.toContain("sk-live"); // and not even a fragment of it
+
+  // Positive control: the report still rendered a valid, guarded error line (not a silent empty pass).
+  expect(body).toContain(VERSION);
+  expect(body).toContain("UNKNOWN"); // poisoned code collapsed to the safe fallback token
+  expect(body).toContain(messageForCode("UNKNOWN")); // static label for the fallback
+  expect(body).toContain("unknown"); // poisoned timestamps collapsed
+});
+
+test("report source reads ONLY error_event + diagnostics — never memories or recall_trace (default-path isolation)", () => {
+  // The default path must never touch the raw-content stores. This is a structural regression guard: when the
+  // --include-conversations opt-in ships it will import ./inspect, and THIS test will fail on purpose — a signal
+  // to re-prove the privacy story for that path, not to silently loosen it.
+  const src = readFileSync(join(import.meta.dir, "..", "src", "report.ts"), "utf8");
+  expect(src).not.toContain("recall_trace");
+  expect(src).not.toContain("./inspect");
+  expect(src).not.toContain("./memories");
+  expect(src).not.toContain("memory_chain");
+});
+
 test("buildIssue: long error lists are truncated to keep the URL under GitHub's cap; full body is untruncated", () => {
   const many = Array.from({ length: 400 }, (_, i) => group({ fingerprint: `fp_${i}`, code: `CODE_${i}` }));
   const { body, url } = buildIssue(report({ errorGroups: many }));
@@ -248,7 +289,7 @@ test("runReport: prints the summary + prefilled URL and returns 0 on the happy p
   const code = await runReport({
     collectDiagnostics: () => sampleDiag(),
     fetchReportData: async () => ({ db: { mode: "embedded", ok: true, pgvector: true }, errorGroups: [group()], errorsNote: null }),
-    homedir: () => "/nonexistent/home",
+    sensitiveValues: () => ["/nonexistent/home"],
     log: (s) => out.push(s),
     error: (s) => errs.push(s),
   });
@@ -267,7 +308,7 @@ test("runReport: FAILS CLOSED — if a home-dir path slips into the assembled re
   const code = await runReport({
     collectDiagnostics: () => sampleDiag({ model: `${HOMEPATH}\\model.onnx` }),
     fetchReportData: async () => ({ db: { mode: "embedded", ok: true, pgvector: true }, errorGroups: [], errorsNote: null }),
-    homedir: () => HOMEPATH,
+    sensitiveValues: () => [HOMEPATH],
     log: (s) => out.push(s),
     error: (s) => errs.push(s),
   });
@@ -373,12 +414,26 @@ test("fetchReportData: embedded DB held by another process (DB_LOCK_ERR) -> hone
   expect(r.errorsNote).toMatch(/holds the database/i);
 });
 
-test("fetchReportData: an unexpected DB error degrades to a generic note (never throws to the caller)", async () => {
-  const r = await fetchReportData(
-    fetchDeps({ probeHealth: async () => null, openEmbeddedAndRead: async () => { throw new Error("disk exploded"); } }),
-  );
+test("fetchReportData: an unexpected DB error degrades to a STATIC note — the exception text (a connection string) never reaches the body, only stderr", async () => {
+  // A Postgres failure message routinely carries the connection string. It must NOT be interpolated into the
+  // note (which flows into the submitted body); it goes to stderr instead.
+  const secretMsg = "connection to server postgres://admin:hunter2@db.internal:5432/prod failed: timeout";
+  const priorErr = console.error;
+  const errLines: string[] = [];
+  console.error = (...a: unknown[]) => { errLines.push(a.map(String).join(" ")); };
+  let r: Awaited<ReturnType<typeof fetchReportData>>;
+  try {
+    r = await fetchReportData(
+      fetchDeps({ probeHealth: async () => null, openEmbeddedAndRead: async () => { throw new Error(secretMsg); } }),
+    );
+  } finally {
+    console.error = priorErr;
+  }
   expect(r.errorGroups).toHaveLength(0);
   expect(r.errorsNote).toMatch(/unavailable/i);
+  expect(r.errorsNote).not.toContain("hunter2"); // the password / connection string is NOT in the note...
+  expect(r.errorsNote).not.toContain("db.internal");
+  expect(errLines.join("\n")).toContain("hunter2"); // ...the detail went to stderr instead
 });
 
 // --- version drift guard ---------------------------------------------------------------------------------

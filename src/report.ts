@@ -10,8 +10,9 @@
 // (code/category/severity/tier/model/version), a number/size, an ISO timestamp we generate, or a static
 // messageForCode() label — never a stored error message/stack/requestShape, never an absolute path (storage
 // dirs are reduced to name+size), never the DATABASE_URL (only a mode enum). test/report.test.ts proves this
-// with real home-dir/secret sentinels, and runReport adds a fail-CLOSED tripwire that aborts (never prints) if a
-// home-dir path ever slips into the assembled report.
+// with real home-dir/secret sentinels (and a fully-poisoned-group test), and runReport adds a fail-CLOSED
+// tripwire that aborts (never prints) if any concrete sensitive value this process holds — the home dir, an
+// absolute storage path, DATABASE_URL, or the API key — ever slips into the assembled report.
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
@@ -33,6 +34,20 @@ const TRUNC_NOTE =
 
 const MB = 1024 * 1024;
 const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+// code/category/severity are developer constants (SCREAMING_SNAKE codes, short lowercase categories/severities);
+// firstSeen/lastSeen are ISO timestamps we generate from DB min/max; count is a number. buildIssue renders ONLY
+// values matching those shapes, so even a hostile/poisoned group (a future code path, or a tampered store row)
+// collapses to a safe fallback instead of surfacing untrusted text. Positive-FORMAT allowlists on known-shaped
+// fields — deliberately NOT a secret-pattern scan (which would be fragile + false-positive).
+// Matches the ACTUAL closed value set (audit): codes are SCREAMING_SNAKE, categories/severities short lowercase
+// words — all letter-led, `[A-Za-z_]` only. This rejects spaces, punctuation, paths, and dash/dot-bearing
+// secrets (e.g. `sk-...`), collapsing anything content-shaped to the fallback. It can't distinguish a bare
+// alphanumeric lookalike, but that only matters for a DB the operator chose to trust (foreign DATABASE_URL).
+const SAFE_TOKEN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const safeToken = (v: unknown, fallback: string): string => (typeof v === "string" && SAFE_TOKEN.test(v) ? v : fallback);
+const safeCount = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+const safeTimestamp = (v: unknown): string => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : "unknown");
 
 export type Diagnostics = {
   version: string;
@@ -64,7 +79,10 @@ export type IssuePayload = { title: string; body: string; url: string };
 export type ReportDeps = {
   collectDiagnostics: () => Diagnostics;
   fetchReportData: () => Promise<{ db: DbStatus; errorGroups: ErrorGroup[]; errorsNote: string | null }>;
-  homedir: () => string;
+  // Concrete sensitive values THIS process actually holds (home dir, absolute storage paths, DATABASE_URL,
+  // API key). The tripwire aborts if ANY appears in the assembled report. Concrete values, never patterns —
+  // deterministic, zero false positives (the report never contains them by construction; a hit = a regression).
+  sensitiveValues: () => string[];
   log: (s: string) => void;
   error: (s: string) => void;
 };
@@ -149,11 +167,15 @@ export function buildIssue(data: ReportData): IssuePayload {
     lines.push("_No errors recorded._");
   } else {
     for (const g of errorGroups) {
-      // WHITELIST: developer constants + generated fields only. messageForCode(code) is a static per-code label
-      // (never interpolated user text); sampleMessage/sampleTrace/requestShape are deliberately NOT emitted.
+      // WHITELIST + FORMAT-GUARD every rendered field. messageForCode(code) is a static per-code label (never
+      // interpolated user text); fingerprint/sampleMessage/sampleTrace/requestShape are deliberately NOT emitted;
+      // code/category/severity/timestamps/count are shape-checked so even a foreign or tampered store row cannot
+      // surface untrusted text (audit: our own capture funnel only ever writes constants, but the external
+      // DATABASE_URL path reads a DB we did not populate).
+      const code = safeToken(g.code, "UNKNOWN");
       lines.push(
-        `- \`${g.code}\` (${g.category}/${g.severity}) ×${g.count} — ${messageForCode(g.code)} ` +
-          `— first ${g.firstSeen}, last ${g.lastSeen}`,
+        `- \`${code}\` (${safeToken(g.category, "unknown")}/${safeToken(g.severity, "unknown")}) ` +
+          `×${safeCount(g.count)} — ${messageForCode(code)} — first ${safeTimestamp(g.firstSeen)}, last ${safeTimestamp(g.lastSeen)}`,
       );
     }
   }
@@ -298,10 +320,14 @@ export async function fetchReportData(
       throw e;
     }
   } catch (e: any) {
+    // NEVER interpolate the exception text into the report body: a Postgres/connection error message routinely
+    // carries the host, port, user — sometimes the whole connection string, i.e. the DATABASE_URL this design
+    // refuses to emit. Keep the note static; log the detail to STDERR only (never into what gets submitted).
+    console.error(`[report] could not read error data: ${e?.message ?? e}`);
     return {
       db: { mode: databaseUrl ? "external" : "embedded", ok: false, pgvector: false },
       errorGroups: [],
-      errorsNote: `Error data unavailable (${e?.message ?? e}).`,
+      errorsNote: "Error data unavailable while reading the local database (details on stderr).",
     };
   }
 }
@@ -314,10 +340,25 @@ function safeDecode(s: string): string {
   }
 }
 
+// The concrete values that must never appear in a submitted report. Read live from env + resolved paths so the
+// tripwire reflects THIS process. All deterministic — the report never contains them by construction, so a match
+// is a real regression, not a false positive.
+function defaultSensitiveValues(): string[] {
+  const candidates = [
+    os.homedir(),
+    ...Object.values(storageDirs()),
+    process.env.DATABASE_URL,
+    process.env.BELLA_API_KEY,
+    brandEnv("HOME"),
+    brandEnv("DATA_DIR"),
+  ];
+  return candidates.filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
 const defaultDeps: ReportDeps = {
   collectDiagnostics,
   fetchReportData,
-  homedir: () => os.homedir(),
+  sensitiveValues: defaultSensitiveValues,
   log: (s) => console.log(s),
   error: (s) => console.error(s),
 };
@@ -330,13 +371,15 @@ export async function runReport(overrides: Partial<ReportDeps> = {}): Promise<nu
   const issue = buildIssue({ diagnostics, db, errorGroups, errorsNote });
 
   // Fail-CLOSED privacy tripwire. The report is content-free by construction; this is a loud last-resort guard
-  // so a future collectDiagnostics regression aborts (nonzero, nothing printed) instead of leaking a home-dir
-  // path into a public issue. Checks the full home path (not the bare username, which could coincidence-match).
-  const home = deps.homedir();
-  if (home && (issue.body.includes(home) || safeDecode(issue.url).includes(home))) {
+  // so a future regression aborts (nonzero, nothing printed) instead of leaking. It checks the assembled body
+  // AND the decoded URL (the URL is percent-encoded) against the concrete sensitive values this process holds —
+  // never a secret-pattern regex (fragile, false-positive aborts). The offending value is NEVER echoed.
+  const decodedUrl = safeDecode(issue.url);
+  const leaked = deps.sensitiveValues().some((v) => issue.body.includes(v) || decodedUrl.includes(v));
+  if (leaked) {
     deps.error(
-      "bella report: aborting — the assembled report contained a filesystem path (privacy guard). " +
-        "Nothing was shown. Please open an issue that this happened (without the path).",
+      "bella report: aborting — the assembled report contained a sensitive value (filesystem path, database " +
+        "URL, or API key). Nothing was shown. This is a bug; please report that it happened (without the value).",
     );
     return 1;
   }

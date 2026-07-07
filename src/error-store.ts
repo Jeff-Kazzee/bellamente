@@ -25,11 +25,12 @@ function parseLimit(value: string | null | undefined): number {
   return Math.min(Math.max(Math.round(n), 1), 200);
 }
 
-// message_redacted holds BellaError.userFacing, which is content-free by the SAME static-message contract the
-// 500 response body already relies on (src/index.ts app.onError). We clip it at the store boundary as
-// defense-in-depth: if that contract is ever violated (an interpolated userFacing), the slip is bounded, not
-// stored+served in full. This is a bound, NOT a guarantee — a short secret in userFacing would still leak to
-// the requester today via the 500 body. Mirrors inspect.ts clippedScalar.
+// message_redacted holds the STATIC per-code label from messageForCode(code) (errors.ts CODE_MESSAGES): the
+// boot capture sink (src/observe.ts) passes THAT — never BellaError.userFacing (which can be interpolated) and
+// never the raw Error.message. That static-label sink IS the content-free guarantee. We ALSO clip here as
+// defense-in-depth: if a future second caller of persistErrorEvent ever passed raw text, the slip is bounded to
+// 200 chars, not stored in full. The clip is a bound, not the guarantee. Mirrors inspect.ts clippedScalar.
+// (Do NOT "fix" this to store userFacing — that field is free-form and would reintroduce a content channel.)
 const MESSAGE_LIMIT = 200;
 function clippedMessage(value: string | undefined | null): string | null {
   if (value == null) return null;
