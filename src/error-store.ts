@@ -98,7 +98,19 @@ function toIso(v: unknown): string {
 
 // A fingerprint group: "this failure happened N times". Counts are over the retained window (append-only +
 // prune-oldest), which is what triage wants — recent recurrence, not all-time history.
-function normalizeGroup(row: any) {
+export type ErrorGroup = {
+  fingerprint: string;
+  code: string;
+  severity: string;
+  category: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  sampleMessage: string | null;
+  sampleTrace: string | null;
+};
+
+function normalizeGroup(row: any): ErrorGroup {
   return {
     fingerprint: row.fingerprint,
     code: row.code,
@@ -129,6 +141,24 @@ function normalizeEvent(row: any) {
   };
 }
 
+// Read the fingerprint-grouped error summary (the GET /errors payload). Extracted so `bella report` reads it
+// directly (offline, opening the DB like `bella doctor` does) with the SAME query the route serves — one
+// source, no drift. `limit` is clamped exactly like the route's ?limit=.
+export async function readErrorGroups(sql: DB, limit = 50): Promise<ErrorGroup[]> {
+  const n = parseLimit(String(limit));
+  const rows = await sql`
+    SELECT fingerprint, code, severity, category,
+           sum(count)::int AS count, min(ts) AS first_seen, max(ts) AS last_seen,
+           (array_agg(message_redacted ORDER BY ts DESC))[1] AS sample_message,
+           (array_agg(trace_id ORDER BY ts DESC))[1] AS sample_trace
+    FROM error_event
+    WHERE org_id = ${ORG_ID}
+    GROUP BY fingerprint, code, severity, category
+    ORDER BY max(ts) DESC
+    LIMIT ${n}`;
+  return rows.map(normalizeGroup);
+}
+
 // Read-only errors API (bearer-gated at the mount, like /inspect). GET /errors -> fingerprint groups;
 // GET /errors?fingerprint=... -> that group's recent raw occurrences.
 export function errorsRoutes({ sql }: Ctx) {
@@ -145,17 +175,7 @@ export function errorsRoutes({ sql }: Ctx) {
         LIMIT ${limit}`;
       return c.json({ fingerprint, occurrences: rows.map(normalizeEvent) });
     }
-    const rows = await sql`
-      SELECT fingerprint, code, severity, category,
-             sum(count)::int AS count, min(ts) AS first_seen, max(ts) AS last_seen,
-             (array_agg(message_redacted ORDER BY ts DESC))[1] AS sample_message,
-             (array_agg(trace_id ORDER BY ts DESC))[1] AS sample_trace
-      FROM error_event
-      WHERE org_id = ${ORG_ID}
-      GROUP BY fingerprint, code, severity, category
-      ORDER BY max(ts) DESC
-      LIMIT ${limit}`;
-    return c.json({ errors: rows.map(normalizeGroup) });
+    return c.json({ errors: await readErrorGroups(sql, limit) });
   });
 
   return app;

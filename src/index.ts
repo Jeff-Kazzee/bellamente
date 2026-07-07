@@ -23,12 +23,18 @@ const PORT = Number(process.env.PORT ?? 8080);
 // explicitly with BELLA_HOST=0.0.0.0 (or a specific interface) — doing so auto-enables auth (src/auth.ts).
 const HOST = brandEnv("HOST")?.trim() || "127.0.0.1";
 
-// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella mcp` runs
-// a stdio MCP server (no HTTP server); `bella serve` (or no subcommand) boots the server — `serve` is
-// accepted explicitly so command examples read naturally, but the default path is identical.
+// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella report` assembles a
+// redacted, content-free GitHub bug report and exits (no server, sends nothing — prints a prefilled issue link);
+// `bella mcp` runs a stdio MCP server (no HTTP server); `bella serve` (or no subcommand) boots the server —
+// `serve` is accepted explicitly so command examples read naturally, but the default path is identical.
 if (process.argv[2] === "doctor") {
   const { runDoctor } = await import("./doctor");
   process.exit(await runDoctor());
+}
+
+if (process.argv[2] === "report") {
+  const { runReport } = await import("./report");
+  process.exit(await runReport());
 }
 
 const isMcp = process.argv[2] === "mcp";

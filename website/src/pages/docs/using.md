@@ -101,3 +101,24 @@ Open `http://127.0.0.1:8080/` in a browser. Three views:
 
 Nothing is silently overwritten: edits version, forgetting is auditable, hard delete says what it
 takes with it.
+
+## Report a bug — `bella report`
+
+When something breaks, `bella report` assembles a bug report for you — but it opens nothing and
+sends nothing. It prints a **content-free** summary and a prefilled GitHub `issues/new` link; you
+review exactly what will be shared, then click submit on GitHub yourself. Consistent with "never
+phones home", the binary transmits nothing.
+
+```sh
+bella report
+```
+
+What the report contains: version, OS, the embedder tier/model, disk + storage **sizes**, and your
+recent errors grouped by fingerprint — **codes and counts only**, never messages, stacks, file
+contents, or conversation text. Storage locations are reduced to directory names + sizes (never the
+absolute path, which would carry your username), and the database is shown as a mode
+(`embedded`/`external`) — never the connection URL.
+
+If `bella mcp` or another process is holding the local database, run `bella report` with it stopped
+to include the full error list; a running `bella serve` on localhost is read through its
+content-free errors endpoint automatically.
