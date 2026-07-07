@@ -79,7 +79,7 @@ Now in v0.0.3:
 - Retrieval eval harness with published numbers.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
 - Native MCP server (`bella mcp`) for MCP-native agents.
-- Credential gate on every memory write: known secret formats AND provider-agnostic labeled values (`key=…`, `the password is …`) are redacted from content + metadata before storage; not a general scanner (no entropy heuristics); `allowSecrets:true` overrides.
+- Secrets: the calling agent is instructed (MCP tool descriptions + agent guidance) to use its judgment and never store credentials; as a deterministic backstop, a credential gate on every memory write redacts known formats AND provider-agnostic labeled values (`key=…`, `the password is …`) from content + metadata. Not a general scanner (no entropy heuristics); `allowSecrets:true` overrides.
 
 Next focus:
 

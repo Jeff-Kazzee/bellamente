@@ -37,6 +37,14 @@ async function jsonOf(res: Response): Promise<any> {
   return res.json().catch(() => ({}));
 }
 
+// Bellamente is used by intelligent coding agents (Claude Code, Codex, etc.) — so the FIRST line of defense
+// against storing secrets is the AGENT's own judgment. Instruct it here, in the tool contract it reads before
+// writing. The deterministic redaction gate (memories.ts) is only the backstop for when the agent slips.
+export const SECRET_GUIDANCE =
+  " Do NOT store secrets — API keys, passwords, tokens, private keys, or any credential. Review the content and " +
+  "use your judgment to leave secrets out (Bellamente redacts obvious credential formats as a backstop, but you " +
+  "are the first line of defense).";
+
 export function makeMcpServer(ctx: Ctx): McpServer {
   const server = new McpServer({ name: "bellamente", version: "0.0.1" });
 
@@ -103,7 +111,8 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       title: "Write memory",
       description:
         "Store a durable fact. Exact re-submissions are no-ops; near-duplicates supersede as a new " +
-        "version (the old version stays inspectable) — same dedup/supersede path as the HTTP API.",
+        "version (the old version stays inspectable) — same dedup/supersede path as the HTTP API." +
+        SECRET_GUIDANCE,
       inputSchema: {
         content: z.string().min(1).max(10000),
         // OPTIONAL, not default(false): a default makes isStatic always "provided" to writeMemories, which
@@ -147,7 +156,8 @@ export function makeMcpServer(ctx: Ctx): McpServer {
         "history — the previous text stays inspectable via memory_history. Use this when you know which " +
         "memory to fix (get the id from memory_search or memory_list): unlike memory_write, it ALWAYS " +
         "targets that exact memory and never risks storing the change as a separate near-duplicate. Only " +
-        "the current (latest) version can be corrected.",
+        "the current (latest) version can be corrected." +
+        SECRET_GUIDANCE,
       inputSchema: {
         id: z.string().min(1),
         content: z.string().min(1).max(10000),
@@ -236,7 +246,8 @@ export function makeMcpServer(ctx: Ctx): McpServer {
       title: "Ingest document",
       description:
         "Chunk + embed a markdown/text document so it becomes searchable via memory_search " +
-        "(searchMode: documents|hybrid).",
+        "(searchMode: documents|hybrid)." +
+        SECRET_GUIDANCE,
       inputSchema: {
         content: z.string().min(1).max(MAX_CONTENT_CHARS),
         title: z.string().default("Untitled"),
