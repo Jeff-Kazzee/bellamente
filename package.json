@@ -1,6 +1,6 @@
 {
   "name": "bellamente",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "private": true,
   "description": "Bellamente - Memoria Viva for your AI agents. Local-first memory: facts, documents, recall, and profile context.",
   "type": "module",
@@ -22,10 +22,12 @@
   "dependencies": {
     "@electric-sql/pglite": "0.4.6",
     "@huggingface/transformers": "^4.2.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "env-paths": "^4.0.0",
     "hono": "^4.6.0",
     "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

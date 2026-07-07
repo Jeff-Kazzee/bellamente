@@ -19,6 +19,7 @@ import { PROVIDER, profile } from "./embed-common";
 import { estimateTokens, EMBED_TOKEN_BUDGET } from "./chunk";
 import { newId, toVector, ORG_ID, DEFAULT_CONTAINER_TAG } from "./util";
 import { brandEnv } from "./env";
+import { redactSecrets, redactSecretsDeep, type SecretKind } from "./secret-scan";
 
 type Ctx = { sql: DB; embed: Embed };
 
@@ -86,13 +87,13 @@ async function chainIds(sql: DB, row: any): Promise<string[]> {
   return rows.map((r) => r.id as string);
 }
 
-type WriteAction = "created" | "superseded" | "unchanged" | "updated";
+type WriteAction = "created" | "superseded" | "unchanged" | "updated" | "conflict";
 type WriteResult = { id: string; action: WriteAction; version: number; supersededId?: string };
 type ProvidedFields = { isStatic: boolean; metadata: boolean; forgetAfter: boolean; forgetReason: boolean };
 
 // One memory write inside an open transaction: exact-dup check, near-dup supersede, or plain insert.
 // Runs PER ITEM inside the batch transaction so items in the same request dedupe against each other.
-async function writeMemory(
+export async function writeMemory(
   tx: Tx,
   args: {
     spaceId: string;
@@ -153,6 +154,26 @@ async function writeMemory(
       // Validity window (SPEC-P1.8): Postgres now() is TRANSACTION-frozen, so this INSERT's valid_from
       // and the flip UPDATE's valid_to see the identical timestamp — old.valid_to == new.valid_from
       // exactly: no gap, no overlap, by construction.
+      // Flip FIRST, and demand exactly one row (#128). `nearest` was read inside this tx, so on
+      // PGlite (single writer) the guard cannot trip; on external Postgres (pooled, READ COMMITTED)
+      // a concurrent writer may have closed the row — 0 flipped rows means inserting would create a
+      // second latest, so fail the item instead (the tx rolls back). Flip-before-insert is also what
+      // keeps idx_memory_entry_one_latest happy: unique checks are per-statement, and the guarded
+      // WHERE must not overwrite a concurrent writer's stamped valid_to (window overlap — PR #89 review).
+      const flipped = await tx`
+        UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now()
+        WHERE id = ${nearest.id} AND is_latest = true
+        RETURNING id`;
+      if (flipped.length !== 1) {
+        // Lost a concurrent version race — only reachable on external pooled Postgres (PGlite serializes
+        // whole transactions). Under READ COMMITTED (the assumed isolation throughout this path) the
+        // concurrent flip makes THIS flip match 0 rows cleanly. Do NOT throw: that aborts the ENTIRE batch
+        // tx, failing every other item in the request over one racy write. Report a per-item `conflict`
+        // (no row inserted, so the tx stays clean and the other items still commit); the caller re-reads
+        // the chain and retries just this item. (Under REPEATABLE READ/SERIALIZABLE the flip would instead
+        // raise a 40001 and re-abort the batch — acceptable; RC is the default and what we assume.) (Q4.1)
+        return { id: nearest.id, action: "conflict", version: Number(nearest.version) };
+      }
       await tx`
         INSERT INTO memory_entry
           (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
@@ -162,9 +183,6 @@ async function writeMemory(
            ${nearest.id}, ${root}, ${Number(nearest.source_count ?? 1) + 1}, ${tx.json({ updates: [nearest.id] })},
            ${args.metadata ? tx.json(args.metadata) : null}, ${args.forgetAfter}, ${args.forgetReason},
            ${v}::vector, ${args.model}, now())`;
-      // AND is_latest = true: if a concurrent writer already closed this row, a lost race must
-      // no-op rather than OVERWRITE its stamped valid_to (window overlap — PR #89 review).
-      await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${nearest.id} AND is_latest = true`;
       return { id, action: "superseded", version: Number(nearest.version) + 1, supersededId: nearest.id };
     }
   }
@@ -198,6 +216,7 @@ export type WrittenMemory = WriteResult & {
   forgetAfter: string | null;
   forgetReason: string | null;
   embedTruncated: boolean;
+  redacted: SecretKind[]; // credential formats stripped from content before storage (empty if none)
 };
 
 export async function writeMemories(
@@ -206,6 +225,7 @@ export async function writeMemories(
     containerTag: string;
     items: WriteMemoryItem[];
     dedupe?: boolean;
+    allowSecrets?: boolean; // bypass the credential-redaction gate for a deliberate write
     documentSource?: string; // provenance tag on the grouping document ('api' | 'proxy_capture' | ...)
     documentTitle?: string;
   },
@@ -220,8 +240,25 @@ export async function writeMemories(
     RETURNING id`;
   const spaceId = space!.id as string;
 
-  // 2. embed contents
-  const contents = args.items.map((m) => String(m.content));
+  // 2. redact high-confidence credential formats from EVERY stored free-text field (content, metadata JSON, and
+  //    forgetReason), THEN embed. The secret gate lives here — the single write choke point — so manual
+  //    POST /memories, MCP memory_write, the batch body, and proxy auto-capture all store redacted values; a raw
+  //    API key never reaches the store or its embedding. `allowSecrets` bypasses it. Narrow by design — see secret-scan.ts.
+  const scans = args.items.map((m) => {
+    if (args.allowSecrets) {
+      return { content: String(m.content), metadata: m.metadata ?? null, forgetReason: m.forgetReason ?? null, found: [] as SecretKind[] };
+    }
+    const c = redactSecrets(String(m.content));
+    const md = redactSecretsDeep(m.metadata ?? null);
+    const fr = m.forgetReason != null ? redactSecrets(String(m.forgetReason)) : { redacted: null as string | null, found: [] as SecretKind[] };
+    return {
+      content: c.redacted,
+      metadata: md.value,
+      forgetReason: fr.redacted,
+      found: [...new Set<SecretKind>([...c.found, ...md.found, ...fr.found])],
+    };
+  });
+  const contents = scans.map((s) => s.content);
   const vectors = await embed({ values: contents, taskType: "RETRIEVAL_DOCUMENT" });
   const model = embedModelName();
 
@@ -234,9 +271,9 @@ export async function writeMemories(
       content: contents[i]!,
       isStatic: !!m.isStatic,
       isInference: !!m.isInference,
-      metadata: m.metadata ?? null,
+      metadata: scans[i]!.metadata,
       forgetAfter,
-      forgetReason: forgetAfter ? (m.forgetReason ?? null) : null,
+      forgetReason: forgetAfter ? (scans[i]!.forgetReason ?? null) : null,
       embedding: v,
       // Which fields the caller EXPLICITLY sent — an exact-dup hit applies these to the existing
       // row instead of silently dropping them (see writeMemory).
@@ -250,6 +287,7 @@ export async function writeMemories(
       // truncated at embed time. Surface it — silently pretending the whole text is searchable
       // is the failure mode this repo keeps hunting.
       embedTruncated: estimateTokens(contents[i]!) > EMBED_TOKEN_BUDGET,
+      redacted: scans[i]!.found,
     }];
   });
   if (inputs.length === 0) return { documentId: null, results: [] };
@@ -269,17 +307,22 @@ export async function writeMemories(
         forgetAfter: input.forgetAfter,
         forgetReason: input.forgetReason,
         embedTruncated: input.embedTruncated,
+        redacted: input.redacted,
       });
-      if (r.action !== "unchanged") wrote++;
+      if (r.action !== "unchanged" && r.action !== "conflict") wrote++;
     }
-    const written = results.filter((r) => r.action !== "unchanged");
+    // A `conflict` item wrote no row (it lost the race) — exclude it from the grouping document +
+    // provenance links, exactly like `unchanged`.
+    const written = results.filter((r) => r.action !== "unchanged" && r.action !== "conflict");
     if (wrote > 0) {
-      const joined = written.map((r) => r.content).join("\n\n");
+      const joined = written.map((r) => r.content).join("\n\n"); // r.content already redacted above
+      const rawTitle = args.documentTitle ?? "Direct memories (" + written.length + ")";
+      const safeTitle = args.allowSecrets ? rawTitle : redactSecrets(rawTitle).redacted;
       await tx`
         INSERT INTO document (id, content, type, source, status, container_tags, title,
                               chunk_count, token_count, metadata, org_id)
         VALUES (${docId}, ${joined}, 'text', ${args.documentSource ?? "api"}, 'done', ${[args.containerTag]},
-                ${args.documentTitle ?? "Direct memories (" + written.length + ")"}, 0, 0,
+                ${safeTitle}, 0, 0,
                 ${tx.json({ eu_direct_memory: true })}, ${ORG_ID})`;
       await tx`
         INSERT INTO documents_to_spaces (document_id, space_id)
@@ -317,33 +360,53 @@ export function memoriesRoutes(ctx: Ctx) {
     const { documentId, results } = await writeMemories(ctx, {
       containerTag,
       dedupe: body.dedupe !== false,
+      allowSecrets: body.allowSecrets === true,
       items: memories,
     });
 
     return c.json({
       documentId,
-      memories: results.map((r) => ({
-        id: r.id,
-        memory: r.content,
-        isStatic: r.isStatic,
-        action: r.action,
-        version: r.version,
-        ...(r.supersededId ? { supersededId: r.supersededId } : {}),
-        ...(r.embedTruncated ? { embedTruncated: true } : {}),
-        createdAt: new Date().toISOString(),
-        forgetAfter: r.forgetAfter,
-        forgetReason: r.forgetReason,
-      })),
+      memories: results.map((r) =>
+        r.action === "conflict"
+          ? {
+              // Nothing was written for this item (lost a concurrent version race). Emit a shape that does
+              // NOT imply an id->stored-memory mapping like every other action does: `attemptedContent` is
+              // the text you tried to write (NOT stored), `conflictWith` is the contested chain to re-read
+              // (GET /memories/:id resolves it to the current latest) before retrying just this item.
+              action: "conflict" as const,
+              retryable: true,
+              attemptedContent: r.content,
+              conflictWith: r.id,
+            }
+          : {
+              id: r.id,
+              memory: r.content,
+              isStatic: r.isStatic,
+              action: r.action,
+              version: r.version,
+              ...(r.supersededId ? { supersededId: r.supersededId } : {}),
+              ...(r.redacted.length ? { redacted: r.redacted } : {}),
+              ...(r.embedTruncated ? { embedTruncated: true } : {}),
+              createdAt: new Date().toISOString(),
+              forgetAfter: r.forgetAfter,
+              forgetReason: r.forgetReason,
+            },
+      ),
     }, 201);
   });
 
-  // GET /memories - list latest, non-forgotten
+  // GET /memories - list latest, non-forgotten (optionally scoped to one container tag)
   app.get("/", async (c) => {
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50), 1), 100);
+    const containerTag = c.req.query("containerTag");
+    // Mirror the search-path container filter (search.ts): scope by the memory's space, not a column.
+    const tagClause = containerTag
+      ? sql`AND space_id IN (SELECT id FROM space WHERE container_tag = ${containerTag} AND org_id = ${ORG_ID})`
+      : sql``;
     const rows = await sql`
       SELECT id, memory, is_static, version, created_at, forget_after
       FROM memory_entry
-      WHERE org_id = ${ORG_ID} AND is_latest = true AND is_forgotten = false
+      WHERE org_id = ${ORG_ID} AND is_latest = true AND is_forgotten = false ${tagClause}
       ORDER BY created_at DESC
       LIMIT ${limit}`;
     return c.json({ memories: rows });
@@ -381,6 +444,14 @@ export function memoriesRoutes(ctx: Ctx) {
       return c.json({ error: "content must be a string of 1..10000 chars" }, 400);
     }
 
+    // Same credential gate as writeMemories: a correction must not sneak a raw key past the write path.
+    // `allowSecrets` bypasses it for a deliberate write. When there is no content change this is inert.
+    const patchSecrets =
+      hasContent && body.allowSecrets !== true
+        ? redactSecrets(String(body.content))
+        : { redacted: hasContent ? String(body.content) : "", found: [] as SecretKind[] };
+    const newContent = patchSecrets.redacted;
+
     const row = await loadMemory(sql, id);
     if (!row) return c.json({ error: "MemoryNotFound" }, 404);
     if (!row.is_latest) {
@@ -393,16 +464,39 @@ export function memoriesRoutes(ctx: Ctx) {
     }
 
     const isStatic = body.isStatic !== undefined ? !!body.isStatic : !!row.is_static;
-    const metadata = body.metadata !== undefined ? body.metadata : row.metadata;
     const forgetAfter = body.forgetAfter !== undefined ? body.forgetAfter : row.forget_after;
-    const forgetReason = body.forgetReason !== undefined ? body.forgetReason : row.forget_reason;
+    // Redact metadata (a structured side-channel) and forgetReason too — same gate as content, both branches.
+    const rawMetadata = body.metadata !== undefined ? body.metadata : row.metadata;
+    const rawForgetReason = body.forgetReason !== undefined ? body.forgetReason : row.forget_reason;
+    const mdScan = body.allowSecrets === true ? { value: rawMetadata, found: [] as SecretKind[] } : redactSecretsDeep(rawMetadata);
+    const frScan =
+      body.allowSecrets === true || rawForgetReason == null ? { redacted: rawForgetReason ?? null, found: [] as SecretKind[] } : redactSecrets(String(rawForgetReason));
+    const metadata = mdScan.value;
+    const forgetReason = frScan.redacted;
+    const flagFound = [...new Set<SecretKind>([...mdScan.found, ...frScan.found])];
+    const versionedFound = [...new Set<SecretKind>([...patchSecrets.found, ...flagFound])];
 
-    if (hasContent && body.content !== row.memory) {
-      const [vec] = await embed({ values: [body.content], taskType: "RETRIEVAL_DOCUMENT" });
+    if (hasContent && newContent !== row.memory) {
+      const [vec] = await embed({ values: [newContent], taskType: "RETRIEVAL_DOCUMENT" });
       if (!vec || !isValidVector(vec)) return c.json({ error: "content could not be embedded" }, 422);
       const newVersionId = newId();
       const root = row.root_memory_id ?? row.id;
+      // The is_latest check above ran on the plain connection with an embed() await in between, so a
+      // concurrent edit/supersede may have closed `row` by now (#128). The flip is therefore the
+      // GUARD, not cleanup: it runs FIRST, and 0 affected rows means this edit lost the race — abort
+      // without inserting (the old code inserted unconditionally and left two latest rows forever).
+      // Flip-before-insert is also mandatory for idx_memory_entry_one_latest: unique checks are
+      // per-statement, so inserting the new latest while the old row still holds the flag would trip it.
+      let lostRace = false;
       await sql.begin(async (tx) => {
+        const flipped = await tx`
+          UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now()
+          WHERE id = ${row.id} AND is_latest = true
+          RETURNING id`;
+        if (flipped.length !== 1) {
+          lostRace = true;
+          return;
+        }
         // is_inference carries forward like every other provenance field — a typo fix on a captured
         // memory must not silently reclassify it as user-asserted (review finding).
         // Validity window stamping mirrors the supersede site (SPEC-P1.8): same tx-frozen now(), so
@@ -412,20 +506,25 @@ export function memoriesRoutes(ctx: Ctx) {
             (id, org_id, space_id, memory, is_static, is_inference, is_latest, version, parent_memory_id, root_memory_id,
              source_count, memory_relations, metadata, forget_after, forget_reason, memory_embedding, memory_embedding_model, valid_from)
           VALUES
-            (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${body.content}, ${isStatic}, ${!!row.is_inference}, true, ${Number(row.version) + 1},
+            (${newVersionId}, ${ORG_ID}, ${row.space_id}, ${newContent}, ${isStatic}, ${!!row.is_inference}, true, ${Number(row.version) + 1},
              ${row.id}, ${root}, ${Number(row.source_count ?? 1)}, ${tx.json({ updates: [row.id] })},
              ${metadata ? tx.json(metadata) : null}, ${forgetAfter}, ${forgetReason},
              ${toVector(vec)}::vector, ${embedModelName()}, now())`;
-        // AND is_latest = true: the row was read BEFORE this tx (and an embed call sits between);
-        // if a concurrent supersede closed it first, do not overwrite its valid_to (PR #89 review).
-        await tx`UPDATE memory_entry SET is_latest = false, updated_at = now(), valid_to = now() WHERE id = ${row.id} AND is_latest = true`;
       });
+      if (lostRace) {
+        const [latest] = await sql`
+          SELECT id FROM memory_entry
+          WHERE org_id = ${ORG_ID} AND (root_memory_id = ${root} OR id = ${root}) AND is_latest = true
+          LIMIT 1`;
+        return c.json({ error: "memory was modified concurrently; re-read the latest version and retry", latestId: latest?.id ?? null }, 409);
+      }
       const created = await loadMemory(sql, newVersionId);
       return c.json({
         memory: normalizeMemory(created),
         action: "versioned",
         supersededId: row.id,
-        ...(estimateTokens(body.content) > EMBED_TOKEN_BUDGET ? { embedTruncated: true } : {}),
+        ...(versionedFound.length ? { redacted: versionedFound } : {}),
+        ...(estimateTokens(newContent) > EMBED_TOKEN_BUDGET ? { embedTruncated: true } : {}),
       });
     }
 
@@ -435,7 +534,7 @@ export function memoriesRoutes(ctx: Ctx) {
           forget_after = ${forgetAfter}, forget_reason = ${forgetReason}, updated_at = now()
       WHERE org_id = ${ORG_ID} AND id = ${id}`;
     const updated = await loadMemory(sql, id);
-    return c.json({ memory: normalizeMemory(updated), action: "updated" });
+    return c.json({ memory: normalizeMemory(updated), action: "updated", ...(flagFound.length ? { redacted: flagFound } : {}) });
   });
 
   // POST /memories/:id/forget - soft-forget the WHOLE version chain (reversible with {undo:true}).

@@ -22,11 +22,7 @@ def platform_asset(system: str = sys.platform, machine: str | None = None) -> st
         return "bella-windows-x64.exe"
     if system.startswith("linux") and machine in {"amd64", "x86_64"}:
         return "bella-linux-x64"
-    if system == "darwin" and machine in {"arm64", "aarch64"}:
-        return "bella-darwin-arm64"
-    if system == "darwin" and machine in {"amd64", "x86_64"}:
-        return "bella-darwin-x64"
-    raise RuntimeError(f"Bellamente does not publish a binary for {system}/{machine} yet.")
+    raise RuntimeError(f"Bellamente currently publishes binaries for Windows x64 and Linux x64 only; detected {system}/{machine}.")
 
 
 def cache_root() -> Path:
@@ -35,8 +31,6 @@ def cache_root() -> Path:
         return Path(override)
     if sys.platform.startswith("win") and os.environ.get("LOCALAPPDATA"):
         return Path(os.environ["LOCALAPPDATA"]) / "Bellamente" / "Launcher"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "Bellamente" / "Launcher"
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bellamente" / "launcher"
 
 

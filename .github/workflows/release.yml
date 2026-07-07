@@ -1,0 +1,88 @@
+# Release automation. Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) and this:
+#   1. verifies the tag matches package.json's version,
+#   2. runs the full release gate (`bun run ci`) — which also builds the binaries + npm/PyPI packages,
+#   3. creates the GitHub Release and uploads the two binaries + SHA256SUMS.txt,
+#   4. publishes the PyPI package (twine) and the npm launcher.
+#
+# The GitHub Release + binaries are created BEFORE npm/PyPI publish on purpose: the npm/PyPI packages are tiny
+# launchers that download the binary from the release, so the release assets must exist first.
+#
+# REQUIRED REPO SECRETS (add once under Settings → Secrets and variables → Actions):
+#   - PYPI_API_TOKEN : a PyPI API token (used as the `__token__` password for twine upload)
+#   - NPM_TOKEN      : an npm automation token with publish rights for `bellamente`
+# GITHUB_TOKEN is provided automatically (contents: write below lets it create the release).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Setup Node (for npm publish auth)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install Python packaging tools
+        run: python -m pip install --user build twine
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json version: $VERSION | tag: $TAG"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::tag v$TAG does not match package.json version $VERSION — bump the version files first"
+            exit 1
+          fi
+
+      - name: Run the full release gate (also builds binaries + npm/PyPI packages)
+        run: bun run ci
+
+      - name: Create GitHub Release with binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release create "v$VERSION" \
+            ".release/v$VERSION/bella-windows-x64.exe" \
+            ".release/v$VERSION/bella-linux-x64" \
+            ".release/v$VERSION/SHA256SUMS.txt" \
+            --title "Bellamente v$VERSION" \
+            --generate-notes
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: python -m twine upload --non-interactive .release/pypi/*.whl .release/pypi/*.tar.gz
+
+      - name: Publish to npm
+        working-directory: packages/npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

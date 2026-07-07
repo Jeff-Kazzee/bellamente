@@ -6,7 +6,7 @@ Bellamente's product identity is memory you can inspect and trust. It is built f
 
 Canonical site: https://the-little-ai-company.github.io/bellamente/
 Source repository: https://github.com/The-Little-AI-Company/bellamente
-Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2
+Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0
 
 ## Markdown Documents
 
@@ -30,7 +30,7 @@ Bellamente is local-first memory for AI agents. The promise is simple: every rec
 
 Tagline: Memoria Viva for your AI agents.
 
-Install Bellamente v0.0.2:
+Install Bellamente v0.1.0:
 
 ```sh
 npm install -g bellamente
@@ -43,24 +43,25 @@ One-shot Python run:
 uvx bellamente doctor
 ```
 
-The npm and PyPI packages are tiny launchers: when no verified cache exists, they download the
-matching GitHub release binary, verify it against `SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent
-`bella` command; use `pipx install bellamente` for that.
+The npm and PyPI packages are tiny launchers: when no verified cache exists on supported Windows x64
+and Linux x64 machines, they download the matching GitHub release binary, verify it against
+`SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent `bella` command; use
+`pipx install bellamente` for that.
 
-Direct downloads for Bellamente v0.0.2:
+Direct downloads for Bellamente v0.1.0:
 
-- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe): `bella-windows-x64.exe`
-- [macOS Apple silicon](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64): `bella-darwin-arm64`
-- [macOS Intel](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64): `bella-darwin-x64`
-- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64): `bella-linux-x64`
-- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt): `SHA256SUMS.txt`
+- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe): `bella-windows-x64.exe`
+- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-linux-x64): `bella-linux-x64`
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/SHA256SUMS.txt): `SHA256SUMS.txt`
 
 Core claims:
 
 - Inspect: every recall is durably logged with the query, matched memories, scores, latency, and below-threshold misses.
 - Correct: edits create new versions; previous versions remain in the chain. Forgetting is reversible and audited. Hard delete is explicit.
-- Local: Bellamente runs with embedded Postgres plus pgvector, local embedding models, and loopback binding by default. There is no hosted Bellamente memory service in v0.0.2.
+- Local: Bellamente runs with embedded Postgres plus pgvector, local embedding models, and loopback binding by default. There is no hosted Bellamente memory service in v0.1.0.
 - Drop-in proxy: any OpenAI-compatible client can point at `http://127.0.0.1:8080/v1`. Bellamente retrieves relevant memories, injects them into the request, and returns the upstream model answer with `x-bella-trace-id` for inspection.
+- Native MCP server: `bella mcp` (`claude mcp add bellamente -- bella mcp`) exposes memory_search, memory_write, memory_correct (versioned correction by id), memory_forget (reversible soft-forget only), memory_list, memory_history (full version chain), document_ingest, document_list, and trace_inspect over stdio JSON-RPC, on the same local store as the HTTP API.
+- Bug reporting: `bella report` assembles a content-free GitHub bug report (redacted diagnostics + errors grouped by fingerprint — codes and counts only, never messages/stacks/content) and prints a prefilled issues/new link. The binary sends nothing; you review and submit it yourself. Storage paths are reduced to directory names and the database is shown as a mode, never the DATABASE_URL.
 
 Example CLI flow:
 
@@ -72,11 +73,11 @@ curl -s :8080/search -d '{"q":"what theme does Jeff like?"}'
 
 ### Roadmap
 
-Bellamente v0.0.2 is an early release. It is usable and honest, but it is not complete. The roadmap is the public backlog and should be treated as direction, not as a rigid queue.
+Bellamente v0.1.0 is an early release. It is usable and honest, but it is not complete. The roadmap is the public backlog and should be treated as direction, not as a rigid queue.
 
 Important roadmap rule: items can ship out of order, and multiple items may land together when one implementation clears several gaps. When shipped, work moves from the roadmap to the changelog.
 
-Now in v0.0.2:
+Now in v0.1.0:
 
 - Memory lifecycle with versioned corrections and reversible forgetting.
 - Semantic and hybrid document search.
@@ -85,8 +86,11 @@ Now in v0.0.2:
 - Full recall traces.
 - Inspect dashboard.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
+- Native MCP server (`bella mcp`) for MCP-native agents.
+- Content-free bug reporting (`bella report`): a prefilled GitHub issue link with redacted diagnostics; the binary sends nothing.
+- Secrets: the calling agent is the first line of defense — the MCP tool descriptions + agent instructions tell it to use its judgment and never store credentials. As a deterministic backstop, a credential gate on every memory write redacts known secret formats PLUS provider-agnostic labeled values (`api key = …`, `the password is …`, whatever the provider) from content + metadata before storage — manual/MCP/batch/correction/auto-capture. Honest limits: a secret is defined by intent not shape, so a bare unlabeled token or a word-like password can slip; no entropy heuristics (they'd shred SHAs/UUIDs). `allowSecrets:true` overrides.
 
-Next focus: full-text memory search, MCP via `bella mcp`, recency-aware ranking, retrieval evals, richer trust views, and export/import.
+Next focus: full-text memory search, recency-aware ranking, retrieval evals, richer trust views, and export/import.
 
 ### Changelog
 
@@ -100,6 +104,32 @@ What shipped: npm and PyPI launchers, the GitHub Actions release gate, GitHub Pa
 updated org/site URLs, and full-functionality release smoke proof on top of the existing local-first
 memory lifecycle, document recall, OpenAI-compatible proxy, auto-capture, recall traces, dashboard
 inspection, embedded Postgres plus pgvector, local embeddings, and direct release binaries.
+
+Bellamente v0.1.0 shipped on 2026-07-07.
+
+Release identity: Bellamente v0.1.0, Memoria Viva for your AI agents.
+Release target: `prod`.
+Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0
+
+What shipped: a native MCP server (`bella mcp`, nine memory tools over stdio JSON-RPC on the same
+local store); `bella report` (content-free bug reporting — a prefilled GitHub issue, the binary sends
+nothing); secret prevention (the calling agent is instructed to never store credentials, with a
+deterministic credential-redaction gate on content + metadata as the backstop); and the 0.95
+supersede threshold measured and kept. No breaking API changes.
+
+Bellamente v0.0.3 shipped on 2026-07-06.
+
+Release identity: Bellamente v0.0.3, Memoria Viva for your AI agents.
+Release target: `prod`.
+Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
+
+What shipped: error observability (content-free error capture with redaction, a durable error
+store, and an Errors view in the dashboard); audit fixes for silently skipped document chunks,
+corrupted embedder pins, and a concurrent-edit race that could leave two latest memory versions
+(repair migration plus a database-level one-latest-per-chain backstop); dashboard auth gating,
+chunker-hang, profile-validation, and fail-closed coverage-gate fixes; and release truth kept to
+tested Windows x64 and Linux x64 binaries only, with binaries for untested platforms withdrawn from
+the v0.0.2 release. The public roadmap now reflects shipped work.
 
 ## Agent Use Guidance
 
@@ -137,8 +167,8 @@ Do not invent compatibility aliases or use the old pre-release working title. Th
 ## External Authority
 
 - [GitHub repository](https://github.com/The-Little-AI-Company/bellamente): source code and issues.
-- [Latest release](https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2): release notes and assets.
-- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt): integrity file for release binaries.
+- [Latest release](https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0): release notes and assets.
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/SHA256SUMS.txt): integrity file for release binaries.
 
 ## Optional
 

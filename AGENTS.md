@@ -7,6 +7,8 @@ and machine identifiers. The pre-release working title was fully purged before v
 directive, 2026-07-01): do NOT reintroduce it in any identifier, comment, doc, or test. Read this
 whole file before changing anything.
 
+> **▶ Live handoff / current focus (read FIRST):** the current goal, active phase, and locked decisions live in **`CONTINUE-HERE.md`** in the **private `bellamente-docs` repo** (clone at `~/dev/bellamente-docs`; internal-only, gitignored from this public repo — never copy internal planning docs into this public repo). Current goal: the **0.1.0** release — P3 MCP → P4 error-reporting → P5 cut.
+
 ## The one rule that outranks everything
 **Never break a machine contract.** These are frozen until a migration plan says otherwise:
 - Env vars: `BELLA_*`, read via `brandEnv()` (src/env.ts). Never read `process.env.BELLA_X`
@@ -49,9 +51,11 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
   acceptance tests exactly; if the spec is ambiguous or the code contradicts it, STOP and flag —
   do not improvise around it.
 - **Claude Fable: SPEC AUTHOR + FIXER + FINAL JUDGE.** Writes specs for complex tasks, runs
-  adversarial review on substantial PRs, fixes the problems and fills the gaps other models leave,
-  owns architecture/tradeoff calls. Do NOT burn Fable on mechanical feature grinding — that is
-  Codex's lane (usage economics: Fable is scarce, Codex is the workhorse).
+  adversarial review on substantial PRs WHEN AVAILABLE, fixes the problems and fills the gaps other
+  models leave, owns architecture/tradeoff calls. Do NOT burn Fable on mechanical feature grinding —
+  that is Codex's lane (usage economics: Fable is scarce, Codex is the workhorse). **Fable is not
+  always available, so the review + merge gate must NOT depend on Fable specifically — it is a
+  PROCESS an independent reviewer sub-agent can run (see Workflow §5).**
 - **Claude Opus: UI + mid-complexity implementation.** Dashboard, website, design-system work
   (the La Macchina system — see dashboard/index.html tokens + website/), and feature work when it
   carries a spec.
@@ -78,12 +82,28 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    - typecheck, full test suite with aggregate coverage gate, release smoke, binary build
    - package/release artifact gate, website build
    - `git diff --check` for whitespace damage
-5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02): implementers
-   NEVER merge PRs — not their own, not anyone else's — and never close issues. Only the
-   designated reviewer (Fable) or Jeff merges, and NEVER while review follow-ups are still open
-   on the PR branch (PR #79 was merged mid-review and dev briefly shipped without a fix — PR #84
-   repaired it). Release surfaces (tags, releases, dev->prod, deploys) are reviewer/Jeff-only.
+5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02; review decoupled from
+   Fable 2026-07-05): a substantial PR merges only after (a) an ADVERSARIAL REVIEW whose findings are
+   verified against the real code and fixed, (b) CI green on Actions, and (c) the change DOGFOODED —
+   proven by actually using it, not just by tests. The review is a PROCESS, not a person: Fable runs it
+   when available, otherwise an INDEPENDENT REVIEWER SUB-AGENT runs the same adversarial pass — do NOT
+   block work on Fable being around. Implementers do NOT self-merge unreviewed or self-close issues,
+   and NEVER merge while review follow-ups are still open (PR #79 shipped mid-review without a fix —
+   PR #84 repaired it). Jeff directs merges/closes; release surfaces (tags, releases, dev->prod,
+   deploys) are Jeff-only.
 6. Update `docs/BACKLOG.md` (check the box, one-line outcome + date) in the same PR.
+
+## Platform: Windows dev machine, Linux CI (line endings + WSL)
+This repo is developed on a **Windows** machine, but CI (GitHub Actions) and the canonical test/build
+run on **Linux**. Two consequences that bite if ignored:
+- **Line endings are LF, enforced by `.gitattributes` (`* text=auto eol=lf`).** Do NOT let an editor
+  or tool rewrite files as CRLF — it makes a branch look dirty for no real change and can fail the
+  `git diff --check` gate. Tracked text files are LF; keep them that way. If a branch shows spurious
+  whole-file diffs, that's a CRLF flip — re-save as LF or `git add --renormalize .`, don't commit it.
+- **Verify Linux behavior on WSL before trusting a green Windows run.** Windows-local coverage reads
+  ~1% lower than Linux and some path/process/permission behaviors differ; **GitHub Actions (Linux) is
+  the canonical gate.** For anything platform-sensitive (paths, spawned processes, file perms,
+  coverage), reproduce under WSL (Ubuntu) so you're testing what CI tests, not just Windows.
 
 ## Code conventions (copy the existing patterns, do not invent)
 - SQL: tagged templates via the pg-shim ONLY (`sql\`...\``); nested `sql\`\`` fragments for
@@ -110,8 +130,23 @@ report — do not improvise around a contract.
 
 ## Current release truth
 
-- Current public release: `v0.0.2`.
+- Current PUBLISHED release: `v0.0.2` (GitHub + npm + PyPI, all consistent). A `v0.0.3` train is
+  staged on `dev`; this line changes only when the GitHub release actually exists.
 - Source repo: `https://github.com/The-Little-AI-Company/bellamente`.
 - Public site/docs: `https://the-little-ai-company.github.io/bellamente/`.
 - Package installs: `npm install -g bellamente`, `pipx install bellamente`, or one-shot `uvx bellamente doctor`.
 - GitHub release assets must exist before a `prod` deploy points public copy at that version.
+- Current public direct binaries are Windows x64 and Linux x64 only until more OS builds have a real
+  test pass. Release ASSETS must match this copy: never upload binaries for an OS the copy doesn't
+  claim (the untested v0.0.2 darwin binaries were withdrawn 2026-07-05 for exactly this).
+
+## Copy-alignment law (2026-07-05, after the drift audit)
+
+Copy drifts in BOTH directions; underselling is also a truth bug. These checks are part of "done":
+- This file's "Current release truth" states the PUBLISHED version, never the staged train version.
+  README/ROADMAP on `dev` may run one version ahead during a release train; this section may not.
+- ROADMAP.md and its mirrors (website/src/pages/roadmap.astro, website/public/llms-full.md) move a
+  feature to "Now" in the SAME PR that ships it — a roadmap listing shipped features as upcoming
+  breaks the "if it's on the roadmap, it doesn't exist" promise. All three surfaces change together.
+- README's API list and architecture map include every shipped route; check them in any PR that adds
+  or renames a route module.

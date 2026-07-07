@@ -45,9 +45,12 @@ function sha256(path: string) {
 }
 
 function verifyReleaseAssets() {
-  const assets = ["bella-windows-x64.exe", "bella-darwin-arm64", "bella-darwin-x64", "bella-linux-x64"];
+  const assets = ["bella-windows-x64.exe", "bella-linux-x64"];
+  const allowedAssets = new Set([...assets, "SHA256SUMS.txt"]);
   const checksumPath = join(releaseOut, "SHA256SUMS.txt");
   if (!existsSync(checksumPath)) throw new Error(`missing ${checksumPath}`);
+  const extraAssets = readdirSync(releaseOut).filter((name) => !allowedAssets.has(name));
+  if (extraAssets.length > 0) throw new Error(`unexpected release asset(s): ${extraAssets.join(", ")}`);
   const checksums = new Map<string, string>();
   for (const line of readFileSync(checksumPath, "utf8").trim().split(/\r?\n/)) {
     const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/i);

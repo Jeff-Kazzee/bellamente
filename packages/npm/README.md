@@ -2,7 +2,7 @@
 
 Bellamente is local-first memory for AI agents. This npm package installs the
 `bella` launcher, which downloads and runs the matching GitHub release binary
-for your platform.
+for supported Windows x64 and Linux x64 machines.
 
 ```sh
 npm install -g bellamente

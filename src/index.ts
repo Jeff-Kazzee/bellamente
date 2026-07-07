@@ -8,11 +8,14 @@ import { searchRoutes } from "./search";
 import { profileRoutes } from "./profile";
 import { proxyRoutes } from "./proxy";
 import { inspectRoutes } from "./inspect";
+import { errorsRoutes, persistErrorEventSafe } from "./error-store";
 import { exportRoutes, importRoutes } from "./export";
 import { dashboardRoutes } from "./dashboard";
 import { diskUsedBytes, diskBudgetMb } from "./paths";
 import { brandEnv } from "./env";
 import { resolveAuth, bearerOk, type AuthConfig } from "./auth";
+import { capture, captureFatal, setErrorSink } from "./observe";
+import { toBellaError } from "./errors";
 
 const PORT = Number(process.env.PORT ?? 8080);
 // Bind LOOPBACK by default: this is a single-user local service holding memories and (in traces) full
@@ -20,12 +23,38 @@ const PORT = Number(process.env.PORT ?? 8080);
 // explicitly with BELLA_HOST=0.0.0.0 (or a specific interface) — doing so auto-enables auth (src/auth.ts).
 const HOST = brandEnv("HOST")?.trim() || "127.0.0.1";
 
-// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella serve`
-// (or no subcommand) boots the server — `serve` is accepted explicitly so command examples read
-// naturally, but the default path is identical.
+// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella report` assembles a
+// redacted, content-free GitHub bug report and exits (no server, sends nothing — prints a prefilled issue link);
+// `bella mcp` runs a stdio MCP server (no HTTP server); `bella serve` (or no subcommand) boots the server —
+// `serve` is accepted explicitly so command examples read naturally, but the default path is identical.
 if (process.argv[2] === "doctor") {
   const { runDoctor } = await import("./doctor");
   process.exit(await runDoctor());
+}
+
+if (process.argv[2] === "report") {
+  const { runReport } = await import("./report");
+  process.exit(await runReport());
+}
+
+const isMcp = process.argv[2] === "mcp";
+if (isMcp) {
+  // CRITICAL (SPEC-P1.7): MCP stdio speaks JSON-RPC over stdout — any stray stdout byte corrupts the
+  // protocol. Route ALL diagnostics (embed prewarm, migrations, etc. — today's console.log calls) to
+  // stderr for this process's lifetime, BEFORE building ctx, since prewarm logs during that build.
+  // console.warn/error already go to stderr; only log/info/debug default to stdout.
+  console.log = console.error;
+  console.info = console.error;
+  console.debug = console.error;
+  const sql = await makeDb();
+  const embed = makeEmbed();
+  // MUST create + warm the embed worker BEFORE runMcpStdio connects the stdio transport. Creating the
+  // worker lazily on the first tool-call embed (while stdin is being served) deadlocks it in the compiled
+  // binary — every embed then times out. `force:true` warms even if BELLA_SKIP_EMBEDDING_PREWARM is set
+  // (that flag is unsafe under mcp). Verified: skip => embeds hang; prewarm => sub-second writes.
+  await prewarmEmbed(embed, { force: true });
+  const { runMcpStdio } = await import("./mcp");
+  await runMcpStdio({ sql, embed }); // resolves once connected; the process stays alive on stdin
 }
 
 function warnIfOverDiskBudget() {
@@ -64,17 +93,40 @@ export function buildApp(ctx: { sql: DB; embed: Embed }, auth: AuthConfig = reso
   app.route("/search", searchRoutes(ctx));
   app.route("/profile", profileRoutes(ctx));
   app.route("/inspect", inspectRoutes({ sql: ctx.sql }));
+  app.route("/errors", errorsRoutes({ sql: ctx.sql }));
   app.route("/export", exportRoutes(ctx)); // portability: your memory is a file you can take anywhere (SPEC-P1.9)
   app.route("/import", importRoutes(ctx));
   app.route("/v1", proxyRoutes(ctx));
+
+  // Total-capture seam: any unhandled throw (was Hono's bare-text 500) is captured content-free and
+  // returned as a structured JSON error carrying a correlation traceId. capture() is idempotent, so a
+  // route that already captured before rethrowing (e.g. /search) is not double-logged here.
+  app.onError((err, c) => {
+    const { traceId } = capture(err, { category: "http", traceId: c.req.header("x-bella-trace-id") || undefined });
+    const be = toBellaError(err);
+    c.header("x-bella-trace-id", traceId);
+    return c.json({ error: be.userFacing, code: be.code, traceId }, 500);
+  });
 
   return app;
 }
 
 async function main() {
+  // Fail-fast, never silent: capture a fatal (redacted) then exit so a crash is still a crash. This only
+  // wraps Node's existing crash-on-uncaughtException (adds a captured record, same exit 1) - it does NOT
+  // change any currently-surviving path. Lives in main() so tests importing buildApp never attach a
+  // process-global handler (same reason as the sweep). (unhandledRejection is deferred to PR #2: exiting
+  // on it would be NEW crash behavior for today's benign rejections - needs a safe integration test first.)
+  process.on("uncaughtException", (e) => {
+    captureFatal(e);
+    process.exit(1);
+  });
   // Boot sequence (Spec 00): paths/budget -> db -> migrations -> embed prewarm -> listen.
   warnIfOverDiskBudget();
   const sql = await makeDb();
+  // Persist captured failures now that the DB is open — covers captureFatal (process handler) and every
+  // request-path capture via the module-global sink in observe.ts. Pre-DB crashes stay log-only.
+  setErrorSink((ev) => void persistErrorEventSafe(sql, ev));
   const embed = makeEmbed();
   await prewarmEmbed(embed);
   const auth = resolveAuth(HOST);
@@ -122,8 +174,15 @@ let served: { port: number; hostname: string; fetch: (req: Request, ...rest: any
   hostname: HOST,
   fetch: () => new Response("bellamente: not booted", { status: 503 }),
 };
-if (import.meta.main || isStandalone) {
+// !isMcp: the mcp branch above already did its own boot sequence and must NEVER also start the HTTP
+// server (SPEC-P1.7). Unlike `doctor`, it cannot process.exit after booting — it needs to stay alive
+// serving stdio — so this guard, not an early exit, is what keeps main() from running afterward.
+if ((import.meta.main || isStandalone) && !isMcp) {
   const { app, port } = await main();
   served = { port, hostname: HOST, fetch: app.fetch };
 }
-export default served;
+// isMcp exports `undefined` instead of `served`: Bun auto-boots an HTTP listener for ANY entry-module
+// default export shaped {fetch,...} — including the inert "not booted" placeholder above — regardless
+// of whether main() ran. Only the ABSENCE of a `fetch`-shaped default export stops that (verified
+// against the compiled binary: `bella mcp` was binding 127.0.0.1:8080 until this was added).
+export default isMcp ? undefined : served;

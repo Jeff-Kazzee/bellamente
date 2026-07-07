@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import { makePgliteSql, type Sql } from "../src/pg-shim";
 import { schemaForDim } from "../src/db";
-import { memoriesRoutes, sweepExpiredMemories } from "../src/memories";
+import { memoriesRoutes, sweepExpiredMemories, writeMemory } from "../src/memories";
 import { ORG_ID } from "../src/util";
 import { EMBED_DIM } from "../src/embed-common";
 import type { Embed } from "../src/embed";
@@ -330,3 +330,123 @@ test("forget hides the whole chain from the list (reversibly); DELETE removes it
     await close();
   }
 }, TEST_TIMEOUT_MS);
+
+test("GET list filters by containerTag (space scope); no filter returns all (memory_list wiring)", async () => {
+  const { app, close } = await makeApp();
+  try {
+    // Two orthogonal facts in two different containers (spaces) — no dedup/supersede interaction.
+    await post(app, "/memories", { containerTag: "space_a", memories: [{ content: "John prefers dark mode" }] });
+    await post(app, "/memories", { containerTag: "space_b", memories: [{ content: "John lives in Denver" }] });
+
+    // No filter: both are listed.
+    expect((await (await app.request("/memories")).json()).memories).toHaveLength(2);
+
+    // Scoped to space_a: only that container's memory.
+    const a = await (await app.request("/memories?containerTag=space_a")).json();
+    expect(a.memories).toHaveLength(1);
+    expect(a.memories[0].memory).toBe("John prefers dark mode");
+
+    // Scoped to space_b: only that container's memory.
+    const b = await (await app.request("/memories?containerTag=space_b")).json();
+    expect(b.memories).toHaveLength(1);
+    expect(b.memories[0].memory).toBe("John lives in Denver");
+
+    // Unknown container: empty, not an error.
+    expect((await (await app.request("/memories?containerTag=does_not_exist")).json()).memories).toHaveLength(0);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// #128: PATCH read is_latest on the plain connection, embedded in the async gap, then INSERTed the
+// new version unconditionally — two concurrent edits both passed the check and left TWO permanent
+// is_latest=true rows in one chain (both surfacing as current in list/search). The invariant below
+// is what the fix (flip-first guard inside the tx + the one-latest-per-chain index) makes impossible.
+test("concurrent content PATCHes cannot leave two latest versions in one chain (#128)", async () => {
+  const { app, sql, close } = await makeApp();
+  try {
+    const created = await (await post(app, "/memories", { memories: [{ content: "John lives in Denver" }] })).json();
+    const id = created.memories[0].id;
+
+    const [a, b] = await Promise.all([
+      patch(app, `/memories/${id}`, { content: "John lives in Boulder now" }),
+      patch(app, `/memories/${id}`, { content: "John prefers light mode" }),
+    ]);
+
+    // Exactly one edit wins; the loser is told to re-read (409 + pointer at the new latest).
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const loser = a.status === 409 ? a : b;
+    const loserBody = await loser.json();
+    expect(loserBody.latestId).toBeTruthy();
+    // Pin the GUARD path (the flip returned 0 rows), not just "some 409": the lost-race message proves the
+    // new flip-first guard is what fired, so a refactor that stopped exercising it would fail here (#128).
+    expect(loserBody.error).toMatch(/modified concurrently/);
+
+    // The invariant #128 broke: one latest row per chain, no matter how the race lands.
+    const latest = await sql`
+      SELECT id FROM memory_entry
+      WHERE (root_memory_id = ${id} OR id = ${id}) AND is_latest = true`;
+    expect(latest.length).toBe(1);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+test("the one-latest-per-chain index rejects a duplicate latest row at the DB layer (#128 backstop)", async () => {
+  const { sql, close } = await makeApp();
+  try {
+    const rootId = "a".repeat(22), dupId = "b".repeat(22), spaceId = "s".repeat(22);
+    await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id)
+              VALUES (${rootId}, ${ORG_ID}, ${spaceId}, 'fact v1', true, 1, ${rootId})`;
+    await expect(
+      (async () => {
+        await sql`INSERT INTO memory_entry (id, org_id, space_id, memory, is_latest, version, root_memory_id, parent_memory_id)
+                  VALUES (${dupId}, ${ORG_ID}, ${spaceId}, 'fact v2', true, 2, ${rootId}, ${rootId})`;
+      })()
+    ).rejects.toThrow(/one_latest|duplicate key/i);
+  } finally {
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// #128 Q4.1: a batch write's supersede can lose a version race ONLY on external pooled Postgres (PGlite
+// serializes whole transactions, so the in-tx `nearest` read can't go stale). The merged fix THREW there,
+// which aborts the ENTIRE batch tx — one racy item would 500 every other item in the request. It now
+// returns a per-item `conflict` instead. A fake tagged-template `tx` reaches that otherwise-unreachable
+// path deterministically (route by SQL shape; the flip UPDATE returns [] to force the lost race).
+function fakeTx(flipRows: unknown[], onInsert: () => void) {
+  const tx: any = (strings: TemplateStringsArray) => {
+    const q = strings.join(" ? ");
+    if (/md5\(memory\)/.test(q)) return Promise.resolve([]); // no exact dup
+    if (/ORDER BY memory_embedding/.test(q)) {
+      return Promise.resolve([{ id: "n".repeat(22), version: 3, root_memory_id: null, source_count: 2, similarity: 0.999 }]);
+    }
+    if (/SET is_latest = false/.test(q)) return Promise.resolve(flipRows); // [] = lost race, [{id}] = won
+    if (/INSERT INTO memory_entry/.test(q)) { onInsert(); return Promise.resolve([]); }
+    return Promise.resolve([]);
+  };
+  tx.json = (x: unknown) => x;
+  return tx;
+}
+
+const CONFLICT_ARGS = {
+  spaceId: "s".repeat(22), content: "John lives in Boulder now", isStatic: false, isInference: false,
+  metadata: null, forgetAfter: null, forgetReason: null, embedding: [0.9, 0.312, 0, 0], model: "test",
+  dedupe: true, provided: { isStatic: false, metadata: false, forgetAfter: false, forgetReason: false },
+};
+
+test("writeMemory: a LOST supersede race returns a per-item `conflict` — never throws, never inserts (#128 Q4.1)", async () => {
+  let inserted = false;
+  const r = await writeMemory(fakeTx([], () => { inserted = true; }), { ...CONFLICT_ARGS });
+  expect(r.action).toBe("conflict");
+  expect(r.id).toBe("n".repeat(22)); // points the caller at the contested chain to re-read
+  expect(inserted).toBe(false); // no INSERT on a lost race -> batch tx stays clean, other items commit
+});
+
+test("writeMemory: a WON supersede race still inserts the new version (positive control) (#128 Q4.1)", async () => {
+  let inserted = false;
+  const r = await writeMemory(fakeTx([{ id: "n".repeat(22) }], () => { inserted = true; }), { ...CONFLICT_ARGS });
+  expect(r.action).toBe("superseded");
+  expect(r.supersededId).toBe("n".repeat(22));
+  expect(inserted).toBe(true);
+});

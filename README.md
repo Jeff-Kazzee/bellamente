@@ -1,6 +1,10 @@
 # Bellamente
 Memoria Viva for your AI agents.
 
+[![PyPI](https://img.shields.io/pypi/v/bellamente?label=PyPI&color=4fa487)](https://pypi.org/project/bellamente/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/bellamente?label=PyPI%20downloads&color=4fa487)](https://pypi.org/project/bellamente/)
+[![npm downloads](https://img.shields.io/npm/dm/bellamente?label=npm%20downloads&color=c4703a)](https://www.npmjs.com/package/bellamente)
+
 Bellamente is a local-first memory tool for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
@@ -11,7 +15,7 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
-**v0.0.2 — early release.** Usable, tested, honest — and not at all complete. The
+**v0.1.0 — early release.** Usable, tested, honest — and not at all complete. The
 [ROADMAP](ROADMAP.md) is the real backlog; if a feature you need is on it, it does not exist yet.
 
 **Docs:** [the-little-ai-company.github.io/bellamente/docs](https://the-little-ai-company.github.io/bellamente/docs/) — the same Markdown
@@ -20,8 +24,9 @@ change to `prod`.
 
 ## Install
 
-Package-manager installs use a tiny launcher that downloads the matching GitHub release binary,
-verifies it against `SHA256SUMS.txt`, and then runs `bella`.
+Package-manager installs use a tiny launcher that downloads the matching GitHub release binary on
+supported Windows x64 and Linux x64 machines, verifies it against `SHA256SUMS.txt`, and then runs
+`bella`.
 
 ```sh
 npm install -g bellamente
@@ -41,7 +46,7 @@ For a one-shot Python run without installing a persistent `bella` command:
 uvx bellamente doctor
 ```
 
-You can also download the platform binary directly from the
+You can also download supported Windows x64 and Linux x64 binaries directly from the
 [latest GitHub release](https://github.com/The-Little-AI-Company/bellamente/releases/latest).
 
 - Core loop (write -> embed -> store -> cosine recall): WIRED + verified end-to-end on pgvector.
@@ -73,7 +78,7 @@ You can also download the platform binary directly from the
 - Retrieval benchmark: `bun run bench` runs a deterministic E2E harness through the real HTTP app routes
   (`POST /memories`, `POST /documents`, `POST /search`) against PGlite. Latest checked run
   (`seed=20260702`, `embedder=deterministic-hash`, 110 queries): memories R@1/R@10/MRR `84.1%/100.0%/0.920`,
-  documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, exact-vs-route delta@10 `0.0%` (the fixture corpus is too small to engage HNSW, so real ANN-loss quantification belongs to P1.5/#39's 50k-row probe).
+  documents `100.0%/100.0%/1.000`, hybrid `100.0%/100.0%/1.000`, exact-vs-route delta@10 `0.0%` (the fixture corpus is too small to engage HNSW; the P1.5/#39 50k-row probe — `bun run probe:ann`, evidence in `scripts/probe-filtered-ann-50k.md` — covers plan and row-fill behavior at scale, and ANN recall-loss quantification is tracked in #105).
   Set `BELLA_EVAL_REAL_EMBED=1` to run the same route harness with the active local embedder; use
   `bun run bench:models` for the old model-selection A/B script. Hybrid recall is an any-gold hit metric across the memory and document golds, so the deterministic document/hybrid rows are ceiling checks rather than broad retrieval claims.
 - Server binds 127.0.0.1 by default (BELLA_HOST to override) — memories and trace text stay off the LAN unless you opt in.
@@ -102,12 +107,16 @@ src/pg-shim.ts   porsager-compatible `sql` tag over PGlite (so the tuned SQL run
 src/embed.ts     embed({ values, taskType }); device-scaled tier -> WASM worker (e5) or static engine; OpenAI fallback
 src/embed-model2vec.ts  pure-TS static Model2Vec ("potion") engine for the low-RAM tier (no worker, never crashes)
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
-src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write)
+src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write; credential-redaction gate on write)
+src/secret-scan.ts  redacts credentials from memory content + metadata before storage: known FORMATS (private keys, AWS/GitHub/GitLab/Slack/Stripe/npm/HF/OpenAI/Anthropic/Google) PLUS provider-agnostic LABELED values (`key=…`, `the password is …`); no entropy heuristics by design
 src/documents.ts document ingestion: POST/GET/DELETE /documents (chunk -> embed -> store)
 src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget guarded)
-src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, per-model threshold, cap 25)
+src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, recency decay, MMR diversity, per-model threshold, cap 25)
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
 src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: memory tool loop for buffered + streamed requests, upstream timeouts)
+src/mcp.ts       `bella mcp`: stdio MCP server, 6 tools as thin wrappers over the same functions/routes above
+src/report.ts    `bella report`: assembles a redacted, content-free GitHub bug report (diagnostics + error groups) and prints a prefilled issues/new link — sends nothing
+src/version.ts   the single runtime VERSION constant (pinned to package.json by a test)
 schema.sql       full pgvector DDL (applied at boot; changes to shipped tables go through src/migrations.ts)
 website/src/pages/docs/ public docs that build into the website
 ```
@@ -148,18 +157,46 @@ bun run build      # -> ./bella / bella.exe
 ./bella
 ```
 
+## MCP: native tool access for MCP agents
+```
+claude mcp add bellamente -- bella mcp
+```
+`bella mcp` speaks JSON-RPC over stdio (no HTTP) and exposes 9 tools on the SAME `ctx.sql`/`ctx.embed`
+this process already opened — no second DB, no second writer: `memory_search`, `memory_write`,
+`memory_correct` (versioned correction of a specific memory by id), `memory_forget` (reversible
+soft-forget only — never hard-deletes), `memory_list`, `memory_history` (a memory's full version
+chain — the inspect-and-trust view), `document_ingest`, `document_list`, `trace_inspect` (why a
+search returned what it did). All diagnostics route to stderr in this mode; stdout carries JSON-RPC only.
+
+## Report a bug (`bella report`)
+```
+bella report
+```
+Assembles a bug report and prints a **content-free** summary plus a prefilled GitHub `issues/new`
+link — then stops. The binary sends nothing; you review exactly what will be shared and click submit
+on GitHub yourself (on-brand with "never phones home"). The body carries version, OS, embedder
+tier/model, disk + storage **sizes**, and recent errors grouped by fingerprint (codes + counts only —
+never messages, stacks, file contents, or conversation text). Storage paths are reduced to directory
+names, and the database is shown as a mode (`embedded`/`external`), never the `DATABASE_URL`. A running
+`bella serve` on loopback is read via its content-free errors endpoint; if `bella mcp` holds the DB,
+stop it and re-run for the full error list.
+
 ## API
 - POST   /memories            - write 1..100 memories (exact dups -> "unchanged"; near-dups -> "superseded"
                                 new version; `dedupe:false` bypasses). Response reports per-item action.
+                                High-confidence credential formats (API keys, private keys) are redacted from
+                                content before storage and reported as `redacted:[...]`; `allowSecrets:true` stores verbatim.
 - GET    /memories            - list latest, non-forgotten
 - GET    /memories/:id        - one memory + its full version chain (forgotten included — inspection hides nothing)
-- PATCH  /memories/:id        - correct a memory (content change -> NEW version; flag-only -> in place)
+- PATCH  /memories/:id        - correct a memory (content change -> NEW version; flag-only -> in place; same credential-redaction gate)
 - POST   /memories/:id/forget - soft-forget the whole chain (reversible with {undo:true})
 - DELETE /memories/:id        - hard-delete the whole chain + provenance (the only physical removal)
 - POST   /documents           - ingest a markdown/text document (chunk -> embed -> searchable)
 - GET    /documents[/:id]     - list documents / one document + chunks with quality flags
 - DELETE /documents/:id       - delete a document + its chunks
-- POST   /search              - recall (memories: cosine; documents: cosine + full-text RRF; hybrid: rank-fused; emits trace headers)
+- GET    /export              - everything as one versioned JSON document (memory chains, documents, profile)
+- POST   /import              - restore an export (ids remapped, chains preserved, embeddings regenerated locally)
+- POST   /search              - recall (memories: cosine + full-text, recency-weighted; documents: cosine + full-text RRF; hybrid: rank-fused; emits trace headers)
 - GET    /inspect             - recent recall/proxy traces and per-trace details
 - GET/PUT /profile
 - POST /v1/chat/completions - local Chat Completions proxy with the memory tool loop on buffered and streamed requests

@@ -8,27 +8,17 @@ const downloads = [
   {
     label: "Windows x64",
     detail: "bella-windows-x64.exe",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe",
-  },
-  {
-    label: "macOS Apple silicon",
-    detail: "bella-darwin-arm64",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64",
-  },
-  {
-    label: "macOS Intel",
-    detail: "bella-darwin-x64",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe",
   },
   {
     label: "Linux x64",
     detail: "bella-linux-x64",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-linux-x64",
   },
   {
     label: "SHA256 checksums",
     detail: "SHA256SUMS.txt",
-    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt",
+    href: "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/SHA256SUMS.txt",
   },
 ];
 ---
@@ -58,11 +48,11 @@ const downloads = [
       "name": "Bellamente",
       "alternateName": "bella",
       "applicationCategory": "DeveloperApplication",
-      "operatingSystem": "Windows, macOS, Linux",
+      "operatingSystem": "Windows, Linux",
       "description": "Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine.",
       "url": "https://the-little-ai-company.github.io/bellamente/",
-      "downloadUrl": "https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2",
-      "softwareVersion": "0.0.2",
+      "downloadUrl": "https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0",
+      "softwareVersion": "0.1.0",
       "author": { "@type": "Organization", "name": "The Little AI Co" },
       "publisher": { "@type": "Organization", "name": "The Little AI Co" }
     })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -88,7 +78,7 @@ const downloads = [
             <a href="/bellamente/roadmap">Roadmap</a>
             <a href="/bellamente/changelog">Changelog</a>
             <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe">Download</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe">Download</a>
           </nav>
         </header>
 
@@ -101,10 +91,14 @@ const downloads = [
           </h1>
           <p class="tagline">Memoria Viva for your AI agents.</p>
           <div class="db-actions">
-            <a class="db-btn primary" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe">Download for Windows</a>
-            <a class="db-btn ghost" href="https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.2">Release notes</a>
+            <a class="db-btn primary" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe">Download for Windows</a>
+            <a class="db-btn ghost" href="https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0">Release notes</a>
           </div>
-          <p class="db-platnote">npm install -g bellamente · pipx install bellamente · direct binaries</p>
+          <p class="db-platnote">npm install -g bellamente · pipx install bellamente · direct Windows/Linux binaries</p>
+          <p class="db-badges" aria-label="download counts">
+            <a href="https://pypi.org/project/bellamente/"><img src="https://img.shields.io/pypi/dm/bellamente?label=PyPI%20downloads&color=4fa487" alt="PyPI downloads per month" height="20" loading="lazy" /></a>
+            <a href="https://www.npmjs.com/package/bellamente"><img src="https://img.shields.io/npm/dm/bellamente?label=npm%20downloads&color=c4703a" alt="npm downloads per month" height="20" loading="lazy" /></a>
+          </p>
           <div class="db-downloads" aria-label="Direct downloads">
             {downloads.map((download) => (
               <a class="db-download" href={download.href}>
@@ -188,7 +182,7 @@ const downloads = [
           <h2>Field notes</h2>
           <article class="db-art">
             <span class="date">2026-07</span>
-            <h3><a href="/bellamente/changelog">Bellamente v0.0.2 is out</a></h3>
+            <h3><a href="/bellamente/changelog">Bellamente v0.1.0 is out</a></h3>
             <span class="read">changelog →</span>
           </article>
           <article class="db-art">

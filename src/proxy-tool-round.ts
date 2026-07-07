@@ -2,6 +2,7 @@
 import type { DB } from "./db";
 import type { Embed } from "./embed";
 import { recordTraceSafe, traceItemsFromSearchResults } from "./inspect";
+import { capture } from "./observe";
 import { searchMemories, rrfFuse, Q, type MemoryResult } from "./search";
 import { MAX_QUERIES_PER_CALL } from "./proxy-tool";
 
@@ -151,7 +152,9 @@ export async function runMemoryToolRound(
         failed = true;
         toolSearchFailed = true;
         toolSearchError = e instanceof Error ? e.message : String(e);
-        console.warn("[proxy] memory tool search failed; continuing with empty results:", toolSearchError);
+        // A swallowed failure that used to vanish behind a raw console.warn now flows through the
+        // redacted capture funnel (nothing fails silently, and no user content is logged).
+        capture(e, { category: "proxy", code: "TOOL_SEARCH_FAILED", component: "memory-tool-round" });
         results = [];
       } finally {
         if (timer) clearTimeout(timer);

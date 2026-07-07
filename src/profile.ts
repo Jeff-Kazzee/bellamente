@@ -12,8 +12,11 @@ export type Profile = { static?: string[]; dynamic?: string[] };
 
 export function formatProfile(p: Profile): string {
   const lines: string[] = [];
-  for (const s of p.static ?? []) lines.push(BULLET + s);
-  const dyn = p.dynamic ?? [];
+  // Coerce defensively: a persisted profile with a non-array static/dynamic (e.g. from a pre-fix bad
+  // PUT) must not throw here — formatProfile runs on every proxied completion (#124).
+  const staticItems = Array.isArray(p?.static) ? p.static : [];
+  const dyn = Array.isArray(p?.dynamic) ? p.dynamic : [];
+  for (const s of staticItems) lines.push(BULLET + s);
   for (const d of dyn.slice(0, RECENT_DISPLAY_LIMIT)) lines.push(BULLET + d);
   const extra = dyn.length - RECENT_DISPLAY_LIMIT;
   if (extra > 0) lines.push(`(+${extra} more recent items)`);
@@ -50,7 +53,19 @@ export function profileRoutes({ sql }: Ctx) {
 
   app.put("/", async (c) => {
     const tag = c.req.query("containerTag") ?? DEFAULT_CONTAINER_TAG;
-    const profile = (await c.req.json().catch(() => ({}))) as Profile;
+    const raw: unknown = await c.req.json().catch(() => ({}));
+    // A top-level non-object body (esp. literal JSON `null`) would crash `body.static` below; coerce it
+    // to {} so it degrades like an unparseable body (200 + empty), never a 500 (#124 review follow-up).
+    const body = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+    // Validate before persisting: static/dynamic must be string[] (or absent). A non-array value would
+    // make formatProfile throw on every later completion for this tag (#124) — reject it at the door.
+    const okField = (v: unknown) => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === "string"));
+    if (!okField(body.static) || !okField(body.dynamic)) {
+      return c.json({ error: "static and dynamic must be arrays of strings" }, 400);
+    }
+    const profile: Profile = {};
+    if (body.static !== undefined) profile.static = body.static as string[];
+    if (body.dynamic !== undefined) profile.dynamic = body.dynamic as string[];
     await sql`
       INSERT INTO space (id, container_tag, org_id, metadata)
       VALUES (${newId()}, ${tag}, ${ORG_ID}, ${sql.json({ profile })})

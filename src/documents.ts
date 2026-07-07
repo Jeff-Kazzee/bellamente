@@ -11,7 +11,10 @@ import { newId, toVector, ORG_ID, DEFAULT_CONTAINER_TAG } from "./util";
 type Ctx = { sql: DB; embed: Embed };
 
 const ID_RE = /^[0-9A-Za-z]{22}$/;
-const MAX_CONTENT_CHARS = 2_000_000;
+// The upper bound on a single document's content, shared so every ingest surface (HTTP route below AND
+// the MCP `document_ingest` tool, which calls ingestDocument directly) enforces the SAME cap — otherwise
+// a caller that bypasses the HTTP route could chunk/embed/insert an unbounded document.
+export const MAX_CONTENT_CHARS = 2_000_000;
 
 export type IngestInput = {
   title: string;
@@ -24,7 +27,7 @@ export type IngestInput = {
 export async function ingestDocument(
   { sql, embed }: Ctx,
   input: IngestInput,
-): Promise<{ documentId: string; chunkCount: number; flags: Record<string, number> }> {
+): Promise<{ documentId: string; chunkCount: number; skippedChunks: number; flags: Record<string, number> }> {
   const [space] = await sql`
     INSERT INTO space (id, container_tag, org_id)
     VALUES (${newId()}, ${input.containerTag}, ${ORG_ID})
@@ -43,19 +46,24 @@ export async function ingestDocument(
     ? await embed({ values: chunks.map((c) => c.embeddedContent), taskType: "RETRIEVAL_DOCUMENT" })
     : [];
 
+  // A chunk whose embedding is missing/invalid is dropped — its text is unsearchable — so chunk_count
+  // must reflect what was actually INSERTED, not the pre-embed count, and the drop must be surfaced (#125).
+  const embedded = chunks.flatMap((c, i) => {
+    const v = vectors[i];
+    return v && isValidVector(v) ? [{ c, v }] : [];
+  });
+  const skippedChunks = chunks.length - embedded.length;
+
   await sql.begin(async (tx) => {
     await tx`
       INSERT INTO document (id, content, type, source, status, task_type, container_tags,
                             filepath, chunk_count, title, metadata, org_id)
       VALUES (${docId}, ${input.content}, 'text', 'file', 'done', 'superrag', ${[input.containerTag]},
-              ${input.filepath ?? null}, ${chunks.length}, ${input.title}, ${tx.json({ rag: true })}, ${ORG_ID})`;
+              ${input.filepath ?? null}, ${embedded.length}, ${input.title}, ${tx.json({ rag: true })}, ${ORG_ID})`;
     await tx`
       INSERT INTO documents_to_spaces (document_id, space_id)
       VALUES (${docId}, ${spaceId}) ON CONFLICT DO NOTHING`;
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i]!;
-      const v = vectors[i];
-      if (!v || !isValidVector(v)) continue;
+    for (const { c, v } of embedded) {
       await tx`
         INSERT INTO chunk (id, document_id, content, embedded_content, position, type,
                            metadata, embedding, embedding_model)
@@ -65,7 +73,7 @@ export async function ingestDocument(
     }
   });
 
-  return { documentId: docId, chunkCount: chunks.length, flags };
+  return { documentId: docId, chunkCount: embedded.length, skippedChunks, flags };
 }
 
 export function documentsRoutes(ctx: Ctx) {

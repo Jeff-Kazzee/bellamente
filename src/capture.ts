@@ -93,7 +93,9 @@ function lastUserText(messages: any[]): string {
 
 const DISTILL_SYSTEM_PROMPT =
   "Extract durable facts about the user from the message as a JSON array of short standalone statements. " +
-  "Include only preferences, identity, and standing instructions. Respond with [] if there are none. " +
+  "Include only preferences, identity, and standing instructions. " +
+  "NEVER include secrets — API keys, tokens, passwords, private keys, or credentials of any kind; omit any fact that contains one. " +
+  "Respond with [] if there are none. " +
   "Respond with ONLY the JSON array — no prose, no explanations.";
 
 const DISTILL_MAX_FACTS = 5;
@@ -205,7 +207,9 @@ export async function captureFromTurn(
         metadata: { source: "proxy_capture", proxyTraceId: args.proxyTraceId, ...(distilledUsed ? { distilled: true } : {}) },
       })),
     });
-    const items = results.map((r) => traceTextItem("memory", r.content, { id: r.id, action: r.action }));
+    const items = results
+      .filter((r) => r.action !== "conflict") // a conflict wrote no row — don't trace attempted text against a stale id
+      .map((r) => traceTextItem("memory", r.content, { id: r.id, action: r.action }));
     await recordTraceSafe(ctx.sql, {
       kind: "capture",
       status: "ok",

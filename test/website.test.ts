@@ -7,14 +7,15 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PAGES = join(ROOT, "website", "src", "pages");
 const PUBLIC = join(ROOT, "website", "public");
 const SITE = "https://the-little-ai-company.github.io/bellamente";
+const VERSION = "0.1.0";
 
 const RELEASE_DOWNLOADS = [
-  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-windows-x64.exe",
-  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-arm64",
-  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-darwin-x64",
-  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/bella-linux-x64",
-  "https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.2/SHA256SUMS.txt",
+  `https://github.com/The-Little-AI-Company/bellamente/releases/download/v${VERSION}/bella-windows-x64.exe`,
+  `https://github.com/The-Little-AI-Company/bellamente/releases/download/v${VERSION}/bella-linux-x64`,
+  `https://github.com/The-Little-AI-Company/bellamente/releases/download/v${VERSION}/SHA256SUMS.txt`,
 ];
+
+const UNSUPPORTED_APPLE_DOWNLOAD_CLAIMS = ["bella-darwin", "darwin", "macOS", "MacOS", "Apple"];
 
 const INDEXABLE_URLS = [
   `${SITE}/`,
@@ -36,10 +37,13 @@ function readPublic(path: string) {
   return readFileSync(join(PUBLIC, path), "utf8");
 }
 
-test("homepage gives users one-click downloads for every v0.0.2 binary", () => {
+test("homepage gives users one-click downloads for supported v0.1.0 binaries only", () => {
   const home = readPage("index.astro");
   for (const download of RELEASE_DOWNLOADS) {
     expect(home).toContain(download);
+  }
+  for (const claim of UNSUPPORTED_APPLE_DOWNLOAD_CLAIMS) {
+    expect(home).not.toContain(claim);
   }
   expect(home).not.toContain('class="db-btn primary" href="https://github.com/The-Little-AI-Company/bellamente/releases/latest"');
 });
@@ -54,9 +58,13 @@ test("roadmap says items can ship out of order and points to the changelog", () 
 test("changelog page records shipped releases with direct downloads", () => {
   expect(existsSync(join(PAGES, "changelog.astro"))).toBe(true);
   const changelog = readPage("changelog.astro");
+  expect(changelog).toContain(`Bellamente v${VERSION}`);
   expect(changelog).toContain("Bellamente v0.0.2");
   for (const download of RELEASE_DOWNLOADS) {
     expect(changelog).toContain(download);
+  }
+  for (const claim of UNSUPPORTED_APPLE_DOWNLOAD_CLAIMS) {
+    expect(changelog).not.toContain(claim);
   }
 });
 
@@ -85,6 +93,9 @@ test("static crawler files expose sitemap, robots policy, and complete llms cont
   expect(llms).toContain("service: \"bellamente\"");
   for (const download of RELEASE_DOWNLOADS) {
     expect(llms).toContain(download);
+  }
+  for (const claim of UNSUPPORTED_APPLE_DOWNLOAD_CLAIMS) {
+    expect(llms).not.toContain(claim);
   }
 });
 
@@ -116,6 +127,9 @@ test("agent Markdown docs are available as one full ingest file and section-leve
   expect(full).not.toContain("docs/agent-guide.md");
   for (const download of RELEASE_DOWNLOADS) {
     expect(full).toContain(download);
+  }
+  for (const claim of UNSUPPORTED_APPLE_DOWNLOAD_CLAIMS) {
+    expect(full).not.toContain(claim);
   }
 });
 
