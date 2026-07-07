@@ -1,6 +1,10 @@
 # Bellamente
 Memoria Viva for your AI agents.
 
+[![PyPI](https://img.shields.io/pypi/v/bellamente?label=PyPI&color=4fa487)](https://pypi.org/project/bellamente/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/bellamente?label=PyPI%20downloads&color=4fa487)](https://pypi.org/project/bellamente/)
+[![npm downloads](https://img.shields.io/npm/dm/bellamente?label=npm%20downloads&color=c4703a)](https://www.npmjs.com/package/bellamente)
+
 Bellamente is a local-first memory tool for AI agents. It stores durable facts
 and source documents, recalls them semantically, and gives chat clients a small
 Chat Completions-compatible proxy for injecting relevant memory and profile context into local LLM servers.
@@ -11,7 +15,7 @@ Bellamente keeps the core small enough to reason about while leaving room for ri
 recall traces, document ingestion, and profile-aware workflows.
 
 ## Status
-**v0.0.3 — early release.** Usable, tested, honest — and not at all complete. The
+**v0.1.0 — early release.** Usable, tested, honest — and not at all complete. The
 [ROADMAP](ROADMAP.md) is the real backlog; if a feature you need is on it, it does not exist yet.
 
 **Docs:** [the-little-ai-company.github.io/bellamente/docs](https://the-little-ai-company.github.io/bellamente/docs/) — the same Markdown

@@ -7,7 +7,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PAGES = join(ROOT, "website", "src", "pages");
 const PUBLIC = join(ROOT, "website", "public");
 const SITE = "https://the-little-ai-company.github.io/bellamente";
-const VERSION = "0.0.3";
+const VERSION = "0.1.0";
 
 const RELEASE_DOWNLOADS = [
   `https://github.com/The-Little-AI-Company/bellamente/releases/download/v${VERSION}/bella-windows-x64.exe`,
@@ -37,7 +37,7 @@ function readPublic(path: string) {
   return readFileSync(join(PUBLIC, path), "utf8");
 }
 
-test("homepage gives users one-click downloads for supported v0.0.3 binaries only", () => {
+test("homepage gives users one-click downloads for supported v0.1.0 binaries only", () => {
   const home = readPage("index.astro");
   for (const download of RELEASE_DOWNLOADS) {
     expect(home).toContain(download);
