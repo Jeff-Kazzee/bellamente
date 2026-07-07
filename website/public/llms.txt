@@ -61,6 +61,7 @@ Core claims:
 - Local: Bellamente runs with embedded Postgres plus pgvector, local embedding models, and loopback binding by default. There is no hosted Bellamente memory service in v0.0.3.
 - Drop-in proxy: any OpenAI-compatible client can point at `http://127.0.0.1:8080/v1`. Bellamente retrieves relevant memories, injects them into the request, and returns the upstream model answer with `x-bella-trace-id` for inspection.
 - Native MCP server: `bella mcp` (`claude mcp add bellamente -- bella mcp`) exposes memory_search, memory_write, memory_correct (versioned correction by id), memory_forget (reversible soft-forget only), memory_list, memory_history (full version chain), document_ingest, document_list, and trace_inspect over stdio JSON-RPC, on the same local store as the HTTP API.
+- Bug reporting: `bella report` assembles a content-free GitHub bug report (redacted diagnostics + errors grouped by fingerprint — codes and counts only, never messages/stacks/content) and prints a prefilled issues/new link. The binary sends nothing; you review and submit it yourself. Storage paths are reduced to directory names and the database is shown as a mode, never the DATABASE_URL.
 
 Example CLI flow:
 
@@ -86,6 +87,7 @@ Now in v0.0.3:
 - Inspect dashboard.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
 - Native MCP server (`bella mcp`) for MCP-native agents.
+- Content-free bug reporting (`bella report`): a prefilled GitHub issue link with redacted diagnostics; the binary sends nothing.
 - Secrets: the calling agent is the first line of defense — the MCP tool descriptions + agent instructions tell it to use its judgment and never store credentials. As a deterministic backstop, a credential gate on every memory write redacts known secret formats PLUS provider-agnostic labeled values (`api key = …`, `the password is …`, whatever the provider) from content + metadata before storage — manual/MCP/batch/correction/auto-capture. Honest limits: a secret is defined by intent not shape, so a bare unlabeled token or a word-like password can slip; no entropy heuristics (they'd shred SHAs/UUIDs). `allowSecrets:true` overrides.
 
 Next focus: full-text memory search, recency-aware ranking, retrieval evals, richer trust views, and export/import.

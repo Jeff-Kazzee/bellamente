@@ -111,6 +111,8 @@ src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-
 src/profile.ts   GET/PUT /profile + injection template + loadProfile()
 src/proxy.ts     POST /v1/chat/completions   (local Chat Completions proxy: memory tool loop for buffered + streamed requests, upstream timeouts)
 src/mcp.ts       `bella mcp`: stdio MCP server, 6 tools as thin wrappers over the same functions/routes above
+src/report.ts    `bella report`: assembles a redacted, content-free GitHub bug report (diagnostics + error groups) and prints a prefilled issues/new link — sends nothing
+src/version.ts   the single runtime VERSION constant (pinned to package.json by a test)
 schema.sql       full pgvector DDL (applied at boot; changes to shipped tables go through src/migrations.ts)
 website/src/pages/docs/ public docs that build into the website
 ```
@@ -161,6 +163,19 @@ this process already opened — no second DB, no second writer: `memory_search`,
 soft-forget only — never hard-deletes), `memory_list`, `memory_history` (a memory's full version
 chain — the inspect-and-trust view), `document_ingest`, `document_list`, `trace_inspect` (why a
 search returned what it did). All diagnostics route to stderr in this mode; stdout carries JSON-RPC only.
+
+## Report a bug (`bella report`)
+```
+bella report
+```
+Assembles a bug report and prints a **content-free** summary plus a prefilled GitHub `issues/new`
+link — then stops. The binary sends nothing; you review exactly what will be shared and click submit
+on GitHub yourself (on-brand with "never phones home"). The body carries version, OS, embedder
+tier/model, disk + storage **sizes**, and recent errors grouped by fingerprint (codes + counts only —
+never messages, stacks, file contents, or conversation text). Storage paths are reduced to directory
+names, and the database is shown as a mode (`embedded`/`external`), never the `DATABASE_URL`. A running
+`bella serve` on loopback is read via its content-free errors endpoint; if `bella mcp` holds the DB,
+stop it and re-run for the full error list.
 
 ## API
 - POST   /memories            - write 1..100 memories (exact dups -> "unchanged"; near-dups -> "superseded"

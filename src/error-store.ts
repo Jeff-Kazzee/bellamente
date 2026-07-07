@@ -25,11 +25,12 @@ function parseLimit(value: string | null | undefined): number {
   return Math.min(Math.max(Math.round(n), 1), 200);
 }
 
-// message_redacted holds BellaError.userFacing, which is content-free by the SAME static-message contract the
-// 500 response body already relies on (src/index.ts app.onError). We clip it at the store boundary as
-// defense-in-depth: if that contract is ever violated (an interpolated userFacing), the slip is bounded, not
-// stored+served in full. This is a bound, NOT a guarantee — a short secret in userFacing would still leak to
-// the requester today via the 500 body. Mirrors inspect.ts clippedScalar.
+// message_redacted holds the STATIC per-code label from messageForCode(code) (errors.ts CODE_MESSAGES): the
+// boot capture sink (src/observe.ts) passes THAT — never BellaError.userFacing (which can be interpolated) and
+// never the raw Error.message. That static-label sink IS the content-free guarantee. We ALSO clip here as
+// defense-in-depth: if a future second caller of persistErrorEvent ever passed raw text, the slip is bounded to
+// 200 chars, not stored in full. The clip is a bound, not the guarantee. Mirrors inspect.ts clippedScalar.
+// (Do NOT "fix" this to store userFacing — that field is free-form and would reintroduce a content channel.)
 const MESSAGE_LIMIT = 200;
 function clippedMessage(value: string | undefined | null): string | null {
   if (value == null) return null;
@@ -98,7 +99,19 @@ function toIso(v: unknown): string {
 
 // A fingerprint group: "this failure happened N times". Counts are over the retained window (append-only +
 // prune-oldest), which is what triage wants — recent recurrence, not all-time history.
-function normalizeGroup(row: any) {
+export type ErrorGroup = {
+  fingerprint: string;
+  code: string;
+  severity: string;
+  category: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  sampleMessage: string | null;
+  sampleTrace: string | null;
+};
+
+function normalizeGroup(row: any): ErrorGroup {
   return {
     fingerprint: row.fingerprint,
     code: row.code,
@@ -129,6 +142,24 @@ function normalizeEvent(row: any) {
   };
 }
 
+// Read the fingerprint-grouped error summary (the GET /errors payload). Extracted so `bella report` reads it
+// directly (offline, opening the DB like `bella doctor` does) with the SAME query the route serves — one
+// source, no drift. `limit` is clamped exactly like the route's ?limit=.
+export async function readErrorGroups(sql: DB, limit = 50): Promise<ErrorGroup[]> {
+  const n = parseLimit(String(limit));
+  const rows = await sql`
+    SELECT fingerprint, code, severity, category,
+           sum(count)::int AS count, min(ts) AS first_seen, max(ts) AS last_seen,
+           (array_agg(message_redacted ORDER BY ts DESC))[1] AS sample_message,
+           (array_agg(trace_id ORDER BY ts DESC))[1] AS sample_trace
+    FROM error_event
+    WHERE org_id = ${ORG_ID}
+    GROUP BY fingerprint, code, severity, category
+    ORDER BY max(ts) DESC
+    LIMIT ${n}`;
+  return rows.map(normalizeGroup);
+}
+
 // Read-only errors API (bearer-gated at the mount, like /inspect). GET /errors -> fingerprint groups;
 // GET /errors?fingerprint=... -> that group's recent raw occurrences.
 export function errorsRoutes({ sql }: Ctx) {
@@ -145,17 +176,7 @@ export function errorsRoutes({ sql }: Ctx) {
         LIMIT ${limit}`;
       return c.json({ fingerprint, occurrences: rows.map(normalizeEvent) });
     }
-    const rows = await sql`
-      SELECT fingerprint, code, severity, category,
-             sum(count)::int AS count, min(ts) AS first_seen, max(ts) AS last_seen,
-             (array_agg(message_redacted ORDER BY ts DESC))[1] AS sample_message,
-             (array_agg(trace_id ORDER BY ts DESC))[1] AS sample_trace
-      FROM error_event
-      WHERE org_id = ${ORG_ID}
-      GROUP BY fingerprint, code, severity, category
-      ORDER BY max(ts) DESC
-      LIMIT ${limit}`;
-    return c.json({ errors: rows.map(normalizeGroup) });
+    return c.json({ errors: await readErrorGroups(sql, limit) });
   });
 
   return app;
