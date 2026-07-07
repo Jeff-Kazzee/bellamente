@@ -86,6 +86,7 @@ Now in v0.0.3:
 - Inspect dashboard.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
 - Native MCP server (`bella mcp`) for MCP-native agents.
+- Credential gate on every memory write: known secret formats PLUS provider-agnostic labeled values (`api key = …`, `the password is …`, whatever the provider) are redacted from content + metadata before storage — manual/MCP/batch/correction/auto-capture (whose local distiller is also told to drop secrets). Honest limits: a secret is defined by intent not shape, so a bare unlabeled token or a word-like password can slip; no entropy heuristics (they'd shred SHAs/UUIDs). `allowSecrets:true` overrides.
 
 Next focus: full-text memory search, recency-aware ranking, retrieval evals, richer trust views, and export/import.
 
