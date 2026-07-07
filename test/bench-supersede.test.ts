@@ -104,6 +104,14 @@ describe("bench-supersede pure math", () => {
     expect(rows).toHaveLength(2);
     expect(report).toContain("Supersede-threshold benchmark");
     expect(report).toContain("Overlap: YES");
-    expect(report).toContain('"N": **1 of 3 distinct facts survived**'); // largest distinct group
+    expect(report).toContain("Where does the over-merge land?");
+    expect(report).toContain("| N | 3 | 1 | 2 |"); // per-group table: node-like group loses 2 of 3
+  });
+
+  test("separability surfaces WHICH pairs are ≥0.95 (to see if damage is concentrated)", () => {
+    const s = separability(WRITES, VECS);
+    expect(s.confuserPairs).toHaveLength(2); // N1-N2, N2-N3
+    expect(s.confuserPairs.every((p) => p.sim >= 0.95)).toBe(true);
+    expect(s.confuserPairs[0]!.sim).toBeGreaterThanOrEqual(s.confuserPairs[1]!.sim); // sorted desc
   });
 });

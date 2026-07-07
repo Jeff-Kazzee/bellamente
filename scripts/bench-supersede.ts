@@ -118,10 +118,12 @@ export type SimResult = {
   slots: Slot[];
   correctCollapses: number; // event-level: write merged onto a same-fact survivor (good)
   falseCollapses: number; // event-level: write merged onto a different-fact survivor (silent loss)
-  missedCorrections: number; // correction "update" that did NOT merge onto its group (under-merge)
-  lostFacts: number; // outcome-level: Σ over slots (distinct factIds in slot − 1) — over-merge damage
+  missedCorrections: number; // correction "update" that did NOT collapse AT ALL (the true group-merge
+  //   failure — which also counts an update that false-collapsed elsewhere — is splitCorrectionFacts)
+  lostFacts: number; // outcome-level: Σ over slots (distinct factIds in slot − 1). EXACT for distinct facts
+  //   (1 write each) — the τ=0.95 headline; may over-count only correction facts via multi-hop merges at low τ.
   splitCorrectionFacts: number; // outcome-level: correction facts spread across >1 slot
-  survivorsPerGroup: Record<string, number>; // # slots touching each group (node: ideal 8; corrections: 1)
+  survivorsPerGroup: Record<string, number>; // # slots touching each group (node: ideal 5; corrections: 1)
 };
 
 export function simulate(writes: Write[], vecs: number[][], tau: number, margin = 0): SimResult {
@@ -181,6 +183,7 @@ export type Separability = {
   confuseMin: number; confuseMedian: number; confuseMax: number;
   overlap: boolean; // min(shouldMerge) < max(shouldNotMerge) — no single scalar cleanly separates
   confusersAbove95: number; // distinct-fact pairs that sit >= 0.95 (would wrongly collapse at default)
+  confuserPairs: { a: string; b: string; sim: number }[]; // WHICH pairs — to see if damage is concentrated
 };
 
 const median = (xs: number[]): number => {
@@ -216,20 +219,22 @@ export function separability(writes: Write[], vecs: number[][]): Separability {
     if (best > -Infinity) shouldNotMerge.push(best);
   });
 
-  // confusers: EXACT count of distinct-fact unordered pairs sitting >= 0.95 (would wrongly collapse)
-  let confusersAbove95 = 0;
+  // confusers: EXACT distinct-fact unordered pairs sitting >= 0.95 (would wrongly collapse) — keep WHICH.
+  const confuserPairs: { a: string; b: string; sim: number }[] = [];
   for (let i = 0; i < writes.length; i++)
     for (let j = i + 1; j < writes.length; j++) {
       if (factId(writes[i]!, i) === factId(writes[j]!, j)) continue;
-      if (cos(vecs[i]!, vecs[j]!) >= 0.95) confusersAbove95++;
+      const sim = cos(vecs[i]!, vecs[j]!);
+      if (sim >= 0.95) confuserPairs.push({ a: writes[i]!.text, b: writes[j]!.text, sim });
     }
+  confuserPairs.sort((p, q) => q.sim - p.sim);
 
   return {
     shouldMerge, shouldNotMerge,
     mergeMin: Math.min(...shouldMerge), mergeMedian: median(shouldMerge), mergeMax: Math.max(...shouldMerge),
     confuseMin: Math.min(...shouldNotMerge), confuseMedian: median(shouldNotMerge), confuseMax: Math.max(...shouldNotMerge),
     overlap: Math.min(...shouldMerge) < Math.max(...shouldNotMerge),
-    confusersAbove95,
+    confusersAbove95: confuserPairs.length, confuserPairs,
   };
 }
 
@@ -251,15 +256,6 @@ export function sweep(writes: Write[], vecs: number[][], taus: number[]): SweepR
       survivors: r.slots.length, idealSurvivors,
     };
   });
-}
-
-// largest distinct-fact group (for the cascade highlight) — the "server node" group in DATASET.
-function largestDistinctGroup(writes: Write[]): { group: string; size: number } {
-  const counts: Record<string, number> = {};
-  for (const w of writes) if (w.kind === "distinct") counts[w.group] = (counts[w.group] ?? 0) + 1;
-  let group = "", size = 0;
-  for (const [g, n] of Object.entries(counts)) if (n > size) { group = g; size = n; }
-  return { group, size };
 }
 
 // ---- margin sweep: does a second signal (nearest − second_nearest >= m) help? (exploratory) --------
@@ -287,10 +283,19 @@ export function formatReport(
   lines.push(`| should-NOT-merge (nearest different fact) | ${sep.shouldNotMerge.length} | ${f(sep.confuseMin)} | ${f(sep.confuseMedian)} | ${f(sep.confuseMax)} |`);
   lines.push("");
   lines.push(`- **Overlap: ${sep.overlap ? "YES" : "NO"}** (min should-merge ${f(sep.mergeMin)} ${sep.overlap ? "<" : ">="} max should-not-merge ${f(sep.confuseMax)}).`);
-  lines.push(`- Distinct-fact pairs sitting ≥ 0.95 (would wrongly collapse at the e5 default): **${sep.confusersAbove95}**.`);
+  lines.push(`- Distinct-fact PAIRS sitting ≥ 0.95: **${sep.confusersAbove95}** — pairwise, NOT a collapse-event count.`);
+  lines.push("  (the sequential cascade turns a cluster of K clones into only K−1 actual over-merge events — see §3.)");
   lines.push(sep.overlap
     ? "- ⇒ **No single scalar cleanly separates the two.** A scalar can only trade one error for the other."
     : "- ⇒ The two separate; a scalar at the midpoint would work.");
+  if (sep.confuserPairs.length) {
+    lines.push("");
+    lines.push("Which distinct-fact pairs sit ≥ 0.95 (is the hazard broad, or concentrated in near-clones?):");
+    lines.push("");
+    lines.push("| cosine | fact A | fact B |");
+    lines.push("|---:|---|---|");
+    for (const p of sep.confuserPairs) lines.push(`| ${f(p.sim)} | ${p.a} | ${p.b} |`);
+  }
   lines.push("");
 
   lines.push("### 2. Threshold sweep (sequential cascade)\n");
@@ -303,11 +308,19 @@ export function formatReport(
   lines.push("- **missed corrections / split corrections** = a value-changing update that did NOT collapse (backstopped by `memory_correct`).");
   lines.push("");
 
-  const big = largestDistinctGroup(writes);
-  lines.push(`### 3. Cascade at τ=${nodesAt.tau.toFixed(2)} (the flagged case)\n`);
-  const survived = nodesAt.sim.survivorsPerGroup[big.group] ?? 0;
-  lines.push(`- Largest distinct group "${big.group}": **${survived} of ${big.size} distinct facts survived** (${big.size - survived} silently collapsed).`);
-  lines.push(`- Total: ${nodesAt.sim.slots.length} survivors from ${writes.length} writes; ${nodesAt.sim.lostFacts} facts lost to over-merge; ${nodesAt.sim.splitCorrectionFacts} corrections left un-merged.`);
+  lines.push(`### 3. Where does the over-merge land? (per distinct group, τ=${nodesAt.tau.toFixed(2)})\n`);
+  // ideal facts per distinct group (each distinct write is its own fact)
+  const idealPerGroup: Record<string, number> = {};
+  for (const w of writes) if (w.kind === "distinct") idealPerGroup[w.group] = (idealPerGroup[w.group] ?? 0) + 1;
+  lines.push("| distinct group | ideal facts | survived | lost |");
+  lines.push("|---|---:|---:|---:|");
+  for (const [g, ideal] of Object.entries(idealPerGroup)) {
+    const survived = nodesAt.sim.survivorsPerGroup[g] ?? 0;
+    lines.push(`| ${g} | ${ideal} | ${survived} | ${ideal - survived} |`);
+  }
+  lines.push("");
+  lines.push(`- Total: ${nodesAt.sim.slots.length} survivors from ${writes.length} writes; **${nodesAt.sim.lostFacts} facts lost to over-merge**, ${nodesAt.sim.splitCorrectionFacts} corrections left un-merged.`);
+  lines.push("- If the loss is concentrated in ONE enumerated group (server node 1..N), the silent-loss risk is templated near-clones — not same-topic distinct facts, which e5 keeps apart by subject/key.");
   lines.push("");
 
   lines.push(`### 4. Margin rule at τ=${nodesAt.tau.toFixed(2)} (exploratory — a second signal, NOT productionized here)\n`);
@@ -346,6 +359,8 @@ if (import.meta.main) {
   const t0 = Date.now();
   const { report, dim } = await run(makeEmbed());
   console.log(report);
-  console.log(`\n_(real e5 embeddings, ${DATASET.length} writes in ${Date.now() - t0}ms; dim=${dim}.)_`);
+  console.log(`\n> Scope: e5 (quality tier), ${DATASET.length} writes in ${Date.now() - t0}ms, dim=${dim}. This characterizes`);
+  console.log("> the **e5 0.95 default only**; the static/potion tier's 0.98 default is unmeasured. Cosines are");
+  console.log("> platform-dependent at the 3rd decimal — don't over-index on borderline flips.");
   process.exit(0);
 }
