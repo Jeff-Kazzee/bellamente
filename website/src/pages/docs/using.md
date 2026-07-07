@@ -36,7 +36,22 @@ This machine runs Bellamente, a local memory service, at http://127.0.0.1:8080 (
 - Every response returns an x-bella-trace-id header; the human can audit any recall at http://127.0.0.1:8080/.
 ```
 
-(A native MCP server — `bella mcp` — is on the [roadmap](/bellamente/roadmap).)
+## Give an MCP-native agent memory directly
+
+Agents that speak MCP (Claude Desktop, Claude Code, Cursor, Cline, Codex) can use Bellamente as a
+native tool server — no HTTP glue, no copy-pasted prompt:
+
+```sh
+claude mcp add bellamente -- bella mcp
+```
+
+`bella mcp` speaks JSON-RPC over stdio and exposes nine tools on the SAME local memory store `bella
+serve` uses (no second database, no separate write path): `memory_search`, `memory_write`,
+`memory_correct` (change a specific memory by id, recording a new version), `memory_forget`
+(reversible soft-forget only — it never hard-deletes), `memory_list`, `memory_history` (a memory's
+full version chain, forgotten versions included — the inspect-and-trust view), `document_ingest`,
+`document_list`, and `trace_inspect`. Every search is recorded as a recall trace you can read back
+with `trace_inspect` (optionally filtered by `kind`), exactly like the dashboard's Traces view.
 
 ## Measure retrieval quality
 

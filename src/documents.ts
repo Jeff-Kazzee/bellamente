@@ -11,7 +11,10 @@ import { newId, toVector, ORG_ID, DEFAULT_CONTAINER_TAG } from "./util";
 type Ctx = { sql: DB; embed: Embed };
 
 const ID_RE = /^[0-9A-Za-z]{22}$/;
-const MAX_CONTENT_CHARS = 2_000_000;
+// The upper bound on a single document's content, shared so every ingest surface (HTTP route below AND
+// the MCP `document_ingest` tool, which calls ingestDocument directly) enforces the SAME cap — otherwise
+// a caller that bypasses the HTTP route could chunk/embed/insert an unbounded document.
+export const MAX_CONTENT_CHARS = 2_000_000;
 
 export type IngestInput = {
   title: string;

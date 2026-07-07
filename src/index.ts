@@ -23,12 +23,32 @@ const PORT = Number(process.env.PORT ?? 8080);
 // explicitly with BELLA_HOST=0.0.0.0 (or a specific interface) — doing so auto-enables auth (src/auth.ts).
 const HOST = brandEnv("HOST")?.trim() || "127.0.0.1";
 
-// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella serve`
-// (or no subcommand) boots the server — `serve` is accepted explicitly so command examples read
-// naturally, but the default path is identical.
+// Subcommands: `bella doctor` runs the health/resource check and exits (no server); `bella mcp` runs
+// a stdio MCP server (no HTTP server); `bella serve` (or no subcommand) boots the server — `serve` is
+// accepted explicitly so command examples read naturally, but the default path is identical.
 if (process.argv[2] === "doctor") {
   const { runDoctor } = await import("./doctor");
   process.exit(await runDoctor());
+}
+
+const isMcp = process.argv[2] === "mcp";
+if (isMcp) {
+  // CRITICAL (SPEC-P1.7): MCP stdio speaks JSON-RPC over stdout — any stray stdout byte corrupts the
+  // protocol. Route ALL diagnostics (embed prewarm, migrations, etc. — today's console.log calls) to
+  // stderr for this process's lifetime, BEFORE building ctx, since prewarm logs during that build.
+  // console.warn/error already go to stderr; only log/info/debug default to stdout.
+  console.log = console.error;
+  console.info = console.error;
+  console.debug = console.error;
+  const sql = await makeDb();
+  const embed = makeEmbed();
+  // MUST create + warm the embed worker BEFORE runMcpStdio connects the stdio transport. Creating the
+  // worker lazily on the first tool-call embed (while stdin is being served) deadlocks it in the compiled
+  // binary — every embed then times out. `force:true` warms even if BELLA_SKIP_EMBEDDING_PREWARM is set
+  // (that flag is unsafe under mcp). Verified: skip => embeds hang; prewarm => sub-second writes.
+  await prewarmEmbed(embed, { force: true });
+  const { runMcpStdio } = await import("./mcp");
+  await runMcpStdio({ sql, embed }); // resolves once connected; the process stays alive on stdin
 }
 
 function warnIfOverDiskBudget() {
@@ -148,8 +168,15 @@ let served: { port: number; hostname: string; fetch: (req: Request, ...rest: any
   hostname: HOST,
   fetch: () => new Response("bellamente: not booted", { status: 503 }),
 };
-if (import.meta.main || isStandalone) {
+// !isMcp: the mcp branch above already did its own boot sequence and must NEVER also start the HTTP
+// server (SPEC-P1.7). Unlike `doctor`, it cannot process.exit after booting — it needs to stay alive
+// serving stdio — so this guard, not an early exit, is what keeps main() from running afterward.
+if ((import.meta.main || isStandalone) && !isMcp) {
   const { app, port } = await main();
   served = { port, hostname: HOST, fetch: app.fetch };
 }
-export default served;
+// isMcp exports `undefined` instead of `served`: Bun auto-boots an HTTP listener for ANY entry-module
+// default export shaped {fetch,...} — including the inert "not booted" placeholder above — regardless
+// of whether main() ran. Only the ABSENCE of a `fetch`-shaped default export stops that (verified
+// against the compiled binary: `bella mcp` was binding 127.0.0.1:8080 until this was added).
+export default isMcp ? undefined : served;
