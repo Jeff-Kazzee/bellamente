@@ -11,7 +11,7 @@ import type { Embed } from "../src/embed";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { makeMcpServer } from "../src/mcp"; // <-- built to satisfy these tests
+import { makeMcpServer, SECRET_GUIDANCE } from "../src/mcp"; // <-- built to satisfy these tests
 import { MAX_CONTENT_CHARS } from "../src/documents"; // the shared ingest cap the MCP tool must also enforce
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,6 +59,18 @@ test("B1 listTools exposes exactly the 6 memory tools, each with description + i
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual(TOOLS);
   for (const t of tools) { expect(typeof t.description).toBe("string"); expect(t.description!.length).toBeGreaterThan(0); expect(t.inputSchema).toBeTruthy(); }
+  await close();
+}, T);
+
+test("B1b every WRITE tool instructs the agent not to store secrets (agent is the first line of defense)", async () => {
+  const { client, close } = await connect(await makeCtx());
+  const { tools } = await client.listTools();
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t.description ?? ""]));
+  // The write-capable tools carry the guidance; read-only tools (search/list/history) do not need it.
+  for (const name of ["memory_write", "memory_correct", "document_ingest"]) {
+    expect(byName[name]).toContain(SECRET_GUIDANCE.trim());
+  }
+  expect(SECRET_GUIDANCE.toLowerCase()).toMatch(/secret|credential|api key|password|token/);
   await close();
 }, T);
 

@@ -33,6 +33,7 @@ This machine runs Bellamente, a local memory service, at http://127.0.0.1:8080 (
 - To REMEMBER a durable fact: POST /memories with JSON {"memories":[{"content":"<the fact>"}]}
 - To RECALL: POST /search with JSON {"q":"<what you need to know>"} — results include content and a similarity score.
 - Recall before starting work on a topic; remember stable facts (preferences, decisions, environment details) when you learn them.
+- NEVER store secrets — API keys, passwords, tokens, private keys, or credentials. Use your judgment; if a fact contains a secret, leave the secret out.
 - Every response returns an x-bella-trace-id header; the human can audit any recall at http://127.0.0.1:8080/.
 ```
 
@@ -91,10 +92,14 @@ After each answered chat turn, Bellamente conservatively captures durable first-
 
 ## Secrets are never stored
 
-Every memory write — manual `POST /memories`, MCP `memory_write`, batch, corrections, and auto-capture —
-passes through a credential gate before it is embedded or stored. Detected credentials are stripped from the
-memory **content and its structured metadata** and replaced with a `[redacted: <kind>]` marker; the raw value
-never reaches the store. The gate works two ways:
+Bellamente is used by intelligent agents, so the **first line of defense is the agent itself**: the MCP tool
+descriptions and the HTTP agent-instructions above tell the calling agent to use its judgment and never store
+secrets. That's where the real intelligence lives — the agent understands what's sensitive.
+
+As a **deterministic backstop** for when an agent slips, every memory write — manual `POST /memories`, MCP
+`memory_write`, batch, corrections, and auto-capture — also passes through a credential gate before it is
+embedded or stored. Detected credentials are stripped from the memory **content and its structured metadata**
+and replaced with a `[redacted: <kind>]` marker; the raw value never reaches the store. The gate works two ways:
 
 - **Known formats** (zero false positives): private keys (PEM blocks), AWS access keys, GitHub / GitLab tokens,
   Slack tokens, Stripe live keys, npm / HuggingFace tokens, and OpenAI / Anthropic / Google API keys.
