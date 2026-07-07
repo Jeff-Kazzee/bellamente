@@ -15,11 +15,15 @@ export type SecretKind =
   | "private key"
   | "AWS access key"
   | "GitHub token"
+  | "GitLab token"
   | "Slack token"
   | "Stripe secret key"
   | "OpenAI API key"
   | "Anthropic API key"
-  | "Google API key";
+  | "Google API key"
+  | "HuggingFace token"
+  | "npm token"
+  | "credential"; // provider-agnostic: a value explicitly labeled as a key/token/secret/password
 
 // Each entry is anchored + specific enough that a match is almost certainly a real credential, not a doc
 // example. Order matters only for the private-key block (full block before the bare header). All global so
@@ -43,17 +47,38 @@ const PATTERNS: { kind: SecretKind; re: RegExp }[] = [
   { kind: "OpenAI API key", re: /\bsk-[A-Za-z0-9]{48}\b/g },
   // Google API key.
   { kind: "Google API key", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+  // A few more unambiguous prefixes (the contextual layer below covers the long tail of providers).
+  { kind: "GitLab token", re: /\bglpat-[A-Za-z0-9_-]{20}\b/g },
+  { kind: "HuggingFace token", re: /\bhf_[A-Za-z0-9]{34}\b/g },
+  { kind: "npm token", re: /\bnpm_[A-Za-z0-9]{36}\b/g },
 ];
+
+// PROVIDER-AGNOSTIC contextual detection: a value explicitly labeled as a secret. This is what actually covers
+// "every provider" — it keys on the LABEL (you called it a key/token/secret/password), not the value's format,
+// so a credential from a provider we've never heard of is still caught. The captured value must be token-shaped
+// (see tokenShaped) so we redact credentials, not English ("the password is required", "the api key is in 1Password").
+// The value charset excludes '.' , ',' etc. on purpose: consuming trailing sentence punctuation ("the password
+// is alpha-1.") both mis-measures the length and mangles prose. Secret chars we keep: alphanumerics, _ - / + =.
+const LABELED_SECRET =
+  /\b((?:(?:api|access|secret|client|auth|private|refresh)[\s_-]*)?(?:keys?|tokens?|secrets?|passwords?|passwd|passphrases?|credentials?|bearer))(\s*(?::|=|:=|->|\bis\b)\s*)(["'`]?)([A-Za-z0-9_/+=-]{8,})\3/gi;
+
+// A value worth redacting looks like a token, not a word: long enough, and with a digit or mixed case (English
+// prose is lowercase words without digits). Length 8 keeps short English out while catching real short-ish keys.
+function tokenShaped(v: string): boolean {
+  if (v.length < 8) return false;
+  return /\d/.test(v) || (/[a-z]/.test(v) && /[A-Z]/.test(v));
+}
 
 // Documented-placeholder guard: providers deliberately make example credentials contain "EXAMPLE"
 // (canonically AWS's AKIAIOSFODNN7EXAMPLE). Never redact a match that carries it — favouring a rare
 // false-negative over blocking the tutorial content our users legitimately store.
 const PLACEHOLDER = /EXAMPLE/i;
 
-/** Replace every high-confidence credential with `[redacted: <kind>]`; report the kinds found (deduped). */
+/** Replace known credential formats AND labeled secrets with `[redacted: <kind>]`; report the kinds found. */
 export function redactSecrets(text: string): { redacted: string; found: SecretKind[] } {
   const found = new Set<SecretKind>();
   let redacted = text;
+  // 1. Known formats first (zero false positives).
   for (const { kind, re } of PATTERNS) {
     redacted = redacted.replace(re, (match) => {
       if (PLACEHOLDER.test(match)) return match; // documented example — leave it
@@ -61,6 +86,13 @@ export function redactSecrets(text: string): { redacted: string; found: SecretKi
       return `[redacted: ${kind}]`;
     });
   }
+  // 2. Provider-agnostic labeled values (catches keys we don't have a format for). Keeps the label + separator,
+  //    redacts only the value, and only when it is token-shaped (not English) and not a documented placeholder.
+  redacted = redacted.replace(LABELED_SECRET, (m, label: string, sep: string, quote: string, value: string) => {
+    if (PLACEHOLDER.test(value) || !tokenShaped(value)) return m;
+    found.add("credential");
+    return `${label}${sep}${quote}[redacted: credential]${quote}`;
+  });
   return { redacted, found: [...found] };
 }
 

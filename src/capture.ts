@@ -93,7 +93,9 @@ function lastUserText(messages: any[]): string {
 
 const DISTILL_SYSTEM_PROMPT =
   "Extract durable facts about the user from the message as a JSON array of short standalone statements. " +
-  "Include only preferences, identity, and standing instructions. Respond with [] if there are none. " +
+  "Include only preferences, identity, and standing instructions. " +
+  "NEVER include secrets — API keys, tokens, passwords, private keys, or credentials of any kind; omit any fact that contains one. " +
+  "Respond with [] if there are none. " +
   "Respond with ONLY the JSON array — no prose, no explanations.";
 
 const DISTILL_MAX_FACTS = 5;

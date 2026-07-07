@@ -92,18 +92,26 @@ After each answered chat turn, Bellamente conservatively captures durable first-
 ## Secrets are never stored
 
 Every memory write — manual `POST /memories`, MCP `memory_write`, batch, corrections, and auto-capture —
-passes through a credential gate before it is embedded or stored. High-confidence **credential formats** are
-stripped from the memory **content and its structured metadata** and replaced with a `[redacted: <kind>]`
-marker; the raw value never reaches the store (so it can't ride in through a metadata side-channel either). It
-covers private keys (PEM blocks) and live service credentials: AWS access keys, GitHub tokens, Slack tokens,
-Stripe live keys, and OpenAI / Anthropic / Google API keys. The surrounding context survives (`"prod key is
-[redacted: OpenAI API key], in vault X"`), and the API/MCP response reports what was redacted.
+passes through a credential gate before it is embedded or stored. Detected credentials are stripped from the
+memory **content and its structured metadata** and replaced with a `[redacted: <kind>]` marker; the raw value
+never reaches the store. The gate works two ways:
 
-This is **narrow on purpose**. It targets real key *formats* — it is not a general secret scanner, and does not
-claim to catch a plain password or a novel token format, which are indistinguishable from ordinary text. It is
-also tuned to **not** eat legitimate developer memories: documented placeholders like the AWS
-`AKIAIOSFODNN7EXAMPLE` example key, `sk_test_` keys, JWTs, and git SHAs are left alone. Storing a real
-credential deliberately? Send `allowSecrets: true` on that write.
+- **Known formats** (zero false positives): private keys (PEM blocks), AWS access keys, GitHub / GitLab tokens,
+  Slack tokens, Stripe live keys, npm / HuggingFace tokens, and OpenAI / Anthropic / Google API keys.
+- **Labeled values (provider-agnostic)**: any value explicitly labeled as a secret — `api key = …`, `token: …`,
+  `AUTH_TOKEN=…`, `the password is …` — is redacted **whatever the provider**, because it keys on the label, not
+  the format. (The value must look like a token, so English like "the password is required" is left alone.)
+
+The surrounding context survives (`"prod key is [redacted: OpenAI API key], in vault X"`), and the API/MCP
+response reports what was redacted. On the auto-capture path, the local distillation model is additionally asked
+to drop credentials outright.
+
+**Honest limits — this is deliberate.** A secret is defined by intent, not shape, so no deterministic gate
+catches *everything*: a bare, unlabeled random token, or a password that is an ordinary word, can slip through.
+We deliberately do **not** use high-entropy heuristics — they would shred the git SHAs, UUIDs, and base64 blobs
+you legitimately store, and worst of all on auto-capture, which writes silently. The gate is tuned to **not**
+eat real developer memories: documented placeholders like AWS `AKIAIOSFODNN7EXAMPLE`, `sk_test_` keys, JWTs, and
+git SHAs are left alone. Storing a real credential deliberately? Send `allowSecrets: true` on that write.
 
 ## The dashboard
 

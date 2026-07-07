@@ -104,7 +104,7 @@ src/embed.ts     embed({ values, taskType }); device-scaled tier -> WASM worker 
 src/embed-model2vec.ts  pure-TS static Model2Vec ("potion") engine for the low-RAM tier (no worker, never crashes)
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
 src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write; credential-redaction gate on write)
-src/secret-scan.ts  redacts high-confidence credential FORMATS (private keys, AWS/GitHub/Slack/Stripe/OpenAI/Anthropic/Google) from memory content before storage; narrow by design
+src/secret-scan.ts  redacts credentials from memory content + metadata before storage: known FORMATS (private keys, AWS/GitHub/GitLab/Slack/Stripe/npm/HF/OpenAI/Anthropic/Google) PLUS provider-agnostic LABELED values (`key=…`, `the password is …`); no entropy heuristics by design
 src/documents.ts document ingestion: POST/GET/DELETE /documents (chunk -> embed -> store)
 src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget guarded)
 src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, recency decay, MMR diversity, per-model threshold, cap 25)

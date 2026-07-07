@@ -51,6 +51,23 @@ const BENIGN: string[] = [
   "the config uses SCREAMING_SNAKE_CASE for env vars like DATABASE_URL",
   "npm package hash sha512-abcdef0123456789 in the lockfile",
   "sk_test_ keys are safe to commit; only sk_live_ ones are secrets", // mentions the prefix but no full live key
+  // Contextual negatives — a secret-word near a NON-token value must not redact English.
+  "the password is required for this endpoint",
+  "set the token to whatever value you prefer",
+  "the secret is that we shipped early this quarter",
+  "api_key = YOUR_API_KEY_HERE", // all-caps placeholder, no digit -> not token-shaped
+  "pass the auth token along to the next service",
+  "the wifi password is alpha-1.", // short labeled value + trailing period: must not consume the '.' and redact
+];
+
+// Provider-AGNOSTIC labeled secrets: the value is redacted whatever the (unknown) provider, because it is
+// explicitly labeled. This is the coverage that a format list can never give.
+const LABELED: { text: string; secret: string }[] = [
+  { text: "acme api key = Xy9zAb3kLm00pQ", secret: "Xy9zAb3kLm00pQ" },
+  { text: "internal billing token: bk_prod_9a8b7c6d5e4f3g", secret: "bk_prod_9a8b7c6d5e4f3g" },
+  { text: "AUTH_TOKEN=Zx9aB8cD7eF6gH5i", secret: "Zx9aB8cD7eF6gH5i" },
+  { text: "the database password is Xk9mP2qR7sT4uV", secret: "Xk9mP2qR7sT4uV" },
+  { text: "client_secret: aB3cD4eF5gH6iJ7k", secret: "aB3cD4eF5gH6iJ7k" },
 ];
 
 // --- MUST REDACT ---------------------------------------------------------------------------------------
@@ -64,6 +81,17 @@ for (const { kind, value } of SECRETS) {
     expect(redacted).toContain(`[redacted: ${kind}]`);
     expect(redacted).toContain("context before"); // surrounding context is preserved
     expect(redacted).toContain("context after");
+  });
+}
+
+for (const { text, secret } of LABELED) {
+  test(`redacts a labeled secret regardless of provider: "${text.slice(0, 32)}..."`, () => {
+    const { redacted, found } = redactSecrets(text);
+    expect(found).toContain("credential");
+    expect(redacted).not.toContain(secret); // the value is gone
+    expect(redacted).toContain("[redacted: credential]");
+    // The label survives (it's not a secret) — only the value is stripped.
+    expect(redacted.toLowerCase()).toMatch(/key|token|secret|password/);
   });
 }
 
