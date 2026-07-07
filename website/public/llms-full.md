@@ -4,7 +4,7 @@ This is the full Markdown context pack for Bellamente. Agents can ingest this si
 
 Canonical site: https://the-little-ai-company.github.io/bellamente/
 Source repository: https://github.com/The-Little-AI-Company/bellamente
-Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.0.3
+Latest release: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0
 
 ## Full Site Documents
 
@@ -33,7 +33,7 @@ curl -s :8080/search -d '{"q":"what theme does Jeff like?"}'
 
 ### Downloads
 
-Current release: Bellamente v0.0.3.
+Current release: Bellamente v0.1.0.
 
 Package-manager installs:
 
@@ -53,19 +53,19 @@ and Linux x64 machines, they download the matching GitHub release binary, verify
 `SHA256SUMS.txt`, and run `bella`. `uvx` does not install a persistent `bella` command; use
 `pipx install bellamente` for that.
 
-- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-windows-x64.exe): `bella-windows-x64.exe`
-- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/bella-linux-x64): `bella-linux-x64`
-- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.0.3/SHA256SUMS.txt): `SHA256SUMS.txt`
+- [Windows x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe): `bella-windows-x64.exe`
+- [Linux x64](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-linux-x64): `bella-linux-x64`
+- [SHA256 checksums](https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/SHA256SUMS.txt): `SHA256SUMS.txt`
 
-Bellamente ships as one binary named `bella` or `bella.exe`. No Docker, cloud account, or hosted Bellamente service is required for v0.0.3.
+Bellamente ships as one binary named `bella` or `bella.exe`. No Docker, cloud account, or hosted Bellamente service is required for v0.1.0.
 
 ### Roadmap
 
-Bellamente v0.0.3 is an early release. It is usable and honest, but it is not complete. The roadmap is a public backlog and should be treated as direction, not as a rigid queue.
+Bellamente v0.1.0 is an early release. It is usable and honest, but it is not complete. The roadmap is a public backlog and should be treated as direction, not as a rigid queue.
 
 Items can ship out of order, and multiple items may land together when one implementation clears several gaps. When shipped, work moves from the roadmap to the changelog.
 
-Now in v0.0.3:
+Now in v0.1.0:
 
 - Memory lifecycle with versioned corrections and reversible forgetting.
 - Memory recall: semantic + full-text (exact names, codes, rare tokens), recency-weighted, with a diversity pass.
@@ -110,6 +110,22 @@ Shipped:
 - Embedded Postgres plus pgvector.
 - Local embeddings.
 - Direct release binaries for Windows and Linux.
+
+Bellamente v0.1.0 shipped on 2026-07-07.
+
+Release URL: https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0
+Release target: `prod`.
+
+Shipped:
+
+- Native MCP server: `bella mcp` exposes nine memory tools over stdio JSON-RPC on the same local
+  store as the HTTP API.
+- Content-free bug reporting: `bella report` assembles a prefilled GitHub issue with redacted
+  diagnostics; the binary sends nothing.
+- Secret prevention: the calling agent is instructed to never store credentials, with a
+  deterministic credential-redaction gate on content + metadata as the backstop.
+- The 0.95 supersede threshold was measured and kept.
+- No breaking API changes.
 
 Bellamente v0.0.3 shipped on 2026-07-06.
 

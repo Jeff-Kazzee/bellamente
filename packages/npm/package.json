@@ -1,6 +1,6 @@
 {
   "name": "bellamente",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "description": "Bellamente launcher: local-first memory for AI agents.",
   "bin": {
     "bella": "bin/bella.cjs",

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const VERSION = "0.0.3";
+const VERSION = "0.1.0";
 const REPO = "The-Little-AI-Company/bellamente";
 
 function read(path: string) {

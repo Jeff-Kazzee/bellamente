@@ -11,7 +11,7 @@ recalls them semantically, and sits in front of your local LLM as a drop-in
 `/v1/chat/completions` proxy that injects relevant memory — with a durable trace of exactly what
 it did. One binary. No Docker, no account, no cloud, no telemetry.
 
-> **Early release.** v0.0.3 is usable and tested — and not complete. The
+> **Early release.** v0.1.0 is usable and tested — and not complete. The
 > [roadmap](/bellamente/roadmap) is the honest backlog.
 
 ## Install

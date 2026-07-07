@@ -4,4 +4,4 @@
 // imports (today: the `bella report` body). It is duplicated from root package.json on purpose for now and a
 // test pins the two together so they cannot silently drift; P5's coordinated 0.1.0 bump makes this the source
 // the packaging files sync to.
-export const VERSION = "0.0.3";
+export const VERSION = "0.1.0";
