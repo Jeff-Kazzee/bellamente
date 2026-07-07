@@ -41,7 +41,7 @@ jobs:
       - name: Setup Node (for npm publish auth)
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22" # >=22.12 required by Astro (the website build runs inside the gate); 20 fails it
           registry-url: "https://registry.npmjs.org"
 
       - name: Install Python packaging tools
