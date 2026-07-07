@@ -79,6 +79,7 @@ Now in v0.0.3:
 - Retrieval eval harness with published numbers.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
 - Native MCP server (`bella mcp`) for MCP-native agents.
+- Credential gate on every memory write: high-confidence secret formats (API keys, private keys) are redacted before storage; `allowSecrets:true` overrides.
 
 Next focus:
 

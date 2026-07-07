@@ -89,6 +89,22 @@ After each answered chat turn, Bellamente conservatively captures durable first-
   forever distinguishable from things you stored deliberately.
 - Kill switches: `BELLA_PROXY_CAPTURE=0` (capture off), `BELLA_CAPTURE_DISTILL=0` (heuristics only).
 
+## Secrets are never stored
+
+Every memory write — manual `POST /memories`, MCP `memory_write`, batch, corrections, and auto-capture —
+passes through a credential gate before it is embedded or stored. High-confidence **credential formats** are
+stripped from the memory **content and its structured metadata** and replaced with a `[redacted: <kind>]`
+marker; the raw value never reaches the store (so it can't ride in through a metadata side-channel either). It
+covers private keys (PEM blocks) and live service credentials: AWS access keys, GitHub tokens, Slack tokens,
+Stripe live keys, and OpenAI / Anthropic / Google API keys. The surrounding context survives (`"prod key is
+[redacted: OpenAI API key], in vault X"`), and the API/MCP response reports what was redacted.
+
+This is **narrow on purpose**. It targets real key *formats* — it is not a general secret scanner, and does not
+claim to catch a plain password or a novel token format, which are indistinguishable from ordinary text. It is
+also tuned to **not** eat legitimate developer memories: documented placeholders like the AWS
+`AKIAIOSFODNN7EXAMPLE` example key, `sk_test_` keys, JWTs, and git SHAs are left alone. Storing a real
+credential deliberately? Send `allowSecrets: true` on that write.
+
 ## The dashboard
 
 Open `http://127.0.0.1:8080/` in a browser. Three views:

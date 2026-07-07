@@ -86,6 +86,7 @@ Now in v0.0.3:
 - Inspect dashboard.
 - One binary with embedded Postgres plus pgvector, local embeddings, and loopback by default.
 - Native MCP server (`bella mcp`) for MCP-native agents.
+- Credential gate on every memory write: high-confidence secret formats (API keys, private keys) are redacted from content before storage — manual/MCP/batch/correction/auto-capture — with an `allowSecrets:true` override.
 
 Next focus: full-text memory search, recency-aware ranking, retrieval evals, richer trust views, and export/import.
 

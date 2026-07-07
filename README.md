@@ -103,7 +103,8 @@ src/pg-shim.ts   porsager-compatible `sql` tag over PGlite (so the tuned SQL run
 src/embed.ts     embed({ values, taskType }); device-scaled tier -> WASM worker (e5) or static engine; OpenAI fallback
 src/embed-model2vec.ts  pure-TS static Model2Vec ("potion") engine for the low-RAM tier (no worker, never crashes)
 src/util.ts      newId(22), toVector(), ORG_ID, DEFAULT_CONTAINER_TAG
-src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write)
+src/memories.ts  memory lifecycle: POST/GET /memories, GET/PATCH/DELETE /memories/:id, POST /memories/:id/forget (dedup + supersede on write; credential-redaction gate on write)
+src/secret-scan.ts  redacts high-confidence credential FORMATS (private keys, AWS/GitHub/Slack/Stripe/OpenAI/Anthropic/Google) from memory content before storage; narrow by design
 src/documents.ts document ingestion: POST/GET/DELETE /documents (chunk -> embed -> store)
 src/chunk.ts     markdown-aware chunker (structure-aware, embed-token-budget guarded)
 src/search.ts    POST /search + searchMemories()/searchChunks()  (cosine + full-text, RRF fusion, recency decay, MMR diversity, per-model threshold, cap 25)
@@ -164,9 +165,11 @@ search returned what it did). All diagnostics route to stderr in this mode; stdo
 ## API
 - POST   /memories            - write 1..100 memories (exact dups -> "unchanged"; near-dups -> "superseded"
                                 new version; `dedupe:false` bypasses). Response reports per-item action.
+                                High-confidence credential formats (API keys, private keys) are redacted from
+                                content before storage and reported as `redacted:[...]`; `allowSecrets:true` stores verbatim.
 - GET    /memories            - list latest, non-forgotten
 - GET    /memories/:id        - one memory + its full version chain (forgotten included — inspection hides nothing)
-- PATCH  /memories/:id        - correct a memory (content change -> NEW version; flag-only -> in place)
+- PATCH  /memories/:id        - correct a memory (content change -> NEW version; flag-only -> in place; same credential-redaction gate)
 - POST   /memories/:id/forget - soft-forget the whole chain (reversible with {undo:true})
 - DELETE /memories/:id        - hard-delete the whole chain + provenance (the only physical removal)
 - POST   /documents           - ingest a markdown/text document (chunk -> embed -> searchable)

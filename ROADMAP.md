@@ -30,6 +30,10 @@ Also on the website: https://the-little-ai-company.github.io/bellamente/roadmap
 - Native MCP server (`bella mcp`): 9 memory tools over stdio JSON-RPC on the same local store —
   search, write, correct (versioned), forget (reversible), list, history (version chain), document
   ingest + list, and recall-trace inspect.
+- Credential gate on every write: high-confidence secret formats (private keys, AWS/GitHub/Slack/Stripe/
+  OpenAI/Anthropic/Google keys) are redacted from memory content before storage — manual, MCP, batch,
+  corrections, and auto-capture alike. Narrow by design (real key formats, not a general scanner);
+  `allowSecrets:true` stores verbatim.
 
 ## Next — the trust loop, finished
 

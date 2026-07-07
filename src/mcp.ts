@@ -130,7 +130,8 @@ export function makeMcpServer(ctx: Ctx): McpServer {
         if (r.action === "conflict") {
           return ok({ action: "conflict", retryable: true, attemptedContent: r.content, conflictWith: r.id });
         }
-        return ok({ id: r.id, action: r.action });
+        // Surface any credential redaction so the agent knows its content was stored with a secret stripped.
+        return ok({ id: r.id, action: r.action, ...(r.redacted.length ? { redacted: r.redacted } : {}) });
       } catch (e) {
         return fail(msg(e));
       }
