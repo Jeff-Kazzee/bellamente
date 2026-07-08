@@ -167,3 +167,13 @@ test("home and roadmap link to the docs", () => {
   expect(readPage("index.astro")).toContain('href="/bellamente/docs"');
   expect(readPage("roadmap.astro")).toContain('href="/bellamente/docs"');
 });
+
+test("primary nav wraps on narrow viewports to prevent horizontal overflow", () => {
+  const css = readFileSync(join(ROOT, "website", "src", "styles", "machina.css"), "utf8");
+  expect(css).toContain("flex-wrap: wrap");
+  expect(css).toContain("row-gap");
+  expect(css).toContain("@media");
+  const dbNavLine = css.split("\n").find((l) => l.includes(".db-nav") && l.includes("{"));
+  expect(dbNavLine).toBeTruthy();
+  expect(css).toMatch(/\.db-nav\s*\{[^}]*flex-wrap:\s*wrap/);
+});
