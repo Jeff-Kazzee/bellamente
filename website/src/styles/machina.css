@@ -133,7 +133,7 @@
 .docs-article li { margin: 6px 0; }
 .docs-article strong { color: var(--bone); }
 .docs-article a { color: var(--patina); } .docs-article a:hover { color: var(--bone); }
-.docs-article code { font-family: "IBM Plex Mono", monospace; font-size: .88em; background: var(--shadow); border: 1px solid var(--edge); border-radius: 5px; padding: 1px 6px; color: var(--bone); }
+.docs-article code { font-family: "IBM Plex Mono", monospace; font-size: .88em; background: var(--shadow); border: 1px solid var(--edge); border-radius: 5px; padding: 1px 6px; color: var(--bone); overflow-wrap: anywhere; }
 .docs-article pre { background: var(--shadow); border: 1px solid var(--edge); border-radius: 10px; padding: 16px 18px; overflow-x: auto; font-family: "IBM Plex Mono", monospace; font-size: 13.5px; line-height: 1.7; }
 .docs-article pre code { background: none; border: 0; padding: 0; }
 .docs-article table { border-collapse: collapse; width: 100%; font-size: 14.5px; display: block; overflow-x: auto; }

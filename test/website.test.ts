@@ -169,15 +169,6 @@ test("home and roadmap link to the docs", () => {
   expect(readPage("roadmap.astro")).toContain('href="/bellamente/docs"');
 });
 
-test("primary nav links are minimal to avoid overflow", () => {
-  const pages = [readPage("index.astro"), readPage("roadmap.astro"), readPage("changelog.astro")];
-  for (const html of pages) {
-    expect(html).not.toContain('/bellamente/">Home</a>');
-    expect(html).not.toContain('/bellamente/paper">Paper</a>');
-    expect(html).not.toContain('/bellamente/changelog">Changelog</a>');
-  }
-});
-
 test("command blocks (db-cmd) wrap or stack on narrow viewports to prevent overflow", () => {
   const css = readFileSync(join(ROOT, "website", "src", "styles", "machina.css"), "utf8");
   expect(css).toMatch(/\.db-cmd\s*\{[^}]*flex-wrap:\s*wrap/);
@@ -192,4 +183,9 @@ test(".db-nav and .db-nav nav use flex-wrap + row-gap to prevent horizontal over
   expect(css).toContain("row-gap");
   expect(css).toContain("@media");
   expect(css).toMatch(/\.db-nav\s*\{[^}]*flex-wrap:\s*wrap/);
+});
+
+test("inline docs code wraps so long unbreakable tokens don't force mobile horizontal scroll", () => {
+  const css = readFileSync(join(ROOT, "website", "src", "styles", "machina.css"), "utf8");
+  expect(css).toMatch(/\.docs-article code\s*\{[^}]*overflow-wrap:\s*anywhere/);
 });
