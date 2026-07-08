@@ -1,0 +1,145 @@
+---
+// Public FAQ. Question data feeds both the rendered page and the FAQPage structured data.
+import "../styles/machina.css";
+
+const faqs = [
+  {
+    tag: "positioning",
+    q: "How is Bellamente different from GBrain, Mem0, Zep, and other agent-memory tools?",
+    a: "They share plumbing — an embedded Postgres + pgvector store is a commodity now — but they solve different problems. GBrain is an authored markdown \"second brain\": you write a git repo of notes and it builds a typed knowledge graph. Hosted tools like Mem0 and Zep keep your memory on their servers. Bellamente is runtime agent memory that lives entirely on your machine: the agent writes and recalls at runtime, every recall leaves a durable trace you can read, corrections are versioned and forgetting is reversible, and an OpenAI-compatible proxy can ground any chat. It deliberately has no knowledge graph and sends zero telemetry. Same engine room, different ship.",
+  },
+  {
+    tag: "privacy",
+    q: "Where does my data live? Is any of it sent anywhere?",
+    a: "Everything stays on your machine — one embedded database file in your app directory. The server binds to 127.0.0.1 by default and sends no telemetry. There is no cloud account and nothing phones home; even the bug reporter just prints a prefilled GitHub link for you to submit yourself.",
+  },
+  {
+    tag: "clients",
+    q: "Which agents and clients work with it?",
+    a: "It is MCP-native — bella mcp plugs into Claude Code, Cursor, Codex, and Cline. Any OpenAI-compatible client works through the proxy by changing one base URL. And any agent can call the plain HTTP API directly.",
+  },
+  {
+    tag: "setup",
+    q: "Do I need Docker, a database server, or a model server?",
+    a: "No. It is one binary with embedded Postgres (PGlite + pgvector) and local embedding models built in. Run npm install -g bellamente (or pipx install bellamente), then bella serve. First boot creates the database and downloads the model automatically.",
+  },
+  {
+    tag: "platforms",
+    q: "What platforms are supported?",
+    a: "Windows x64 and Linux x64 today. macOS binaries are not published yet — it is on the roadmap. You can also run it on any platform from source with Bun.",
+  },
+  {
+    tag: "trust",
+    q: "How do I trust what it remembered — or catch a bad memory?",
+    a: "That is the whole point. Every recall is logged with the query, the candidates, and their scores; every correction is a new version and the old one stays; forgetting is reversible and audited. You can inspect all of it in a local dashboard or query it with plain SQL.",
+  },
+  {
+    tag: "security",
+    q: "Can it leak my API keys or secrets into memory?",
+    a: "It is built to avoid that. The agent is instructed not to store credentials, and a deterministic gate redacts API keys, tokens, and private keys from memory content and metadata before storage. We are honest about the limit: it catches real credential formats, not every conceivable secret.",
+  },
+  {
+    tag: "license",
+    q: "Is it free and open source?",
+    a: "Yes — MIT licensed and free. The source is on GitHub and contributions are welcome.",
+  },
+  {
+    tag: "status",
+    q: "Is it production-ready?",
+    a: "It is version 0.1.0 — an early but real, tested MVP. It is usable today; the public roadmap is honest about what is still ahead (macOS builds, provider-specific proxy shapes, retrieval evals, and more).",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FAQ — Bellamente</title>
+    <meta name="description" content="Frequently asked questions about Bellamente — how it compares to other agent-memory tools like GBrain, where your data lives, supported clients and platforms, and more." />
+    <link rel="canonical" href="https://the-little-ai-company.github.io/bellamente/faq/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Bellamente" />
+    <meta property="og:title" content="FAQ - Bellamente" />
+    <meta property="og:description" content="How Bellamente compares to other agent-memory tools, where your data lives, supported clients and platforms, and more." />
+    <meta property="og:url" content="https://the-little-ai-company.github.io/bellamente/faq/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="FAQ - Bellamente" />
+    <meta name="twitter:description" content="How Bellamente compares to other agent-memory tools, where your data lives, supported clients and platforms, and more." />
+    <script type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "name": "Bellamente FAQ",
+      "url": "https://the-little-ai-company.github.io/bellamente/faq/",
+      "publisher": { "@type": "Organization", "name": "The Little AI Co" },
+      "mainEntity": faqs.map((f) => ({
+        "@type": "Question",
+        "name": f.q,
+        "acceptedAnswer": { "@type": "Answer", "text": f.a },
+      })),
+    })}></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23c4703a'/%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%234fa487' stroke-opacity='.5' stroke-width='1.5'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <main class="db">
+      <div class="wrap">
+        <!-- section: nav -->
+        <header class="db-nav">
+          <a class="db-logo" href="/bellamente/">Bella<span>mente</span></a>
+          <nav aria-label="primary">
+            <a href="/bellamente/">Home</a>
+            <a href="/bellamente/docs">Docs</a>
+            <a href="/bellamente/faq">FAQ</a>
+            <a href="/bellamente/paper">Paper</a>
+            <a href="/bellamente/roadmap">Roadmap</a>
+            <a href="/bellamente/changelog">Changelog</a>
+            <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/latest">Download</a>
+          </nav>
+        </header>
+
+        <!-- section: faq hero -->
+        <section class="db-hero">
+          <p class="db-kicker">$ man bellamente</p>
+          <h1>Questions, answered.
+            <span class="thin">What Bellamente is, how it differs from the other memory tools, and where your data actually lives.</span>
+          </h1>
+        </section>
+
+        <!-- section: questions -->
+        <section class="db-pillars">
+          {faqs.map((f) => (
+            <div class="db-row">
+              <span class="k">Q</span>
+              <div>
+                <h3>{f.q}</h3>
+                <p>{f.a}</p>
+              </div>
+              <div><span class="proof">{f.tag}</span></div>
+            </div>
+          ))}
+        </section>
+
+        <!-- section: footer -->
+        <footer class="db-footer">
+          <span>© 2026 The Little AI Co · BELLAMENTE</span>
+          <span class="fine">
+            Still curious? Read the <a href="/bellamente/paper">whitepaper</a> or the
+            <a href="/bellamente/docs">docs</a>, or the code on
+            <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>.
+          </span>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>
