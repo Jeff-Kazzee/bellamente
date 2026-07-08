@@ -168,12 +168,27 @@ test("home and roadmap link to the docs", () => {
   expect(readPage("roadmap.astro")).toContain('href="/bellamente/docs"');
 });
 
-test("primary nav wraps on narrow viewports to prevent horizontal overflow", () => {
+test("primary nav links are minimal to avoid overflow", () => {
+  const pages = [readPage("index.astro"), readPage("roadmap.astro"), readPage("changelog.astro")];
+  for (const html of pages) {
+    expect(html).not.toContain('/bellamente/">Home</a>');
+    expect(html).not.toContain('/bellamente/paper">Paper</a>');
+    expect(html).not.toContain('/bellamente/changelog">Changelog</a>');
+  }
+});
+
+test("command blocks (db-cmd) wrap or stack on narrow viewports to prevent overflow", () => {
+  const css = readFileSync(join(ROOT, "website", "src", "styles", "machina.css"), "utf8");
+  expect(css).toMatch(/\.db-cmd\s*\{[^}]*flex-wrap:\s*wrap/);
+  expect(css).toMatch(/\.db-cmd code\s*\{[^}]*min-width:\s*0/);
+  expect(css).toMatch(/\.db-cmd\s*\{[^}]*flex-direction:\s*column/);
+  expect(/\@media[^}]+/.exec(css) || []).toBeTruthy();
+});
+
+test(".db-nav and .db-nav nav use flex-wrap + row-gap to prevent horizontal overflow", () => {
   const css = readFileSync(join(ROOT, "website", "src", "styles", "machina.css"), "utf8");
   expect(css).toContain("flex-wrap: wrap");
   expect(css).toContain("row-gap");
   expect(css).toContain("@media");
-  const dbNavLine = css.split("\n").find((l) => l.includes(".db-nav") && l.includes("{"));
-  expect(dbNavLine).toBeTruthy();
   expect(css).toMatch(/\.db-nav\s*\{[^}]*flex-wrap:\s*wrap/);
 });
