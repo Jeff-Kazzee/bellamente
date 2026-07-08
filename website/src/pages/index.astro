@@ -28,20 +28,20 @@ const downloads = [
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bellamente — Memoria Viva for your AI agents</title>
+    <title>Bellamente — local-first memory for AI agents, with a receipt for every recall</title>
     <meta
       name="description"
-      content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine."
+      content="Local-first memory for AI agents. Every recall scored and traced, every correction versioned, every byte on your machine. One binary, no Docker, no telemetry."
     />
     <link rel="canonical" href="https://the-little-ai-company.github.io/bellamente/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Bellamente" />
-    <meta property="og:title" content="Bellamente - Memoria Viva for your AI agents" />
-    <meta property="og:description" content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine." />
+    <meta property="og:title" content="Bellamente — local-first memory for AI agents, with a receipt for every recall" />
+    <meta property="og:description" content="Local-first memory for AI agents. Every recall scored and traced, every correction versioned, every byte on your machine. One binary, no Docker, no telemetry." />
     <meta property="og:url" content="https://the-little-ai-company.github.io/bellamente/" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Bellamente - Memoria Viva for your AI agents" />
-    <meta name="twitter:description" content="Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine." />
+    <meta name="twitter:title" content="Bellamente — local-first memory for AI agents, with a receipt for every recall" />
+    <meta name="twitter:description" content="Local-first memory for AI agents. Every recall scored and traced, every correction versioned, every byte on your machine. One binary, no Docker, no telemetry." />
     <script type="application/ld+json" set:html={JSON.stringify({
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
@@ -49,13 +49,14 @@ const downloads = [
       "alternateName": "bella",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Windows, Linux",
-      "description": "Local-first memory for AI agents. Every recall visible, every correction versioned, everything on your machine.",
+      "description": "Local-first memory for AI agents. Every recall scored and traced, every correction versioned, every byte on your machine. One binary, no Docker, no telemetry.",
       "url": "https://the-little-ai-company.github.io/bellamente/",
       "downloadUrl": "https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0",
       "softwareVersion": "0.1.0",
       "author": { "@type": "Organization", "name": "The Little AI Co" },
       "publisher": { "@type": "Organization", "name": "The Little AI Co" }
-    })}></script>    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    })}></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap"
@@ -73,12 +74,13 @@ const downloads = [
         <header class="db-nav">
           <a class="db-logo" href="/bellamente/">Bella<span>mente</span></a>
           <nav aria-label="primary">
-            <a href="#db-proof">Proof</a>
+            <a href="#db-proof">How it works</a>
             <a href="/bellamente/docs">Docs</a>
+            <a href="/bellamente/paper">Paper</a>
             <a href="/bellamente/roadmap">Roadmap</a>
             <a href="/bellamente/changelog">Changelog</a>
             <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe">Download</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/latest">Download</a>
           </nav>
         </header>
 
@@ -89,15 +91,30 @@ const downloads = [
             Memory you can read.
             <span class="thin">Every recall scored. Every correction versioned. Every byte on your machine.</span>
           </h1>
-          <p class="tagline">Memoria Viva for your AI agents.</p>
+          <p class="tagline">Memoria Viva — a living memory for your agents, on your machine.</p>
+
+          <div class="db-cmds">
+            <div class="db-cmd primary">
+              <code>npm install -g bellamente &amp;&amp; bella</code>
+              <button class="db-cmd-copy" type="button">Copy</button>
+            </div>
+            <p class="db-platnote">npm · pipx · uvx · direct binaries (Windows x64, Linux x64) · SHA256 checksums</p>
+            <p class="db-cmd-label">Add to Claude Code</p>
+            <div class="db-cmd">
+              <code>claude mcp add bellamente -- bella mcp</code>
+              <button class="db-cmd-copy" type="button">Copy</button>
+            </div>
+          </div>
+
           <div class="db-actions">
-            <a class="db-btn primary" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe">Download for Windows</a>
             <a class="db-btn ghost" href="https://github.com/The-Little-AI-Company/bellamente/releases/tag/v0.1.0">Release notes</a>
           </div>
-          <p class="db-platnote">npm install -g bellamente · pipx install bellamente · direct Windows/Linux binaries</p>
-          <p class="db-badges" aria-label="download counts">
-            <a href="https://pypi.org/project/bellamente/"><img src="https://img.shields.io/pypi/dm/bellamente?label=PyPI%20downloads&color=4fa487" alt="PyPI downloads per month" height="20" loading="lazy" /></a>
-            <a href="https://www.npmjs.com/package/bellamente"><img src="https://img.shields.io/npm/dm/bellamente?label=npm%20downloads&color=c4703a" alt="npm downloads per month" height="20" loading="lazy" /></a>
+
+          <p class="db-chips" aria-label="Project proof">
+            <span class="db-chip">MIT licensed</span>
+            <span class="db-chip">coverage-gated CI</span>
+            <span class="db-chip">R@1 84% / MRR 0.92 on the built-in bench</span>
+            <span class="db-chip">1:1 test-to-source ratio</span>
           </p>
           <div class="db-downloads" aria-label="Direct downloads">
             {downloads.map((download) => (
@@ -111,14 +128,16 @@ const downloads = [
           <!-- signature: the terminal, typing itself -->
           <div class="db-term" aria-label="Terminal demo: starting bella, storing a memory, recalling it with a score">
             <div class="bar"><i></i><i></i><i></i>&nbsp;bella — 127.0.0.1</div>
-            <pre id="db-typer"><span class="p">$</span> bella serve
+            <pre id="db-typer"><span class="p">$</span> bella
 <span class="cm">bellamente listening on 127.0.0.1:8080</span>
 
-<span class="p">$</span> curl -s :8080/memories -d <span class="cp">'&lbrace;"memories":[&lbrace;"content":"Jeff prefers dark mode"&rbrace;]&rbrace;'</span>
-<span class="cm">created · v1 · a7Kd…  <span class="cp">(no key needed on loopback — zero config)</span></span>
+<span class="p">$</span> curl -s :8080/memories -H <span class="cp">'content-type: application/json'</span> \
+    -d <span class="cp">'&lbrace;"memories":[&lbrace;"content":"Jeff prefers dark mode"&rbrace;]&rbrace;'</span> | jq -c <span class="cp">'.memories[0] | &lbrace;id,version,action&rbrace;'</span>
+<span class="cm">&lbrace;"id":"a7Kd…","version":1,"action":"created"&rbrace;</span>
 
-<span class="p">$</span> curl -s :8080/search -d <span class="cp">'&lbrace;"q":"what theme does Jeff like?"&rbrace;'</span>
-<span class="cm">0.94 · "Jeff prefers dark mode" · 12ms · trace 9fQ2…</span> <span class="cursor" aria-hidden="true"></span></pre>
+<span class="p">$</span> curl -s :8080/search -H <span class="cp">'content-type: application/json'</span> \
+    -d <span class="cp">'&lbrace;"q":"what theme does Jeff like?"&rbrace;'</span> | jq -c <span class="cp">'&lbrace;hit:.results[0].memory, similarity:.results[0].similarity, trace:.traceId&rbrace;'</span>
+<span class="cm">&lbrace;"hit":"Jeff prefers dark mode","similarity":0.94,"trace":"9fQ2…"&rbrace;</span> <span class="cursor" aria-hidden="true"></span></pre>
           </div>
         </section>
 
@@ -149,13 +168,32 @@ const downloads = [
           <div class="db-row">
             <span class="k">LOCAL</span>
             <div>
-              <h3>Your machine is the cloud</h3>
+              <h3>Nothing leaves your machine</h3>
               <p>
-                Embedded Postgres + pgvector, local embedding models, loopback binding by default. There is no server
-                to trust because there is no server.
+                Embedded Postgres + pgvector, local embedding models, loopback binding by default. No cloud to trust,
+                no account to make, no telemetry to audit — the database is a file in your app directory and you can
+                open it.
               </p>
             </div>
             <div><span class="proof">bind 127.0.0.1 · 0 telemetry · 1 binary</span></div>
+          </div>
+        </section>
+
+        <!-- section: mcp -->
+        <section class="db-proxy" id="db-mcp">
+          <div>
+            <h2>Native MCP server for Claude Code, Cursor, and friends</h2>
+            <p>
+              <span class="mono">bella mcp</span> speaks stdio MCP — nine tools over the same embedded store and the
+              same trace log. Your agent remembers across sessions, and you can read exactly what it recalled and why.
+            </p>
+            <p class="db-chips"><span class="db-chip">9 tools · same store as the HTTP API · every recall traced</span></p>
+          </div>
+          <div class="db-cmds">
+            <div class="db-cmd primary">
+              <code>claude mcp add bellamente -- bella mcp</code>
+              <button class="db-cmd-copy" type="button">Copy</button>
+            </div>
           </div>
         </section>
 
@@ -166,7 +204,7 @@ const downloads = [
             <p>
               Change one base URL. Bellamente sits between your agent and your local model, injecting relevant
               memories into the request and writing a trace of exactly what it did. No SDK. No code changes. No
-              network egress.
+              network egress. Recall failures degrade to a memory-less answer instead of failing the chat turn.
             </p>
           </div>
           <div class="db-flow" role="img" aria-label="Request flow diagram">
@@ -177,23 +215,23 @@ const downloads = [
           </div>
         </section>
 
-        <!-- section: articles -->
+        <!-- section: latest -->
         <section class="db-articles" id="db-articles">
-          <h2>Field notes</h2>
+          <h2>Latest</h2>
           <article class="db-art">
             <span class="date">2026-07</span>
-            <h3><a href="/bellamente/changelog">Bellamente v0.1.0 is out</a></h3>
+            <h3><a href="/bellamente/changelog">v0.1.0 released — embedded Postgres, MCP server, auto-capture</a></h3>
             <span class="read">changelog →</span>
           </article>
           <article class="db-art">
             <span class="date">2026-07</span>
-            <h3><a href="/bellamente/roadmap">What ships next, and what may ship together</a></h3>
+            <h3><a href="/bellamente/roadmap">What ships next</a></h3>
             <span class="read">roadmap →</span>
           </article>
           <article class="db-art">
-            <span class="date">2026-06</span>
-            <h3><a href="https://github.com/The-Little-AI-Company/bellamente">A proxy that never phones home</a></h3>
-            <span class="read">source →</span>
+            <span class="date">2026-07</span>
+            <h3><a href="/bellamente/paper">The Bellamente whitepaper — the premise, the architecture, and what we measure</a></h3>
+            <span class="read">paper →</span>
           </article>
         </section>
 
@@ -204,8 +242,28 @@ const downloads = [
             local-first memory for AI agents ·
             <a href="https://github.com/The-Little-AI-Company/bellamente">github.com/The-Little-AI-Company/bellamente</a>
           </span>
+          <span class="fine">
+            MIT licensed · contributions welcome ·
+            <a href="https://github.com/The-Little-AI-Company/bellamente/blob/dev/SECURITY.md">security reports: SECURITY.md</a>
+          </span>
         </footer>
       </div>
     </main>
+    <script>
+      document.querySelectorAll(".db-cmd").forEach((block) => {
+        const btn = block.querySelector(".db-cmd-copy");
+        const code = block.querySelector("code");
+        if (!btn || !code) return;
+        btn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(code.textContent ?? "");
+            btn.textContent = "Copied ✓";
+          } catch {
+            btn.textContent = "Copy manually";
+          }
+          setTimeout(() => (btn.textContent = "Copy"), 1600);
+        });
+      });
+    </script>
   </body>
 </html>
