@@ -20,3 +20,18 @@ None
 
 ## Deferred / out of scope
 <!-- Anything intentionally left for a follow-up, so it is not mistaken for an omission. -->
+
+## How this was built (optional)
+<!--
+Built this with an AI coding agent? You can OPTIONALLY attach a privacy-safe summary of your session — what
+you did, key decisions, files touched (names only), what you verified, and time spent — so a reviewer can see
+the effort + intent behind the change without reading every line. It's redacted by construction: no secrets,
+no file contents, no personal chat. Generate one with the `/pr-summary` skill (see CONTRIBUTING.md), or write
+a few bullets by hand. Entirely optional — delete this section if you'd rather not include it.
+-->
+<details>
+<summary>🤖 AI session summary</summary>
+
+_paste the redacted summary here_
+
+</details>

@@ -22,3 +22,9 @@ pgdata/
 # tracked website/src "brand/" assets directory must not be silently ignored.
 /BRAND.md
 /brand/
+
+# Ship contributor skills (Claude Code loads these). Local .claude settings stay ignored via the global gitignore.
+!.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
