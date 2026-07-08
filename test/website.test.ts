@@ -25,6 +25,7 @@ const INDEXABLE_URLS = [
   `${SITE}/docs/config/`,
   `${SITE}/roadmap/`,
   `${SITE}/changelog/`,
+  `${SITE}/faq/`,
   `${SITE}/paper/`,
   `${SITE}/llms.txt`,
   `${SITE}/llms-full.md`,
