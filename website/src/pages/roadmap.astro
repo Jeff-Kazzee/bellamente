@@ -47,9 +47,10 @@ import "../styles/machina.css";
           <nav aria-label="primary">
             <a href="/bellamente/">Home</a>
             <a href="/bellamente/docs">Docs</a>
+            <a href="/bellamente/paper">Paper</a>
             <a href="/bellamente/changelog">Changelog</a>
             <a href="https://github.com/The-Little-AI-Company/bellamente">GitHub</a>
-            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/download/v0.1.0/bella-windows-x64.exe">Download</a>
+            <a class="cta" href="https://github.com/The-Little-AI-Company/bellamente/releases/latest">Download</a>
           </nav>
         </header>
 
@@ -77,22 +78,38 @@ import "../styles/machina.css";
             <span class="k">NOW · v0.1.0</span>
             <div>
               <h3>What works today</h3>
-              <p>Memory lifecycle with versioned corrections and reversible forgetting · memory recall
-                 that is semantic + full-text (exact names and rare codes), recency-weighted, with a
-                 diversity pass · hybrid document search · time-aware facts ("as of" recall) ·
-                 export/import so your memory is a file you can take anywhere · the drop-in proxy with
-                 memory grounding on buffered AND streamed chats · auto-capture with local LLM
-                 distillation · full recall traces ·
-                 the inspect dashboard · a route-level retrieval benchmark with published numbers · one binary, embedded Postgres+pgvector, local embeddings,
-                 loopback by default · a native MCP server (<span class="mono">bella mcp</span>) exposing the memory tools over stdio JSON-RPC · a content-free bug reporter (<span class="mono">bella report</span>) that prints a prefilled GitHub issue link and sends nothing.</p>
+              <ul>
+                <li><b>Memory lifecycle:</b> write with dedup/supersede, versioned corrections, reversible
+                    forgetting, hard delete, and full version-chain reads.</li>
+                <li><b>Memory recall:</b> semantic + full-text (exact names, codes, rare tokens), rank-fused,
+                    recency-weighted, with a diversity pass. Hybrid document search too.</li>
+                <li><b>Time-aware facts:</b> validity windows with "as of" recall — what was true when.</li>
+                <li><b>Export / import:</b> your memory is one versioned JSON file you can take anywhere.</li>
+                <li><b>Drop-in proxy</b> (<span class="mono">/v1/chat/completions</span>) with memory grounding on
+                    buffered AND streamed chats.</li>
+                <li><b>Auto-capture</b> with local LLM distillation — heuristic fallback, sensitive-content
+                    exclusion, every capture traced and reversible.</li>
+                <li><b>Recall traces</b> (<span class="mono">/inspect</span>) and a dashboard with edit / forget /
+                    delete / history.</li>
+                <li><b>Retrieval benchmark:</b> <span class="mono">bun run bench</span> prints recall@k, MRR, and
+                    latency through the real HTTP routes.</li>
+                <li><b>Native MCP server</b> (<span class="mono">bella mcp</span>): 9 memory tools over stdio
+                    JSON-RPC on the same local store.</li>
+                <li><b>Bug reporting</b> (<span class="mono">bella report</span>): assembles a content-free GitHub
+                    report and prints a prefilled issue link — the binary sends nothing.</li>
+                <li><b>Credential gate on every write:</b> known secret formats and labeled values are redacted
+                    before storage.</li>
+                <li><b>One binary:</b> embedded Postgres + pgvector, local device-scaled embeddings, loopback by
+                    default.</li>
+              </ul>
             </div>
-            <div><span class="proof">coverage-gated behavior tests</span></div>
+            <div><span class="proof">every release passes a test suite that fails the build if coverage drops</span></div>
           </div>
           <div class="db-row">
             <span class="k">NEXT</span>
             <div>
               <h3>The trust loop, finished</h3>
-              <p>Richer trust views (why a capture was rejected, version diffs, provenance trees).</p>
+              <p>Richer trust views: rejected-capture reasons, version diffs, provenance trees.</p>
             </div>
             <div><span class="proof">next up</span></div>
           </div>
@@ -100,10 +117,13 @@ import "../styles/machina.css";
             <span class="k">LATER</span>
             <div>
               <h3>Memory-system parity</h3>
-              <p>Time-aware facts (what was true when) · a review queue for inferred memories ·
-                 smarter profiles with pinned facts · a context-window preview (see exactly what your
-                 agent will see before it sees it) · a local folder-memory contract · reranking and
-                 result diversity · usage analytics · scoped API keys.</p>
+              <ul>
+                <li>Review queue for inferred (auto-captured) memories — approve or decline before they're trusted.</li>
+                <li>Profile rebuild rules, pinned facts, profile + search in one call.</li>
+                <li>Context-window preview: see exactly what your agent will see, before it sees it.</li>
+                <li>Local folder-memory contract (a watched directory that IS your memory).</li>
+                <li>Reranking + result diversity; usage analytics; scoped API keys.</li>
+              </ul>
             </div>
             <div><span class="proof">specs first, then code</span></div>
           </div>
@@ -111,10 +131,13 @@ import "../styles/machina.css";
             <span class="k">SOMEDAY</span>
             <div>
               <h3>The bigger bets</h3>
-              <p>A memory graph you can see and export · an optional cross-encoder reranker ·
-                 content extractors (PDF, code, web) · connectors (filesystem and Obsidian first) ·
-                 SDKs and editor integrations · a desktop shell. Plugins over bloat — the core stays
-                 one small binary.</p>
+              <ul>
+                <li>Memory graph view + export.</li>
+                <li>Optional cross-encoder reranker (downloaded on demand, device-scaled).</li>
+                <li>Content extractors (PDF, code, web) and connectors (filesystem / Obsidian first).</li>
+                <li>SDKs, editor integrations, desktop shell.</li>
+              </ul>
+              <p>Plugins over bloat — the core stays one small binary.</p>
             </div>
             <div><span class="proof">plugin surfaces, not core</span></div>
           </div>

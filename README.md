@@ -118,6 +118,11 @@ Zero config to start. A few useful knobs (the full list is in the
 - `BELLA_EMBED_TIER=quality|light` — force the embedding tier
 - `DATABASE_URL` — use an external Postgres instead of the embedded one
 
+## Whitepaper
+
+There is a whitepaper: [WHITEPAPER.md](WHITEPAPER.md) (also on the website) — the premise, the
+architecture, and what we measure.
+
 ## Docs & links
 
 - **Docs:** https://the-little-ai-company.github.io/bellamente/docs/
