@@ -114,7 +114,7 @@ export async function runDoctor(): Promise<number> {
       // Report informationally (neither a pass nor a false OK) — the running server already verified it at boot.
       console.log(`  -- embedded database in use by a running Bellamente server on :${process.env.PORT ?? 8080} (not probed while locked)`);
     } else {
-      const { makeDb, DB_LOCK_ERR } = await import("./db");
+      const { makeDb, DB_LOCK_ERR, inspectDbLock } = await import("./db");
       try {
         const sql = await makeDb();
         try {
@@ -123,13 +123,26 @@ export async function runDoctor(): Promise<number> {
         } finally {
           await sql.end({ timeout: 1 });
         }
-      } catch (e: any) {
-        // Another Bellamente process grabbed the lock between the /health probe and now — that's healthy,
-        // not a problem; report it informationally rather than as a failed check.
-        if (e?.code === DB_LOCK_ERR) {
-          console.log(`  -- embedded database in use by another Bellamente process (not probed): ${e.message}`);
+      } catch (e: unknown) {
+        const code = e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : undefined;
+        const message = e instanceof Error ? e.message : String(e);
+        if (code !== DB_LOCK_ERR) throw e;
+        const lock = inspectDbLock(join(dirs.data, "db.lock"));
+        if (lock.status === "present" && lock.liveness === "alive") {
+          // A live Bellamente process grabbed the lock between the /health probe and now — that's
+          // healthy, not a problem; report it informationally rather than as a failed check.
+          console.log(`  -- embedded database in use by another Bellamente process (not probed): ${message}`);
         } else {
-          throw e;
+          // A dead / unknown / malformed / unreadable lock is EXACTLY the startup-blocking condition
+          // doctor exists to catch — reporting it as healthy would hide the real failure. Surface it as
+          // an actionable, failing check with the lock's classification for triage.
+          const detail =
+            lock.status === "present"
+              ? `lock at ${lock.path} names pid ${lock.pid ?? "(unparseable)"}, liveness="${lock.liveness}" — ${message}`
+              : lock.status === "unreadable"
+                ? `lock at ${lock.path} could not be read (${lock.errorCode}); ownership is ambiguous — ${message}`
+                : `makeDb() reported the lock as held, but it is no longer present at ${lock.path} — ${message}`;
+          check(false, dbLabel, detail);
         }
       }
     }

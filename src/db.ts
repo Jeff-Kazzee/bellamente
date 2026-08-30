@@ -111,12 +111,35 @@ function lockedError(message: string): Error {
   return e;
 }
 
-function isAlive(pid: number): boolean {
+export type PidLiveness = "alive" | "dead" | "unknown";
+
+function errorCode(e: unknown): string | undefined {
+  if (e && typeof e === "object" && "code" in e) {
+    const candidate = e.code;
+    return typeof candidate === "string" ? candidate : undefined;
+  }
+  return undefined;
+}
+
+// Tri-state liveness via a signal-0 probe (sends no signal to the target — a pure read, never mutates
+// anything). ESRCH is the ONLY OS-authoritative "no such process" answer, so it is the only case
+// classified "dead". EPERM confirms the process exists (we just can't signal it) -> "alive". Any other
+// / unexpected errno is NOT assumed either way: an ambiguous liveness check must never masquerade as a
+// confirmed-dead pid, or a caller could reclaim a lock a live-but-unprobeable process still holds.
+// `kill` is injectable (defaults to the real process.kill) so tests can force the "unknown" branch
+// deterministically instead of depending on a platform-specific errno.
+export function pidLiveness(
+  pid: number,
+  kill: (pid: number, signal: number) => void = process.kill.bind(process),
+): PidLiveness {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e: any) {
-    return e?.code === "EPERM"; // EPERM => the process exists but we can't signal it
+    kill(pid, 0);
+    return "alive";
+  } catch (e: unknown) {
+    const code = errorCode(e);
+    if (code === "ESRCH") return "dead";
+    if (code === "EPERM") return "alive";
+    return "unknown";
   }
 }
 
@@ -172,23 +195,80 @@ export function acquireDbLock(lockPath: string): () => void {
       continue;
     }
     if (parseable) {
+      const liveness = pidLiveness(holder);
+      if (liveness === "dead") {
+        throw lockedError(
+          `the embedded database lock at ${lockPath} is stale (pid ${holder} is not running — likely a prior ` +
+            `hard crash). Not auto-reclaiming it, to avoid a double-writer race. If you have positively ` +
+            `confirmed no Bellamente process is running anywhere against this data directory, ARCHIVE this ` +
+            `file (rename it, e.g. to "${lockPath}.stale-${holder}-YYYYMMDD-HHMMSS" with a fresh timestamp ` +
+            `so a repeat crash never overwrites an earlier archive — never delete, so it survives as ` +
+            `forensic evidence) from a context where nothing else can start concurrently, then start again.`,
+        );
+      }
+      if (liveness === "alive") {
+        throw lockedError(
+          `the embedded database is already open by another Bellamente process (pid ${holder}); refusing to ` +
+            `open a second writer (two engines on one data dir corrupt the store). Stop that process first, ` +
+            `or set DATABASE_URL to use external Postgres.`,
+        );
+      }
+      // "unknown": the liveness probe failed with neither a clean ESRCH nor a clean EPERM. Refuse to
+      // guess in either direction — an ambiguous read must fail exactly like a confirmed-live one, never
+      // like a confirmed-dead one.
       throw lockedError(
-        isAlive(holder)
-          ? `the embedded database is already open by another Bellamente process (pid ${holder}); refusing to ` +
-              `open a second writer (two engines on one data dir corrupt the store). Stop that process first, ` +
-              `or set DATABASE_URL to use external Postgres. If no such process is running, delete ${lockPath}.`
-          : `the embedded database lock at ${lockPath} is stale (pid ${holder} is not running — likely a prior ` +
-              `hard crash). Not auto-reclaiming it, to avoid a double-writer race. If no Bellamente process is ` +
-              `running, delete ${lockPath} and start again.`,
+        `the embedded database lock at ${lockPath} is held by pid ${holder}, but its status could not be ` +
+          `confirmed (the liveness check failed unexpectedly). Do NOT delete or modify this file: positively ` +
+          `confirm via your OS process list whether pid ${holder} is running before taking any action, and ` +
+          `prefer archiving (rename) over deleting even once confirmed dead.`,
       );
     }
     // Empty/garbage — a peer mid-create (between its openSync and writeSync), or a crash in that window.
+    // Ownership here is inherently ambiguous (no readable pid at all) — same fail-safe rule: do not delete
+    // blind; confirm no Bellamente process is starting/running against this data directory first.
     throw lockedError(
       `the embedded database lock at ${lockPath} appears held by another starting process; refusing to open ` +
-        `a second writer. If no Bellamente process is running, delete ${lockPath}.`,
+        `a second writer. Do not delete it until you have confirmed no Bellamente process is starting or ` +
+        `running against this data directory.`,
     );
   }
   throw lockedError(`could not acquire the embedded database lock at ${lockPath}`);
+}
+
+export type DbLockInspection =
+  | { path: string; status: "absent" }
+  | { path: string; status: "unreadable"; errorCode: string }
+  | { path: string; status: "present"; raw: string; pid: number | null; liveness: PidLiveness | "unparseable" };
+
+// Pure, read-only classification of a lock file — never creates, writes, or removes anything (a signal-0
+// probe sends no signal). Safe to call at ANY time, including while a live process holds the lock. Used
+// by `bella doctor` / manual triage; never by acquireDbLock's own claim/refuse decision above, which stays
+// the single source of truth for whether opening the DB is safe.
+//
+// A read failure is "absent" ONLY on ENOENT (genuinely no lock file). Any other read error (EACCES, EIO,
+// a permissions/filesystem fault) means ownership could NOT be determined — that is ambiguous, not clean,
+// and callers (doctor) must fail closed on it rather than silently treating an unreadable lock as no lock.
+export function inspectDbLock(
+  lockPath: string,
+  kill: (pid: number, signal: number) => void = process.kill.bind(process),
+): DbLockInspection {
+  let raw: string;
+  try {
+    raw = readFileSync(lockPath, "utf8").trim();
+  } catch (e: unknown) {
+    const code = errorCode(e);
+    if (code === "ENOENT") return { path: lockPath, status: "absent" };
+    return { path: lockPath, status: "unreadable", errorCode: code ?? "unknown" };
+  }
+  const pid = Number(raw);
+  const parseable = raw !== "" && Number.isInteger(pid) && pid > 0;
+  return {
+    path: lockPath,
+    status: "present",
+    raw,
+    pid: parseable ? pid : null,
+    liveness: parseable ? pidLiveness(pid, kill) : "unparseable",
+  };
 }
 
 // Bun standalone binary detection (same check embed.ts uses): import.meta.url lives in the bunfs.

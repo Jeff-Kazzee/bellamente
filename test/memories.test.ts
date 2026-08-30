@@ -25,6 +25,14 @@ const VECTORS: Record<string, number[]> = {
   "John prefers light mode": pad([0.95, 0.312, 0, 0]),
   "John lives in Denver": pad([0, 1, 0, 0]),
   "John lives in Boulder now": pad([0, 0, 1, 0]),
+  // Adversarial pair: two DISTINCT enumerated facts whose embeddings collide near-identically
+  // (cosine ~0.95, same magnitude as the true-correction dark/light pair above) — the failure
+  // mode a real embedder can produce for "server node 1" vs "server node 2"-shaped text. Reuses
+  // the dark/light pair's exact cosine math on a different sub-space so it never collides with
+  // the vectors above (Boulder is never written alongside these in the same test, so sharing
+  // [0,0,1,0]'s direction is harmless).
+  "server node 1 is provisioned in rack A3": pad([0, 0, 1, 0]),
+  "server node 2 is provisioned in rack A3": pad([0, 0, 0.95, 0.312]),
 };
 const contentEmbed: Embed = async ({ values }) => values.map((v) => VECTORS[v] ?? pad([0, 0, 0, 1]));
 
@@ -153,6 +161,46 @@ test("POST supersedes a near-duplicate: new version, old flipped is_latest=false
     // dedupe:false bypasses both checks (bulk import path).
     const raw = await (await post(app, "/memories", { dedupe: false, memories: [{ content: "John prefers light mode" }] })).json();
     expect(raw.memories[0].action).toBe("created");
+  } finally {
+    delete process.env.BELLA_SUPERSEDE_THRESHOLD;
+    await close();
+  }
+}, TEST_TIMEOUT_MS);
+
+// Distinct enumerated facts must not be silently collapsed into a version chain just because their
+// embeddings land close together — a real embedder can put "server node 1" and "server node 2"
+// near-identically in vector space even though they name different things. This is deliberately the
+// SAME public write seam as the true-correction test above (POST /memories, then read back via
+// GET /memories) — the only difference is that these two facts are NOT a correction of one another,
+// so the current supersede-on-near-duplicate path mishandles them identically to a real correction.
+test("adversarial near-neighbor pair (server node 1 / server node 2) must not silently collapse: both stay independently inspectable, or the write explicitly flags review-required", async () => {
+  process.env.BELLA_SUPERSEDE_THRESHOLD = "0.9";
+  const { app, close } = await makeApp();
+  try {
+    const node1 = "server node 1 is provisioned in rack A3";
+    const node2 = "server node 2 is provisioned in rack A3";
+    const first = await (await post(app, "/memories", { memories: [{ content: node1 }] })).json();
+    expect(first.memories[0].action).toBe("created");
+
+    const second = await (await post(app, "/memories", { memories: [{ content: node2 }] })).json();
+    const writeResult = second.memories[0];
+
+    // Contract: a near-neighbor but DISTINCT enumerated fact must remain independently inspectable
+    // via the public read seam, or the write must explicitly surface review-required. It must never
+    // be silently folded into the other fact's version chain as if it were a correction.
+    const explicitReviewRequired =
+      writeResult.action === "review_required" ||
+      writeResult.usePolicy === "review_required" ||
+      writeResult.reviewRequired === true;
+
+    const listed = await (await app.request("/memories")).json();
+    const listedContents = listed.memories.map((m) => m.memory);
+
+    // Branch instead of a single opaque boolean: when there's no explicit review-required signal,
+    // assert both facts are listed so a failure pinpoints exactly which one silently vanished.
+    if (!explicitReviewRequired) {
+      expect(listedContents).toEqual(expect.arrayContaining([node1, node2]));
+    }
   } finally {
     delete process.env.BELLA_SUPERSEDE_THRESHOLD;
     await close();

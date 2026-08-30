@@ -7,7 +7,11 @@ and machine identifiers. The pre-release working title was fully purged before v
 directive, 2026-07-01): do NOT reintroduce it in any identifier, comment, doc, or test. Read this
 whole file before changing anything.
 
-> **▶ Live handoff / current focus (read FIRST):** the current goal, active phase, and locked decisions live in **`CONTINUE-HERE.md`** in the **private `bellamente-docs` repo** (clone at `~/dev/bellamente-docs`; internal-only, gitignored from this public repo — never copy internal planning docs into this public repo). Current goal: the **0.1.0** release — P3 MCP → P4 error-reporting → P5 cut.
+## Current work
+
+Current goals, phase, and locked decisions live in the private sibling repository at
+`../bellamente-docs/CONTINUE-HERE.md`. Treat that file as volatile status, verify
+it against this repository, and never copy private planning into the public repo.
 
 ## The one rule that outranks everything
 **Never break a machine contract.** These are frozen until a migration plan says otherwise:
@@ -44,29 +48,18 @@ This exists because review passes kept finding capabilities that were coded but 
 never worked (see docs/CHANGES-2026-07-01.md #4, #6): a behavior without a test demanding it
 does not reliably exist.
 
-## Model roles + spec-driven handoffs (Jeff, 2026-07-02)
-Multiple models work in this repo. Each has a lane; the SPEC is the handoff artifact between them.
-- **Codex / GPT (extra-high reasoning): PRIMARY IMPLEMENTER.** Backend features and parity items,
-  implemented FROM A SPEC in `docs/specs/` — never from a one-line prompt. Follow the spec's
-  acceptance tests exactly; if the spec is ambiguous or the code contradicts it, STOP and flag —
-  do not improvise around it.
-- **Claude Fable: SPEC AUTHOR + FIXER + FINAL JUDGE.** Writes specs for complex tasks, runs
-  adversarial review on substantial PRs WHEN AVAILABLE, fixes the problems and fills the gaps other
-  models leave, owns architecture/tradeoff calls. Do NOT burn Fable on mechanical feature grinding —
-  that is Codex's lane (usage economics: Fable is scarce, Codex is the workhorse). **Fable is not
-  always available, so the review + merge gate must NOT depend on Fable specifically — it is a
-  PROCESS an independent reviewer sub-agent can run (see Workflow §5).**
-- **Claude Opus: UI + mid-complexity implementation.** Dashboard, website, design-system work
-  (the La Macchina system — see dashboard/index.html tokens + website/), and feature work when it
-  carries a spec.
-- **Any model, before starting a task:** read this file, the relevant `docs/specs/SPEC-*.md`, and
-  `docs/HANDOFFS.md` (the protocol + spec template + verification ladder). A complex task with no
-  spec yet gets a spec FIRST (by Fable) — implementation without a spec is only for small,
-  well-bounded items whose BACKLOG entry already carries testable acceptance criteria.
-- Every model obeys the Behavior-tests-FIRST law and the four gates. No exceptions by model.
-- Product line to hold (docs/BACKLOG.md "Positioning guardrails"): parity with Supermemory on
-  capability, but the IDENTITY is "memory you can inspect and trust" — local-first single binary,
-  trace-everything, correction/versioning UI, never phones home. We are not building a clone.
+## Specs and handoffs
+
+- Complex behavior starts from the applicable spec in the private
+  `../bellamente-docs/specs/` owner. Small bounded work may use a backlog item with
+  testable acceptance criteria.
+- The spec is the cross-agent handoff. If it is ambiguous or contradicts the code,
+  report the conflict instead of inventing a broader contract.
+- Assign non-overlapping ownership before concurrent edits. Substantial changes need
+  an independent adversarial review; the gate belongs to the process, not a named
+  model or version.
+- Product positioning remains “memory you can inspect and trust”: local-first,
+  traceable, correctable, and never phoning home.
 
 ## Workflow (no exceptions)
 1. Branch off `dev` (`git checkout dev && git pull && git checkout -b <type>/<slug>`).
@@ -82,15 +75,13 @@ Multiple models work in this repo. Each has a lane; the SPEC is the handoff arti
    - typecheck, full test suite with aggregate coverage gate, release smoke, binary build
    - package/release artifact gate, website build
    - `git diff --check` for whitespace damage
-5. Push the branch, open a PR into `dev`. MERGE DISCIPLINE (Jeff, 2026-07-02; review decoupled from
-   Fable 2026-07-05): a substantial PR merges only after (a) an ADVERSARIAL REVIEW whose findings are
-   verified against the real code and fixed, (b) CI green on Actions, and (c) the change DOGFOODED —
-   proven by actually using it, not just by tests. The review is a PROCESS, not a person: Fable runs it
-   when available, otherwise an INDEPENDENT REVIEWER SUB-AGENT runs the same adversarial pass — do NOT
-   block work on Fable being around. Implementers do NOT self-merge unreviewed or self-close issues,
-   and NEVER merge while review follow-ups are still open (PR #79 shipped mid-review without a fix —
-   PR #84 repaired it). Jeff directs merges/closes; release surfaces (tags, releases, dev->prod,
-   deploys) are Jeff-only.
+5. When the current task explicitly authorizes delivery, push the branch and open a
+   PR into `dev`. A substantial PR merges only after an independent adversarial
+   review whose findings are verified against the real code and fixed, green
+   Actions, and dogfooding that proves the change by use rather than tests alone.
+   Implementers do not self-merge, self-close issues, or merge while review
+   follow-ups remain open. Jeff directs merges and closes; release surfaces
+   (tags, releases, `dev` to `prod`, deploys) are Jeff-only.
 6. Update `docs/BACKLOG.md` (check the box, one-line outcome + date) in the same PR.
 
 ## Platform: Windows dev machine, Linux CI (line endings + WSL)
@@ -117,8 +108,8 @@ run on **Linux**. Two consequences that bite if ignored:
 - Env knobs are read PER-CALL (a function, not a module-level const) so tests can set/unset them.
   Careful: "invalid → fallback" and "out-of-range → clamp" are different semantics (see
   BACKLOG P2.14 before touching any of the clamp helpers).
-- Comments only where the WHY is non-obvious. No new dependencies without checking
-  `~/dev/.shared/deny-list-npm.json` (verified location) and `bun audit` first.
+- Comments only where the WHY is non-obvious. Before a new dependency, follow the
+  HQ security-audit workflow and run `bun audit`.
 - New/changed user-visible strings say Bellamente/bella. New machine identifiers use `BELLA_*`;
   ask before inventing a new one (naming is a migration decision).
 
@@ -128,23 +119,17 @@ by a test (not by "it should work"), and anything you could not finish is writte
 BACKLOG with file:line pointers. If you are blocked or the code contradicts this file: STOP and
 report — do not improvise around a contract.
 
-## Current release truth
+## Release truth
 
-- Current PUBLISHED release: `v0.0.2` (GitHub + npm + PyPI, all consistent). A `v0.0.3` train is
-  staged on `dev`; this line changes only when the GitHub release actually exists.
-- Source repo: `https://github.com/The-Little-AI-Company/bellamente`.
-- Public site/docs: `https://the-little-ai-company.github.io/bellamente/`.
-- Package installs: `npm install -g bellamente`, `pipx install bellamente`, or one-shot `uvx bellamente doctor`.
-- GitHub release assets must exist before a `prod` deploy points public copy at that version.
-- Current public direct binaries are Windows x64 and Linux x64 only until more OS builds have a real
-  test pass. Release ASSETS must match this copy: never upload binaries for an OS the copy doesn't
-  claim (the untested v0.0.2 darwin binaries were withdrawn 2026-07-05 for exactly this).
+`README.md`, package manifests, the latest release tag, and the public release
+surface own current installation and publication truth. Verify those live before a
+release claim. GitHub release assets must exist before a `prod` deploy points public
+copy at that version.
 
 ## Copy-alignment law (2026-07-05, after the drift audit)
 
 Copy drifts in BOTH directions; underselling is also a truth bug. These checks are part of "done":
-- This file's "Current release truth" states the PUBLISHED version, never the staged train version.
-  README/ROADMAP on `dev` may run one version ahead during a release train; this section may not.
+- Public copy states the published version, never a staged train version.
 - ROADMAP.md and its mirrors (website/src/pages/roadmap.astro, website/public/llms-full.md) move a
   feature to "Now" in the SAME PR that ships it — a roadmap listing shipped features as upcoming
   breaks the "if it's on the roadmap, it doesn't exist" promise. All three surfaces change together.

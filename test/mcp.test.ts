@@ -138,6 +138,44 @@ test("B7 trace_inspect returns the trace produced by a prior search", async () =
   await close();
 }, T);
 
+// B7 only proves SOME trace exists after a search — trace_inspect's no-argument list returns the
+// most recent traces, which is ambiguous the moment two searches happen close together (or
+// concurrently). A caller must be able to correlate ITS OWN memory_search call to ITS OWN receipt
+// without guessing among a list. That requires the traceId to ride on the memory_search response
+// itself, the same way the HTTP /search route already returns `traceId` in its JSON body (see
+// src/search.ts) — the MCP tool's response shape today omits it (mcp.ts toToolResult), even though
+// the trace is recorded on every call.
+test("memory_search returns a traceId on its own response, and trace_inspect(traceId) resolves to a receipt describing exactly that call", async () => {
+  const { client, close } = await connect(await makeCtx());
+  try {
+    await call(client, "memory_write", { content: "a fact to search for" });
+    const searched = await call(client, "memory_search", { query: "a fact" });
+    expect(searched.isError).toBe(false);
+
+    const traceId = searched.json?.traceId;
+    expect(typeof traceId).toBe("string");
+    expect(traceId.length).toBeGreaterThan(0);
+
+    const inspected = await call(client, "trace_inspect", { traceId });
+    expect(inspected.isError).toBe(false);
+    const trace = inspected.json?.trace;
+    expect(trace?.id).toBe(traceId);
+    // The receipt must actually describe THIS call, not merely be A trace: same query, same result
+    // count, and each retrieved item's {type,id,content} must match what the search response itself
+    // returned for {type,id,text} — an id-only comparison would still pass a receipt with stale or
+    // wrong stored text.
+    expect(trace?.query).toBe("a fact");
+    const returned = (searched.json?.results ?? []).map((r) => ({ type: r.type, id: r.id, text: r.text }));
+    expect(returned.length).toBeGreaterThan(0);
+    expect(trace?.resultCount).toBe(returned.length);
+    const traced = (trace?.retrieved ?? []).map((t) => ({ type: t.type, id: t.id, text: t.content }));
+    const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    expect(traced.sort(byId)).toEqual(returned.sort(byId));
+  } finally {
+    await close();
+  }
+}, T);
+
 test("B8 all tools operate on the SAME ctx.sql (single writer — no second connection)", async () => {
   const ctx = await makeCtx();
   const { client, close } = await connect(ctx);

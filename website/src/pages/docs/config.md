@@ -57,3 +57,21 @@ description: Every BELLA_* environment variable. All of them optional — zero c
 | `BELLA_RECENCY_TAU_DAYS` | `90` | The freshness half-life-ish time scale: how fast a memory's recency boost fades. |
 
 Run `bella doctor` any time — it verifies the DB, model, ports, and disk against your config.
+
+## Embedded database lock
+
+The embedded DB (default, no `DATABASE_URL`) is guarded by a single-writer PID lock at
+`<data dir>/db.lock`: every `bella` process refuses to open the store while another process's lock
+is intact, so two cooperating Bellamente processes never open the same store at once — that
+would silently corrupt it. Bellamente **never automatically removes or reuses another process's
+lock, even one that belonged to a process that has since exited** — deleting it automatically would
+risk two writers racing during the removal itself. If startup fails with `BELLA_DB_LOCKED`,
+`bella doctor` reports whether the recorded pid is confirmed running, confirmed not running, or its
+status could not be determined — a dead or unresolved lock is always reported as a failing check,
+never as healthy. To recover: **first stop (or confirm stopped) every process that could start
+Bellamente against this data directory** — a lock check followed by a rename is only safe when
+nothing else can win the race to reclaim or restart in between. With startup serialized that way,
+confirm via your OS process list whether the recorded pid is actually running, and only once you're
+certain it is not, **rename** (never delete) the lock file so the incident stays diagnosable, then
+start again. `bella` itself does not perform this recovery for you — there is no automatic or
+background reclaim of another process's lock.
